@@ -1,0 +1,1 @@
+"""State machine IDLE → ALERT → LOCALIZE → AIM → CORRECT → FIRE/VERIFY, và FAULT."""

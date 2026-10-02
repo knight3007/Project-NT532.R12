@@ -1,0 +1,60 @@
+# Số đo sa bàn và tham số dùng chung. Đơn vị: mét và độ.
+# Các giá trị dưới đây là số đề xuất trong kế hoạch; thay bằng số đo thực sau khi dựng sa bàn.
+
+table:
+  width: 1.20   # dọc trục X
+  depth: 0.80   # dọc trục Y
+
+board:
+  plane_y: 0.80  # bảng bia là mặt phẳng Y = plane_y
+  width: 1.20
+  height: 0.60
+
+tags:
+  family: 36h11
+  # ID là đề xuất, chưa chốt với nhóm.
+  reference:
+    size: 0.08
+    # Tọa độ tâm tag [x, y] trên mặt bàn (z = 0), đo bằng thước.
+    # Dán tag nằm ngửa, mép trên của tag hướng về bảng bia (+Y), cạnh song song mép bàn.
+    positions:
+      0: null
+      1: null
+      2: null
+      3: null
+  # Mỗi node H2 vừa là sensor vừa mang một cụm pan–tilt. Một tag trên đế cố định của node
+  # cho cả vị trí sensor lẫn pose đế vòi; không dán lên phần quay.
+  nodes:
+    size: 0.08
+    ids:
+      s1: 21
+      s2: 22
+
+camera:
+  index: 0
+  width: 1280
+  height: 720
+  intrinsics: calibration/camera.yaml
+  # Bảng ChArUco in trên A4. Dùng từ điển 4x4 để không lẫn với tag 36h11 trên sa bàn.
+  calib_board:
+    dictionary: 4X4_50
+    squares_x: 6
+    squares_y: 9
+    square: 0.030
+    marker: 0.022
+
+targeting:
+  sensor_match_radius_x: 0.35  # chỉ nhận bia cách sensor báo động không quá khoảng này theo X
+  localize_timeout_s: 3.0
+  correct_max_iters: 3
+  correct_done_m: 0.01
+  tolerance_m: 0.03            # đề xuất, chốt cuối tuần 3
+
+actuator:
+  # Giới hạn để tia nước và laser không ra khỏi bảng; đo riêng cho từng node ở tuần 2.
+  nodes:
+    s1: {pan_limits: null, tilt_limits: null}
+    s2: {pan_limits: null, tilt_limits: null}
+  heartbeat_ms: 500
+  aim_ttl_ms: 1500
+  fire_ms: 2000
