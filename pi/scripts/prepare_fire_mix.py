@@ -6,8 +6,14 @@ Home-fire và Indoor Fire Smoke dùng 0 = fire, 1 = smoke nên nhãn được vi
 hard link thay vì chép, không tốn thêm dung lượng. D-Fire đã đúng thứ tự nên dùng thẳng thư mục
 gốc. Kết quả ở data/dataset/fire-mix/: data.yaml để train, và một file yaml cho từng bộ để
 đánh giá riêng.
+
+Ảnh không có lửa trong data/raw/negatives/<nguồn>/ (xem prepare_negatives.py) được chia
+70/15/15 theo tên file và thêm vào train và val dưới dạng ảnh không nhãn. Tập test giữ nguyên
+chỉ gồm hai bộ trong nhà để so sánh được với các lần đo trước; báo nhầm trên phần test của
+mẫu âm tính đo riêng bằng eval_false_alarms.py.
 """
 
+import hashlib
 import os
 import shutil
 from pathlib import Path
@@ -20,6 +26,7 @@ RAW = REPO_ROOT / "data/raw"
 DST = REPO_ROOT / "data/dataset/fire-mix"
 NAMES = ["smoke", "fire"]
 SWAP = {"0": "1", "1": "0"}
+SPLITS = ("train", "val", "test")
 
 # nguồn: (thư mục gốc, {phần chuẩn: tên thư mục phần trong bộ gốc}, cần đổi lớp)
 SOURCES = {
@@ -48,6 +55,30 @@ def remap(src: Path, dst: Path) -> None:
         (dst / "labels" / label.name).write_text("\n".join(lines) + ("\n" if lines else ""))
 
 
+def split_of(name: str) -> str:
+    """Chia cố định theo tên file, nên thêm ảnh mới không làm xáo trộn các ảnh đã chia."""
+    bucket = int(hashlib.md5(name.encode()).hexdigest(), 16) % 100
+    return "train" if bucket < 70 else "val" if bucket < 85 else "test"
+
+
+def link_negatives() -> dict[str, dict[str, Path]]:
+    """Hard link ảnh âm tính vào negatives/<nguồn>/<phần>/images; không cần file nhãn."""
+    dirs: dict[str, dict[str, Path]] = {}
+    root = RAW / "negatives"
+    for source in sorted(d for d in root.iterdir() if d.is_dir()) if root.exists() else []:
+        dirs[source.name] = {s: DST / "negatives" / source.name / s / "images" for s in SPLITS}
+        for d in dirs[source.name].values():
+            d.mkdir(parents=True)
+        counts = dict.fromkeys(SPLITS, 0)
+        for image in source.iterdir():
+            if image.suffix.lower() in (".jpg", ".jpeg", ".png"):
+                split = split_of(image.name)
+                os.link(image, dirs[source.name][split] / image.name)
+                counts[split] += 1
+        print(f"negatives/{source.name}: {counts}")
+    return dirs
+
+
 def main() -> None:
     if DST.exists():
         shutil.rmtree(DST)
@@ -61,6 +92,7 @@ def main() -> None:
             else:
                 dirs[name][split] = root / folder / "images"
         print(f"{name}: xong")
+    negatives = link_negatives()
 
     def write(path: Path, data: dict) -> None:
         path.write_text(yaml.safe_dump(data, sort_keys=False, allow_unicode=True), "utf-8")
@@ -73,8 +105,10 @@ def main() -> None:
         DST / "data.yaml",
         {
             # Train trên cả ba bộ; chọn model theo val của hai bộ trong nhà vì đó là bối cảnh demo.
-            "train": as_str(dirs[n]["train"] for n in SOURCES),
-            "val": as_str(dirs[n]["val"] for n in indoor),
+            "train": as_str([dirs[n]["train"] for n in SOURCES])
+            + as_str(d["train"] for d in negatives.values()),
+            "val": as_str([dirs[n]["val"] for n in indoor])
+            + as_str(d["val"] for d in negatives.values()),
             "test": as_str(dirs[n]["test"] for n in indoor),
             "nc": 2,
             "names": NAMES,
