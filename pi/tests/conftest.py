@@ -48,10 +48,24 @@ def intrinsics() -> Intrinsics:
     return Intrinsics(K, np.zeros(5), SIZE)
 
 
+NODES = {21: ([0.40, 0.58, 0.05], 20), 22: ([0.80, 0.58, 0.05], -35)}
+
+
+def make_scene(site: dict, camera: Camera, nodes: dict = NODES) -> np.ndarray:
+    """Ảnh xám tổng hợp: bốn tag tham chiếu trên mặt bàn và các tag node {id: (tâm, góc xoay)}."""
+    canvas = np.full((SIZE[1], SIZE[0]), 180, np.uint8)
+    ref = site["tags"]["reference"]
+    for tag_id, (x, y) in ref["positions"].items():
+        render_quad(canvas, *tag_quad(tag_id, ref["size"], [x, y, 0.0]), camera)
+    for tag_id, (center, yaw) in nodes.items():
+        render_quad(canvas, *tag_quad(tag_id, 0.08, center, yaw_deg=yaw), camera)
+    return canvas
+
+
 @pytest.fixture
 def site() -> dict:
     return {
-        "board": {"plane_y": 0.80},
+        "board": {"plane_y": 0.80, "width": 1.20, "height": 0.60},
         "tags": {
             "reference": {
                 "size": 0.08,
@@ -59,6 +73,14 @@ def site() -> dict:
             },
             "nodes": {"size": 0.08, "ids": {"s1": 21, "s2": 22}},
         },
+        "vision": {
+            "board_margin_m": 0.02,
+            "min_tag_rate": 0.6,
+            "camera_shift_px": 3.0,
+            "node_moved_m": 0.015,
+            "laser_min_rise": 40,
+        },
+        "targeting": {"sensor_match_radius_x": 0.35},
     }
 
 
@@ -69,11 +91,5 @@ def true_camera(intrinsics) -> Camera:
 
 @pytest.fixture
 def scene(site, true_camera) -> np.ndarray:
-    """Ảnh tổng hợp: bốn tag tham chiếu trên mặt bàn và hai tag node đặt cao 5 cm, xoay lệch."""
-    canvas = np.full((SIZE[1], SIZE[0]), 180, np.uint8)
-    ref = site["tags"]["reference"]
-    for tag_id, (x, y) in ref["positions"].items():
-        render_quad(canvas, *tag_quad(tag_id, ref["size"], [x, y, 0.0]), true_camera)
-    render_quad(canvas, *tag_quad(21, 0.08, [0.40, 0.58, 0.05], yaw_deg=20), true_camera)
-    render_quad(canvas, *tag_quad(22, 0.08, [0.80, 0.58, 0.05], yaw_deg=-35), true_camera)
-    return canvas
+    """Bốn tag tham chiếu trên mặt bàn và hai tag node đặt cao 5 cm, xoay lệch."""
+    return make_scene(site, true_camera)

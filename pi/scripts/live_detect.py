@@ -8,43 +8,35 @@ Phím: Q thoát, S lưu khung hình hiện tại vào runs/live/.
 """
 
 import argparse
-import sys
 import time
 
 import cv2
 from ultralytics import YOLO
 
 from nt532.config import REPO_ROOT, load_site
+from nt532.vision.camera import open_camera
 from nt532.vision.detect import DEFAULT_WEIGHTS
 
 COLORS = {"fire": (0, 80, 255), "smoke": (200, 200, 200)}
 
 
-def open_source(source: str | None) -> cv2.VideoCapture:
-    if source is None or source.isdigit():
-        cam = load_site()["camera"]
-        # Trên Windows backend mặc định (MSMF) hay không lấy được khung hình; DirectShow ổn định hơn.
-        backend = cv2.CAP_DSHOW if sys.platform == "win32" else cv2.CAP_ANY
-        cap = cv2.VideoCapture(int(source) if source else cam["index"], backend)
-        cap.set(cv2.CAP_PROP_FRAME_WIDTH, cam["width"])
-        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, cam["height"])
-        return cap
-    return cv2.VideoCapture(source)
-
-
 def main() -> None:
     p = argparse.ArgumentParser()
     p.add_argument("--source", default=None, help="số thứ tự webcam, file video hoặc ảnh")
-    p.add_argument("--weights", default=str(DEFAULT_WEIGHTS))
+    p.add_argument(
+        "--weights", default=str(DEFAULT_WEIGHTS), help="file .pt hoặc thư mục model NCNN/OpenVINO"
+    )
+    p.add_argument("--imgsz", type=int, default=640)
     p.add_argument("--conf", type=float, default=0.35)
     p.add_argument("--smoke", action="store_true", help="hiện cả khói")
     args = p.parse_args()
 
     model = YOLO(args.weights)
     wanted = [i for i, n in model.names.items() if n == "fire" or (args.smoke and n == "smoke")]
-    cap = open_source(args.source)
-    if not cap.isOpened():
-        raise SystemExit(f"không mở được nguồn {args.source}")
+    try:
+        cap = open_camera(load_site()["camera"], args.source)
+    except RuntimeError as e:
+        raise SystemExit(str(e)) from e
     out_dir = REPO_ROOT / "runs" / "live"
     fps = 0.0
     frames = 0
@@ -59,7 +51,9 @@ def main() -> None:
             break
         frames += 1
         t0 = time.perf_counter()
-        result = model.predict(frame, conf=args.conf, classes=wanted, verbose=False)[0]
+        result = model.predict(
+            frame, conf=args.conf, imgsz=args.imgsz, classes=wanted, verbose=False
+        )[0]
         dt = time.perf_counter() - t0
         fps = 0.9 * fps + 0.1 / dt if fps else 1 / dt
 

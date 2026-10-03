@@ -42,11 +42,27 @@ Các script trong `pi/scripts/`:
 | Script | Việc |
 | --- | --- |
 | `make_print_sheets.py` | Sinh PDF in tag và bảng ChArUco vào `docs/print/` |
+| `make_target_cards.py` | Sinh PDF thẻ bia hình lửa từ ảnh D-Fire mà model nhận rõ |
 | `calibrate_camera.py` | Chụp ảnh bảng ChArUco và xuất `calibration/camera.yaml` |
+| `live_tags.py` | Xem tag, pose camera, pose node và viền bảng bia; phím C để commissioning |
+| `commission.py` | Commissioning hoặc kiểm tra xê dịch, không cần màn hình (cho Pi) |
+| `measure.py` | Các bài đo: click điểm, định vị bia, pose tag, vết laser; ghi CSV vào `runs/measure/` |
+| `report_errors.py` | Thống kê sai số từ CSV của `measure.py` và vẽ hình |
+| `live_detect.py` | Xem trực tiếp model phát hiện lửa trên webcam, video hoặc ảnh |
+| `capture_frames.py` | Chụp khung hình vào thư mục, bằng phím hoặc tự động |
+| `autolabel.py` | Tạo nhãn nháp YOLO cho ảnh thẻ bia tự chụp, để sửa tay rồi train |
+| `prepare_fire_mix.py` | Gộp D-Fire với hai bộ lửa trong nhà và ảnh không lửa về cùng thứ tự lớp |
+| `prepare_negatives.py` | Lấy ảnh không lửa từ COCO và bộ Fire Recognition (Mendeley) |
 | `prepare_classesoffire.py` | Lọc ảnh trùng và chia ClassesOfFire thành train/val/test |
-| `prepare_fire_mix.py` | Gộp D-Fire với hai bộ lửa trong nhà về cùng thứ tự lớp |
 | `train_detect.py` | Train YOLO phát hiện lửa |
+| `train_classify.py` | Train YOLO phân loại lớp đám cháy theo chất liệu (A/B/C/D/F) |
 | `eval_detect.py` | Đánh giá trọng số YOLO trên tập val hoặc test |
+| `eval_false_alarms.py` | Đo tỷ lệ báo nhầm trên ảnh không có lửa |
+| `export_model.py` | Xuất model sang NCNN hoặc ONNX cho Pi |
+| `bench_detect.py` | Đo thời gian suy luận bằng CPU |
+| `log_pi_load.py` | Ghi CPU, RAM, nhiệt độ của Pi ra CSV |
+
+Orchestrator dùng phần thị giác qua lớp `Vision`, mô tả ở [docs/vision-api.md](docs/vision-api.md). Cách đưa lên Pi và chạy các bài đo ở [docs/trien-khai-pi.md](docs/trien-khai-pi.md).
 
 Dataset và nguồn tải ghi ở [docs/datasets.md](docs/datasets.md).
 

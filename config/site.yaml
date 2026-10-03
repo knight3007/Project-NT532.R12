@@ -7,6 +7,7 @@ table:
 
 board:
   plane_y: 0.80  # bảng bia là mặt phẳng Y = plane_y
+  # Mặt bảng trải từ X = 0 tới width và từ Z = 0 (mặt bàn) tới height.
   width: 1.20
   height: 0.60
 
@@ -35,6 +36,10 @@ camera:
   width: 1280
   height: 720
   intrinsics: calibration/camera.yaml
+  # Khóa lấy nét và phơi sáng để hiệu chuẩn giữ đúng và vết laser không bị cháy sáng.
+  # null là để camera tự chỉnh. Giá trị tùy từng webcam; dò bằng `v4l2-ctl -l` trên Pi.
+  focus: null
+  exposure: null
   # Bảng ChArUco in trên A4. Dùng từ điển 4x4 để không lẫn với tag 36h11 trên sa bàn.
   calib_board:
     dictionary: 4X4_50
@@ -42,6 +47,18 @@ camera:
     squares_y: 9
     square: 0.030
     marker: 0.022
+
+vision:
+  weights: models/fire-n.pt     # Pi dùng bản NCNN: models/fire-n_ncnn_model
+  detect_conf: 0.35
+  imgsz: 640
+  board_margin_m: 0.02          # nhận điểm lệch ra ngoài mép bảng tối đa chừng này
+  commission_frames: 15         # số khung lấy trung vị khi commissioning và khi kiểm tra
+  min_tag_rate: 0.6             # tag phải hiện trong ít nhất chừng này phần số khung
+  camera_shift_px: 3.0          # tag tham chiếu lệch quá mức này thì coi camera bị xê dịch
+  node_moved_m: 0.015           # tag node lệch quá mức này thì coi node bị dời
+  laser_min_rise: 40            # kênh đỏ phải tăng ít nhất chừng này mới nhận là vết laser
+  commissioning: calibration/commissioning.yaml
 
 targeting:
   sensor_match_radius_x: 0.35  # chỉ nhận bia cách sensor báo động không quá khoảng này theo X

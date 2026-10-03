@@ -43,4 +43,38 @@ Phần trăm ảnh không có lửa mà model vẫn báo lửa, đo bằng `pi/s
 
 Mẫu vật giống lửa nhỏ (33 ảnh) và cùng nguồn với ảnh âm tính đã đưa vào train, nên con số 0% lạc quan hơn thực tế. Cái giá phải trả là recall lửa trên tập test trong nhà giảm từ 0,83 xuống 0,81.
 
-Tốc độ trên GPU RTX 4050 laptop: khoảng 1,4 ms mỗi ảnh. Chưa đo trên Raspberry Pi 5.
+## Bản cho Raspberry Pi
+
+`pi/scripts/export_model.py` xuất `fire-n.pt` sang `fire-n_ncnn_model/` (NCNN, 640 px) và `fire-n.onnx`. Trên 20 ảnh lửa của tập test Home-fire, cả ba bản bắt cùng 16/20 ảnh, hộp lệch nhau dưới 1 px, độ tin cậy chênh trung bình 0,008.
+
+## Tốc độ
+
+| Máy | Trọng số | imgsz | Trung vị (ms) | p95 (ms) |
+| --- | --- | --- | --- | --- |
+| Laptop, GPU RTX 4050 | `fire-n.pt` | 640 | khoảng 1,4 | |
+| Laptop, CPU x86 | `fire-n.pt` | 640 | 22,6 | 37,0 |
+| Laptop, CPU x86 | NCNN | 640 | 47,5 | 54,3 |
+| Laptop, CPU x86 | ONNX | 640 | 24,7 | 35,6 |
+| Laptop, CPU x86 | `fire-n.pt` | 320 | 12,1 | 14,0 |
+| Laptop, CPU x86 | NCNN (xuất ở 320) | 320 | 13,4 | 16,6 |
+| Laptop, CPU x86 | ONNX (xuất ở 320) | 320 | 9,7 | 20,7 |
+| Raspberry Pi 5 | | | chưa đo | |
+
+Đo bằng `pi/scripts/bench_detect.py`, 50 lượt. NCNN được tối ưu cho ARM nên trên x86 chậm hơn PyTorch; phải đo trên Pi rồi mới chọn bản chạy thật.
+
+## Phân loại lớp đám cháy theo chất liệu
+
+`cof26-n-cls-20261004.pt`: YOLO26n-cls, 224 px, 40 epoch trên ClassesOfFire (`data/dataset/classesoffire/`, chia bằng `prepare_classesoffire.py`), chọn bản tốt nhất theo val. Train bằng `pi/scripts/train_classify.py`. Chưa ghép vào hệ thống.
+
+Trên tập test (661 ảnh):
+
+| Lớp | Số ảnh | P | R |
+| --- | --- | --- | --- |
+| A chất rắn | 366 | 0,97 | 0,98 |
+| B chất lỏng và khí | 27 | 0,85 | 0,85 |
+| C điện | 61 | 0,90 | 0,89 |
+| D kim loại | 25 | 0,96 | 0,92 |
+| F dầu ăn | 24 | 0,89 | 0,96 |
+| Không cháy | 158 | 0,99 | 0,98 |
+
+Độ chính xác chung 96%. Con số có thể lạc quan: ảnh gom từ nhiều nguồn trên mạng, nhiều ảnh là khung liền nhau của cùng video, mà bước lọc chỉ bỏ ảnh trùng hoàn toàn. Model dựa nhiều vào bối cảnh (ổ điện, chảo, bếp), nên thẻ bia muốn được phân loại đúng phải in cả bối cảnh.

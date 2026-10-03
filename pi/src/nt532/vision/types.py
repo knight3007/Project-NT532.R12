@@ -43,3 +43,18 @@ class TagPose:
     tag_id: int
     position: np.ndarray  # (3,), mét
     rotation: np.ndarray  # (3, 3), từ hệ tag sang hệ sa bàn
+
+    def to_world(self, offset) -> np.ndarray:
+        """Đổi một điểm cho trong hệ của tag (ví dụ tâm quay của vòi, đo từ tâm tag) sang hệ sa bàn.
+
+        Hệ tag: X sang phải và Y về phía mép trên của tag in ra, Z vuông góc mặt tag hướng lên.
+        """
+        return self.position + self.rotation @ np.asarray(offset, dtype=np.float64)
+
+
+@dataclass(frozen=True)
+class Target:
+    """Một bia đã định vị được trên bảng."""
+
+    detection: Detection
+    position: np.ndarray  # (x, y, z) trong hệ sa bàn, y = mặt phẳng bảng

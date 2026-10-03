@@ -9,7 +9,7 @@ from .types import Detection
 DEFAULT_WEIGHTS = REPO_ROOT / "models" / "fire-n.pt"
 
 
-@lru_cache(maxsize=2)
+@lru_cache(maxsize=4)
 def _load(weights: str):
     from ultralytics import YOLO  # nặng, chỉ nạp khi cần
 

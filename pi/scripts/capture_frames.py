@@ -8,12 +8,12 @@ Phím: SPACE chụp một ảnh, A bật/tắt chụp tự động, Q thoát.
 """
 
 import argparse
-import sys
 import time
 
 import cv2
 
 from nt532.config import REPO_ROOT, load_site
+from nt532.vision.camera import open_camera
 
 
 def main() -> None:
@@ -23,11 +23,10 @@ def main() -> None:
     p.add_argument("--every", type=float, default=0.0, help="giây giữa hai ảnh khi chụp tự động")
     args = p.parse_args()
 
-    cam = load_site()["camera"]
-    backend = cv2.CAP_DSHOW if sys.platform == "win32" else cv2.CAP_ANY
-    cap = cv2.VideoCapture(cam["index"] if args.source is None else args.source, backend)
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH, cam["width"])
-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, cam["height"])
+    try:
+        cap = open_camera(load_site()["camera"], args.source)
+    except RuntimeError as e:
+        raise SystemExit(str(e)) from e
     out = REPO_ROOT / args.out
     out.mkdir(parents=True, exist_ok=True)
     prefix = time.strftime("%Y%m%d-%H%M%S")

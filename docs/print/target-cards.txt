@@ -1,0 +1,16 @@
+Thẻ bia in hình lửa, cắt từ ảnh D-Fire (CC0), bản chia sẵn của sayedgamal99 trên Kaggle.
+Cạnh thẻ 70 mm, chỉ giữ ảnh cắt model báo lửa với conf >= 0.7.
+Cột: số thẻ, ảnh nguồn (tập/tên), vùng cắt x0,y0,cạnh (px), conf của model.
+
+01	train/WEB03935.jpg	884,138,246	0.72
+02	train/WEB06061.jpg	26,99,346	0.76
+03	train/AoF04852.jpg	707,51,573	0.78
+04	test/AoF07927.jpg	668,244,231	0.85
+05	train/WEB03990.jpg	180,176,538	0.72
+06	train/WEB04279.jpg	156,65,230	0.83
+07	train/WEB04043.jpg	63,0,520	0.72
+08	train/WEB07149.jpg	469,286,234	0.71
+09	train/AoF04551.jpg	1369,139,356	0.70
+10	train/WEB04561.jpg	308,6,247	0.72
+11	train/AoF04491.jpg	120,23,264	0.71
+12	test/WEB10956.jpg	709,0,571	0.77

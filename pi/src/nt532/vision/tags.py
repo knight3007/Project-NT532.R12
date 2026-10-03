@@ -1,3 +1,4 @@
+from collections import defaultdict
 from typing import Any
 
 import cv2
@@ -23,6 +24,22 @@ def detect_tags(frame: np.ndarray) -> dict[int, np.ndarray]:
     if ids is None:
         return {}
     return {int(i): c.reshape(4, 2).astype(np.float64) for i, c in zip(ids.flatten(), corners)}
+
+
+def median_corners(
+    frames: list[np.ndarray],
+) -> tuple[dict[int, np.ndarray], dict[int, float]]:
+    """Phát hiện tag trên nhiều khung của một cảnh đứng yên, lấy trung vị góc để bớt nhiễu.
+
+    Trả (góc trung vị theo ID, tỷ lệ số khung thấy từng ID).
+    """
+    seen: dict[int, list[np.ndarray]] = defaultdict(list)
+    for frame in frames:
+        for tag_id, corners in detect_tags(frame).items():
+            seen[tag_id].append(corners)
+    corners = {i: np.median(np.stack(c), axis=0) for i, c in seen.items()}
+    rate = {i: len(c) / len(frames) for i, c in seen.items()}
+    return corners, rate
 
 
 def reference_corners(site: dict[str, Any]) -> dict[int, np.ndarray]:

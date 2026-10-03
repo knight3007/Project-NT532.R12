@@ -13,15 +13,17 @@ import cv2
 
 from nt532.config import REPO_ROOT, load_site
 from nt532.vision.calibration import calibrate, charuco_board, save_intrinsics
+from nt532.vision.camera import open_camera
 
 CALIB_DIR = REPO_ROOT / "data" / "calib"
 
 
 def capture(cam_cfg: dict) -> None:
     CALIB_DIR.mkdir(parents=True, exist_ok=True)
-    cap = cv2.VideoCapture(cam_cfg["index"])
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH, cam_cfg["width"])
-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, cam_cfg["height"])
+    try:
+        cap = open_camera(cam_cfg)
+    except RuntimeError as e:
+        raise SystemExit(str(e)) from e
     detector = cv2.aruco.CharucoDetector(charuco_board(cam_cfg["calib_board"]))
     n = len(list(CALIB_DIR.glob("*.jpg")))
     while True:
