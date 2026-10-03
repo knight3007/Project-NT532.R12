@@ -22,7 +22,7 @@ COLORS = {"fire": (0, 80, 255), "smoke": (200, 200, 200)}
 
 def main() -> None:
     p = argparse.ArgumentParser()
-    p.add_argument("--source", default=None, help="số thứ tự webcam, file video hoặc ảnh")
+    p.add_argument("--source", default=None, help="số thứ tự webcam, file video, ảnh hoặc sim")
     p.add_argument(
         "--weights", default=str(DEFAULT_WEIGHTS), help="file .pt hoặc thư mục model NCNN/OpenVINO"
     )
@@ -34,7 +34,7 @@ def main() -> None:
     model = YOLO(args.weights)
     wanted = [i for i, n in model.names.items() if n == "fire" or (args.smoke and n == "smoke")]
     try:
-        cap = open_camera(load_site()["camera"], args.source)
+        cap = open_camera(load_site(source=args.source)["camera"], args.source)
     except RuntimeError as e:
         raise SystemExit(str(e)) from e
     out_dir = REPO_ROOT / "runs" / "live"

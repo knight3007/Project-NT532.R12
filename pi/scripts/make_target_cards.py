@@ -2,10 +2,14 @@
 
     uv run python scripts/make_target_cards.py                    # 2 trang, thẻ 70 mm
     uv run python scripts/make_target_cards.py --size-mm 80 --pages 3
+    uv run python scripts/make_target_cards.py --no-pdf           # chỉ sinh PNG cho sa bàn ảo
 
 Chỉ giữ ảnh cắt mà model hiện tại báo lửa với độ tin cậy cao, mỗi ảnh gốc một thẻ, các thẻ lấy
 từ ảnh khác nhau. In ở tỷ lệ 100%, cắt theo nét xám rồi ép plastic. Danh sách ảnh nguồn ghi vào
 docs/print/target-cards.txt (để ghi nguồn trong báo cáo).
+
+Mỗi thẻ cũng được lưu thành PNG vuông 256 px trong --png-dir (mặc định data/sim/cards/) để sa bàn
+ảo (nt532.sim) dán lên bảng; --no-pdf bỏ qua PDF và danh sách nguồn.
 """
 
 import argparse
@@ -142,6 +146,8 @@ def main() -> None:
     p.add_argument("--min-conf", type=float, default=0.7)
     p.add_argument("--context", type=float, default=1.3, help="nới vùng cắt so với hộp lửa")
     p.add_argument("--seed", type=int, default=0)
+    p.add_argument("--png-dir", default=str(REPO_ROOT / "data" / "sim" / "cards"))
+    p.add_argument("--no-pdf", action="store_true", help="chỉ lưu PNG, không ghi PDF và danh sách")
     args = p.parse_args()
 
     per_page = layout(args.size_mm)[0] * layout(args.size_mm)[1]
@@ -150,6 +156,14 @@ def main() -> None:
     )
     if not cards:
         raise SystemExit("không chọn được ảnh nào; hạ --min-conf thử")
+    png_dir = Path(args.png_dir)
+    png_dir.mkdir(parents=True, exist_ok=True)
+    for i, card in enumerate(cards, 1):
+        patch = cv2.resize(card["image"], (256, 256), interpolation=cv2.INTER_AREA)
+        cv2.imwrite(str(png_dir / f"card_{i:02d}.png"), patch)
+    print(f"{len(cards)} thẻ PNG: {png_dir}")
+    if args.no_pdf:
+        return
     pages = [
         render_page(cards[i : i + per_page], i + 1, args.size_mm)
         for i in range(0, len(cards), per_page)

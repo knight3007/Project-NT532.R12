@@ -1,45 +1,10 @@
-import cv2
 import numpy as np
 import pytest
 
+from nt532.sim.render import look_at, render_quad, tag_quad
 from nt532.vision.types import Camera, Intrinsics
 
 SIZE = (1280, 720)
-
-
-def look_at(position, target, intrinsics: Intrinsics) -> Camera:
-    position, target = np.asarray(position, float), np.asarray(target, float)
-    z = target - position
-    z /= np.linalg.norm(z)
-    x = np.cross(z, [0.0, 0.0, 1.0])
-    x /= np.linalg.norm(x)
-    R = np.stack([x, np.cross(z, x), z])
-    return Camera(intrinsics, R, -R @ position)
-
-
-def render_quad(canvas: np.ndarray, texture: np.ndarray, world: np.ndarray, camera: Camera) -> None:
-    """Dán một ảnh phẳng có bốn góc `world` (TL, TR, BR, BL) vào khung hình của camera."""
-    k = camera.intrinsics
-    px, _ = cv2.projectPoints(world, cv2.Rodrigues(camera.R)[0], camera.t, k.K, k.dist)
-    h, w = texture.shape[:2]
-    src = np.array([[0, 0], [w, 0], [w, h], [0, h]], np.float32)
-    H = cv2.getPerspectiveTransform(src, px.reshape(4, 2).astype(np.float32))
-    size = (canvas.shape[1], canvas.shape[0])
-    warped = cv2.warpPerspective(texture, H, size, flags=cv2.INTER_AREA)
-    mask = cv2.warpPerspective(np.full((h, w), 255, np.uint8), H, size)
-    canvas[mask > 0] = warped[mask > 0]
-
-
-def tag_quad(tag_id: int, size: float, center, yaw_deg: float = 0.0):
-    """Ảnh tag có viền trắng một ô và bốn góc của cả tấm (kể cả viền) trong hệ sa bàn."""
-    dictionary = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_APRILTAG_36h11)
-    marker = cv2.aruco.generateImageMarker(dictionary, tag_id, 400)
-    texture = cv2.copyMakeBorder(marker, 50, 50, 50, 50, cv2.BORDER_CONSTANT, value=255)
-    h = size / 2 * 1.25
-    square = np.array([[-h, h, 0], [h, h, 0], [h, -h, 0], [-h, -h, 0]])
-    a = np.radians(yaw_deg)
-    Rz = np.array([[np.cos(a), -np.sin(a), 0], [np.sin(a), np.cos(a), 0], [0, 0, 1]])
-    return texture, square @ Rz.T + np.asarray(center, float)
 
 
 @pytest.fixture

@@ -50,10 +50,10 @@ def solve_live(vision: Vision, corners: dict[int, np.ndarray]) -> tuple[Vision |
 
 def main() -> None:
     p = argparse.ArgumentParser()
-    p.add_argument("--source", default=None, help="số thứ tự webcam, file video hoặc ảnh")
+    p.add_argument("--source", default=None, help="số thứ tự webcam, file video, ảnh hoặc sim")
     args = p.parse_args()
 
-    site = load_site()
+    site = load_site(source=args.source)
     cfg = site["vision"]
     node_ids = site["tags"]["nodes"]["ids"]
     try:

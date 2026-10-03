@@ -8,8 +8,13 @@ import numpy as np
 def open_camera(cfg: dict[str, Any], source: int | str | None = None) -> cv2.VideoCapture:
     """Mở webcam theo mục `camera` của site.yaml, hoặc một file video/ảnh nếu `source` là đường dẫn.
 
-    Đặt độ phân giải, khóa lấy nét và phơi sáng nếu cấu hình có giá trị.
+    Đặt độ phân giải, khóa lấy nét và phơi sáng nếu cấu hình có giá trị. `source == "sim"` trả
+    camera ảo nhìn sa bàn ảo mặc định (nt532.sim), khung nào cũng dựng mới từ hình học.
     """
+    if source == "sim":
+        from ..sim import SimCamera  # import lười: không kéo theo khi không dùng sim
+
+        return SimCamera.demo()
     if isinstance(source, str) and not source.isdigit():
         cap = cv2.VideoCapture(source)
     else:

@@ -19,12 +19,12 @@ from nt532.vision.camera import open_camera
 def main() -> None:
     p = argparse.ArgumentParser()
     p.add_argument("--out", required=True, help="thư mục lưu, tính từ gốc repo")
-    p.add_argument("--source", type=int, default=None)
+    p.add_argument("--source", default=None, help="số thứ tự webcam, file video hoặc sim")
     p.add_argument("--every", type=float, default=0.0, help="giây giữa hai ảnh khi chụp tự động")
     args = p.parse_args()
 
     try:
-        cap = open_camera(load_site()["camera"], args.source)
+        cap = open_camera(load_site(source=args.source)["camera"], args.source)
     except RuntimeError as e:
         raise SystemExit(str(e)) from e
     out = REPO_ROOT / args.out

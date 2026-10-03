@@ -30,8 +30,8 @@ IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".bmp"}
 
 def load_frames(source: str, n: int) -> list[np.ndarray]:
     """Lấy tối đa n ảnh từ thư mục (chọn đều) hoặc từ webcam."""
-    if source.isdigit():
-        cap = open_camera(load_site()["camera"], source)
+    if source.isdigit() or source == "sim":
+        cap = open_camera(load_site(source=source)["camera"], source)
         try:
             return [read_fresh(cap) for _ in range(min(n, 30))]
         finally:
@@ -72,7 +72,7 @@ def main() -> None:
     p.add_argument("--imgsz", nargs="+", type=int, default=[640])
     p.add_argument("--n", type=int, default=50, help="số lượt đo mỗi cấu hình")
     p.add_argument("--warmup", type=int, default=5)
-    p.add_argument("--source", default=str(DEFAULT_SOURCE), help="thư mục ảnh hoặc số webcam")
+    p.add_argument("--source", default=str(DEFAULT_SOURCE), help="thư mục ảnh, số webcam hoặc sim")
     args = p.parse_args()
 
     frames = load_frames(args.source, args.n)

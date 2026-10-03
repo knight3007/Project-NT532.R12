@@ -61,6 +61,9 @@ Các script trong `pi/scripts/`:
 | `export_model.py` | Xuất model sang NCNN hoặc ONNX cho Pi |
 | `bench_detect.py` | Đo thời gian suy luận bằng CPU |
 | `log_pi_load.py` | Ghi CPU, RAM, nhiệt độ của Pi ra CSV |
+| `sim_demo.py` | Chạy trọn kịch bản trên sa bàn ảo bằng YOLO thật và in sai số từng bước |
+
+Chưa có sa bàn thì dùng sa bàn ảo trong `pi/src/nt532/sim/`: thêm `--source sim` vào bất kỳ script nào có `--source` (camera ảo, 4 tag tham chiếu mặc định, hai node, thẻ bia và laser theo pan/tilt).
 
 Orchestrator dùng phần thị giác qua lớp `Vision`, mô tả ở [docs/vision-api.md](docs/vision-api.md). Cách đưa lên Pi và chạy các bài đo ở [docs/trien-khai-pi.md](docs/trien-khai-pi.md).
 

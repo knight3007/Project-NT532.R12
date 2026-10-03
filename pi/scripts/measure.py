@@ -194,7 +194,7 @@ def run_spot(args, cap, vision: Vision, path: Path) -> None:
 
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    p.add_argument("--source", default=None, help="số thứ tự webcam, file video hoặc ảnh")
+    p.add_argument("--source", default=None, help="số thứ tự webcam, file video, ảnh hoặc sim")
     sub = p.add_subparsers(dest="task", required=True)
 
     def common(q, repeat: bool = True) -> None:
@@ -224,10 +224,11 @@ def main() -> None:
     if args.task == "click" and args.headless:
         p.error("click cần cửa sổ, không dùng được với --headless")
 
-    vision = Vision.from_site(load_site())
+    site = load_site(source=args.source)
+    vision = Vision.from_site(site)
     need_commissioning(vision)
     try:
-        cap = open_camera(load_site()["camera"], args.source)
+        cap = open_camera(site["camera"], args.source)
     except RuntimeError as e:
         raise SystemExit(str(e)) from e
     path = OUT_DIR / f"{args.task}.csv"

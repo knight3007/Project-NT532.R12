@@ -3,6 +3,7 @@
     uv run python scripts/commission.py                  # đọc commission_frames khung từ webcam
     uv run python scripts/commission.py --frames 30 --source 1
     uv run python scripts/commission.py --check          # so cảnh hiện tại với file đã lưu
+    uv run python scripts/commission.py --source sim     # sa bàn ảo, lưu vào data/sim/
 
 Thoát mã 1 nếu thiếu node hoặc sai số chiếu lại vượt camera_shift_px (và không ghi đè file đã
 lưu, trừ khi có --force); mã 2 nếu không thấy đủ tag tham chiếu. Với --check, mã 1 nếu có gì
@@ -20,13 +21,13 @@ from nt532.vision.report import commissioning_report, health_report
 
 def main() -> None:
     p = argparse.ArgumentParser()
-    p.add_argument("--source", default=None, help="số thứ tự webcam, file video hoặc ảnh")
+    p.add_argument("--source", default=None, help="số thứ tự webcam, file video, ảnh hoặc sim")
     p.add_argument("--frames", type=int, default=None, help="số khung (mặc định commission_frames)")
     p.add_argument("--check", action="store_true", help="kiểm tra so với file đã lưu, không ghi")
     p.add_argument("--force", action="store_true", help="vẫn lưu dù kết quả không đạt")
     args = p.parse_args()
 
-    site = load_site()
+    site = load_site(source=args.source)
     cfg = site["vision"]
     frames = args.frames or cfg["commission_frames"]
     try:

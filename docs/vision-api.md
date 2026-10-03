@@ -100,6 +100,19 @@ if spot is not None:
 
 Nếu không bao giờ tìm thấy vết laser, nhiều khả năng mặt bảng quá sáng làm kênh đỏ đã chạm trần. Giảm `camera.exposure` trong `config/site.yaml` trước khi hạ `vision.laser_min_rise`.
 
+## Ghép thử bằng sa bàn ảo
+
+Chưa có phần cứng thì dùng `nt532.sim`: `open_camera(cfg, "sim")` trả camera ảo đọc được y như webcam, và `load_site(source="sim")` trả site đã điền vị trí tag tham chiếu mặc định.
+
+```python
+from nt532.sim import Scene, SimCamera, sim_site, aim_angles
+
+scene = Scene()                       # bàn, bảng bia, 4 tag tham chiếu, hai node s1 và s2
+cap = SimCamera(scene)
+```
+
+Trên `scene` có thể thêm hoặc bỏ thẻ bia, bật hoặc tắt laser, đặt góc pan/tilt cho từng node, dời node và xê dịch camera; khung đọc tiếp theo sẽ phản ánh thay đổi. Vị trí thật của mọi thứ đều đọc được để so sai số. `aim_angles` chỉ là công thức tham chiếu cho mô phỏng; công thức chính thức vẫn do orchestrator viết. Xem ví dụ đầy đủ ở `pi/scripts/sim_demo.py`.
+
 ## Tham số
 
 Mọi ngưỡng nằm ở mục `vision:` và `targeting:` trong `config/site.yaml`; code không gõ cứng số nào.
