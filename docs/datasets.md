@@ -9,6 +9,29 @@ Cập nhật 2026-10-02. Chưa tải bộ nào về.
 | D-Fire (bản đã chia train/val/test) | hơn 21.000 ảnh; 14.692 hộp lửa, 11.865 hộp khói; 9.838 ảnh âm tính | 0 = smoke, 1 = fire | 3,1 GB | CC0 | https://www.kaggle.com/datasets/sayedgamal99/smoke-fire-detection-yolo |
 | Fire-dataset-for-yolo11 | 32.603 ảnh | 0 = fire, 1 = smoke | 2,1 GB | MIT | https://www.kaggle.com/datasets/mehmoodulhaq570/fire-dataset |
 
+### Lửa trong nhà, hộ gia đình (khảo sát 2026-10-03)
+
+| Dataset | Quy mô | Lớp | Dung lượng | Giấy phép | Tải |
+| --- | --- | --- | --- | --- | --- |
+| Home-fire (Peng và Kim, IEEE Access 2025) | 6.500 ảnh, chia sẵn 3.900/1.300/1.300 | flame, smoke | 1,82 GB (3 file zip) | CC BY-NC 4.0 | GitHub release, không cần tài khoản: https://github.com/PengBo0/Home-fire-dataset/releases/tag/v1.0.0 |
+| Indoor Fire Smoke (Binus University, 2025) | 5.000 ảnh, chia sẵn 3.500/750/750 | fire, smoke | 200 MB | CC BY 4.0 | Zenodo, không cần tài khoản: https://zenodo.org/records/15826133 |
+| Domestic Fire and Smoke (DataCluster Labs) | khoảng 5.000 ảnh | fire, smoke | | thương mại | Repo chỉ có ảnh mẫu, muốn bản đầy đủ phải liên hệ bán hàng |
+
+Home-fire tập trung vào ngọn lửa nhỏ và khói giai đoạn đầu, góc nhìn camera giám sát trong nhà, cắt từ khoảng 400 video, có cả ảnh hồng ngoại đen trắng ban đêm.
+
+Đã tải về `data/raw/home-fire/` và `data/raw/indoor-fire-smoke/` ngày 2026-10-03. **Cả hai bộ dùng 0 = fire, 1 = smoke, ngược với D-Fire** (xác nhận bằng cách xem ảnh cắt từng lớp); `data.yaml` của mỗi bộ đã ghi đúng tên lớp. Gộp với D-Fire thì phải đổi chỉ số lớp.
+
+| Bộ | Phần | Ảnh | Hộp lửa | Hộp khói | Ảnh không nhãn |
+| --- | --- | --- | --- | --- | --- |
+| Home-fire | train | 3.900 | 2.978 | 1.834 | 87 |
+| | val | 1.300 | 963 | 617 | 33 |
+| | test | 1.300 | 897 | 689 | 15 |
+| Indoor Fire Smoke | train | 3.500 | 2.504 | 2.342 | 0 |
+| | valid | 750 | 547 | 496 | 0 |
+| | test | 750 | 541 | 505 | 0 |
+
+Indoor Fire Smoke gần như không có ảnh âm tính, nên nếu train chỉ trên bộ này model dễ báo nhầm.
+
 D-Fire còn có link OneDrive chính thức, không cần tài khoản: https://github.com/gaiasd/DFireDataset
 
 ## Phân loại theo chất liệu cháy (nhãn cấp ảnh, không có bounding box)
@@ -35,3 +58,18 @@ Ghi chú về ClassesOfFire:
 
 - Roboflow Universe: trang chặn truy cập tự động. Có nhắc tới bộ `fypfirerooster/fire-detection-classification`, cần mở bằng trình duyệt để xem.
 - Semantic Scholar và arXiv API: bị giới hạn tần suất trong lúc tra.
+
+## Sau khi lọc ClassesOfFire (2026-10-03)
+
+`pi/scripts/prepare_classesoffire.py` bỏ 67 ảnh trùng nội dung, không có ảnh hỏng, còn 4.414 ảnh, chia 70/15/15 theo từng lớp vào `data/dataset/classesoffire/`.
+
+| Lớp | train | val | test |
+| --- | --- | --- | --- |
+| A | 1.705 | 366 | 366 |
+| B | 128 | 27 | 27 |
+| C | 287 | 61 | 61 |
+| D | 119 | 25 | 25 |
+| F | 115 | 24 | 24 |
+| none | 738 | 158 | 158 |
+
+Cảnh báo: định dạng file lệch theo lớp. Lớp A gần như toàn JPG (2.445/2.446), còn B, D, F chủ yếu là PNG. Model có thể học phân biệt lớp qua vết nén ảnh thay vì nội dung, nên độ chính xác trên tập test của bộ này có thể cao giả. Cần nén lại toàn bộ về cùng một định dạng trước khi train, và kiểm tra bằng ảnh tự chụp.
