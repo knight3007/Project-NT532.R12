@@ -9,8 +9,11 @@ Kế hoạch đầy đủ: [docs/ke-hoach-trien-khai-NT532.md](docs/ke-hoach-tri
 | Thư mục | Nội dung | Người phụ trách |
 | --- | --- | --- |
 | `pi/src/nt532/vision/` | YOLO, hiệu chuẩn camera, pose tag, định vị, tìm vết laser | Hùng |
-| `pi/src/nt532/net/` | CoAP server cho sensor, CoAP client tới node chấp hành | Hậu |
-| `pi/src/nt532/orchestrator/` | State machine, tính pan/tilt, log | Hậu |
+| `pi/src/nt532/net/` | Payload CoAP, CoAP server cho sensor, CoAP client tới node chấp hành | Hậu |
+| `pi/src/nt532/orchestrator/` | State machine, gộp dữ liệu cho bộ quyết định, tính pan/tilt, log | Hậu |
+| `pi/src/nt532/decider/` | Bộ kịch bản tổng hợp, baseline luật, mô hình Jev | Hùng |
+| `pi/src/nt532/dashboard/` | Dashboard web của trạm | Hùng |
+| `pi/src/nt532/sim/` | Sa bàn ảo: camera, thế giới ảo có cảm biến và node chấp hành | Hùng |
 | `pi/scripts/` | Sinh file in, hiệu chuẩn camera, chuẩn bị dataset, train | Hùng |
 | `firmware/sensor-h2/` | Firmware node H2: cảm biến và chấp hành (ESP-IDF, Thread) | Hậu, Hiếu |
 | `firmware/rcp/` | Ghi chú nạp RCP cho H2 DevKit và cài OTBR | Hậu |
@@ -35,7 +38,7 @@ Thêm YOLO khi cần train hoặc suy luận:
 uv sync --extra yolo
 ```
 
-Sau khi cài `--extra yolo`, chạy lệnh bằng `uv run --extra yolo ...`; `uv run` trơn sẽ gỡ torch ra khỏi môi trường.
+Sau khi cài `--extra yolo`, chạy lệnh bằng `uv run --extra yolo ...`; `uv run` trơn sẽ gỡ torch ra khỏi môi trường. Tương tự, mô hình quyết định Jev cần `--extra decider` (torch, torchvision, transformers, peft); orchestrator chạy bằng luật thì không cần.
 
 Các script trong `pi/scripts/`:
 
@@ -62,8 +65,11 @@ Các script trong `pi/scripts/`:
 | `bench_detect.py` | Đo thời gian suy luận bằng CPU |
 | `log_pi_load.py` | Ghi CPU, RAM, nhiệt độ của Pi ra CSV |
 | `sim_demo.py` | Chạy trọn kịch bản trên sa bàn ảo bằng YOLO thật và in sai số từng bước |
+| `run_station.py` | Chạy trạm (orchestrator, bộ quyết định, link node) kèm dashboard web ở cổng 8080 |
 
 Chưa có sa bàn thì dùng sa bàn ảo trong `pi/src/nt532/sim/`: thêm `--source sim` vào bất kỳ script nào có `--source` (camera ảo, 4 tag tham chiếu mặc định, hai node, thẻ bia và laser theo pan/tilt).
+
+Chạy cả trạm kèm dashboard trên sa bàn ảo: `uv run python scripts/run_station.py --source sim` rồi mở http://localhost:8080/. Kiến trúc, luồng xử lý và các việc còn mở ở [docs/orchestrator.md](docs/orchestrator.md).
 
 Orchestrator dùng phần thị giác qua lớp `Vision`, mô tả ở [docs/vision-api.md](docs/vision-api.md). Cách đưa lên Pi và chạy các bài đo ở [docs/trien-khai-pi.md](docs/trien-khai-pi.md).
 

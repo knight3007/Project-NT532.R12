@@ -1,0 +1,337 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NT532 · Trạm điều phối</title>
+<style>
+:root {
+  --bg: #0f1216; --panel: #171b21; --panel2: #1d222a; --line: #2a313b; --text: #e6e9ee;
+  --muted: #8b95a3; --accent: #4cc2ff; --ok: #4ad37a; --warn: #f5b942; --bad: #ff5d5d;
+  --fire: #ff8a3d; --model: #b48cff; --rules: #4cc2ff;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text);
+  font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+header { display: flex; align-items: center; gap: 14px; padding: 10px 16px;
+  border-bottom: 1px solid var(--line); background: var(--panel); position: sticky; top: 0; z-index: 5;
+  flex-wrap: wrap; }
+h1 { font-size: 16px; margin: 0; font-weight: 600; letter-spacing: .2px; }
+h1 small { color: var(--muted); font-weight: 400; margin-left: 6px; }
+.phase { padding: 4px 12px; border-radius: 999px; font-weight: 700; letter-spacing: .5px;
+  background: var(--panel2); border: 1px solid var(--line); }
+.phase.busy { background: #3a2a10; border-color: var(--warn); color: var(--warn); }
+.phase.fault, .phase.human, .phase.alarm { background: #3a1414; border-color: var(--bad); color: var(--bad); }
+.spacer { flex: 1; }
+select, button, input { font: inherit; color: var(--text); background: var(--panel2);
+  border: 1px solid var(--line); border-radius: 6px; padding: 5px 9px; }
+button { cursor: pointer; }
+button:hover { border-color: var(--accent); }
+button.on { border-color: var(--accent); color: var(--accent); }
+#stop { background: #b3261e; border-color: #ff5d5d; font-weight: 700; padding: 6px 16px; }
+#stop:hover { background: #d32f2f; }
+.dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; background: var(--muted); }
+.dot.ok { background: var(--ok); } .dot.bad { background: var(--bad); }
+main { display: grid; grid-template-columns: minmax(0, 1.55fr) minmax(320px, 1fr); gap: 14px; padding: 14px; }
+@media (max-width: 980px) { main { grid-template-columns: 1fr; } }
+section { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px; min-width: 0; }
+section h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .8px; color: var(--muted);
+  margin: 0 0 10px; font-weight: 600; display: flex; align-items: center; gap: 8px; }
+.col { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+#video { position: relative; background: #000; border-radius: 8px; overflow: hidden; aspect-ratio: 16/9; }
+#video img { width: 100%; height: 100%; object-fit: contain; display: block; cursor: crosshair; }
+#video .hint { position: absolute; left: 10px; bottom: 8px; font-size: 12px; color: #fff;
+  background: rgba(0,0,0,.55); padding: 3px 8px; border-radius: 5px; }
+.toolbar { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; align-items: center; }
+.toolbar .lbl { color: var(--muted); font-size: 12px; margin-right: 2px; }
+.steps { display: grid; grid-template-columns: repeat(auto-fit, minmax(54px, 1fr)); gap: 4px; }
+.step { text-align: center; font-size: 10.5px; padding: 6px 1px; overflow: hidden; text-overflow: ellipsis;
+  border-radius: 6px; background: var(--panel2); color: var(--muted); border: 1px solid var(--line); }
+.step.done { color: var(--text); border-color: #36506a; }
+.step.now { background: var(--accent); color: #06121c; font-weight: 700; border-color: var(--accent); }
+.q { margin-bottom: 10px; }
+.q .head { display: flex; justify-content: space-between; font-size: 12px; color: var(--muted); }
+.q .ans { font-weight: 600; font-size: 14px; }
+.tag { font-size: 10px; padding: 1px 6px; border-radius: 4px; border: 1px solid; margin-left: 6px; }
+.tag.rules { color: var(--rules); border-color: var(--rules); }
+.tag.model { color: var(--model); border-color: var(--model); }
+.bar { display: grid; grid-template-columns: 150px 1fr 44px; gap: 6px; align-items: center; font-size: 12px; margin: 2px 0; }
+.bar .name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--muted); }
+.bar .track { height: 8px; background: var(--panel2); border-radius: 4px; overflow: hidden; }
+.bar .fill { height: 100%; background: var(--accent); }
+.bar.chosen .name { color: var(--text); } .bar.chosen .fill { background: var(--ok); }
+details summary { cursor: pointer; color: var(--muted); font-size: 12px; }
+pre { white-space: pre-wrap; font-size: 11.5px; background: var(--panel2); padding: 8px; border-radius: 6px;
+  margin: 6px 0 0; max-height: 260px; overflow: auto; }
+.nozzles { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.nz { background: var(--panel2); border-radius: 8px; padding: 10px; border: 1px solid var(--line); }
+.nz h3 { margin: 0 0 6px; font-size: 14px; display: flex; align-items: center; gap: 8px; }
+.kv { display: flex; justify-content: space-between; font-size: 12px; color: var(--muted); }
+.kv b { color: var(--text); font-weight: 600; }
+.chip { font-size: 11px; padding: 1px 7px; border-radius: 999px; background: #222a33; color: var(--muted); }
+.chip.hot { background: #3a2410; color: var(--fire); } .chip.on { background: #0f3324; color: var(--ok); }
+.warnline { color: var(--warn); font-size: 12px; margin-top: 4px; }
+canvas { width: 100%; height: 150px; display: block; }
+.legend { display: flex; gap: 12px; font-size: 12px; color: var(--muted); flex-wrap: wrap; }
+.legend i { display: inline-block; width: 12px; height: 3px; margin-right: 5px; vertical-align: middle; }
+#log { list-style: none; margin: 0; padding: 0; max-height: 300px; overflow: auto; font-size: 12.5px; }
+#log li { padding: 3px 0; border-bottom: 1px solid #20262e; display: grid; grid-template-columns: 62px 74px 1fr; gap: 6px; }
+#log .t { color: var(--muted); font-variant-numeric: tabular-nums; }
+#log .k { color: var(--accent); }
+#log li.warn .x { color: var(--warn); } #log li.error .x { color: var(--bad); }
+table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+th, td { text-align: left; padding: 4px 6px; border-bottom: 1px solid #20262e; }
+th { color: var(--muted); font-weight: 500; }
+.out-extinguished { color: var(--ok); } .out-fault, .out-stopped, .out-human { color: var(--bad); }
+.out-alarm_only { color: var(--warn); } .out-ignored { color: var(--muted); }
+.truth .src { display: flex; justify-content: space-between; font-size: 12.5px; padding: 3px 0; border-bottom: 1px solid #20262e; }
+.muted { color: var(--muted); }
+.hidden { display: none !important; }
+</style>
+</head>
+<body>
+<header>
+  <h1>NT532 · Trạm điều phối<small id="mode"></small></h1>
+  <span id="phase" class="phase">IDLE</span>
+  <span class="spacer"></span>
+  <span class="muted" style="font-size:12px">Bộ quyết định</span>
+  <select id="decider">
+    <option value="rules">Luật</option>
+    <option value="hybrid">Lai (mô hình khi tự tin)</option>
+    <option value="jev">Mô hình Jev</option>
+  </select>
+  <button id="enable" class="on" title="Tắt thì vẫn nhận cảnh báo nhưng không phun">Tự động: bật</button>
+  <span title="Kết nối tới trạm"><span id="conn" class="dot"></span></span>
+  <button id="stop">DỪNG KHẨN CẤP</button>
+</header>
+<main>
+  <div class="col">
+    <section>
+      <h2>Camera <span id="camerr" class="warnline"></span></h2>
+      <div id="video"><img id="stream" alt="camera"><span class="hint" id="hint">Bấm lên bảng bia để đặt vật</span></div>
+      <div class="toolbar" id="simbar">
+        <span class="lbl">Đặt khi bấm:</span>
+        <button data-kind="fire" class="on">🔥 Lửa</button>
+        <button data-kind="lamp">💡 Đèn nóng</button>
+        <button data-kind="object">🟠 Vật cam</button>
+        <span class="lbl" style="margin-left:8px">Thêm:</span>
+        <button data-act="fire">Lửa ngẫu nhiên</button>
+        <button data-act="steam">Hơi nước</button>
+        <button data-act="spike">Xung cảm biến</button>
+        <button data-act="clear">Xóa hết</button>
+      </div>
+      <div class="toolbar" id="faultbar">
+        <span class="lbl">Thử lỗi:</span>
+        <button data-off="s1">Ngắt s1</button>
+        <button data-off="s2">Ngắt s2</button>
+        <button data-move="s1">Dời s1 3 cm</button>
+        <button id="recommission">Commissioning lại</button>
+      </div>
+    </section>
+    <section>
+      <h2>Cảm biến</h2>
+      <div class="legend"><span><i style="background:var(--fire)"></i>s1</span><span><i style="background:var(--accent)"></i>s2</span><span><i style="background:var(--bad);height:1px"></i>ngưỡng</span></div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:6px">
+        <div><div class="muted" style="font-size:12px">Nhiệt độ °C</div><canvas id="ctemp"></canvas></div>
+        <div><div class="muted" style="font-size:12px">Khí (MQ-2 thô)</div><canvas id="cgas"></canvas></div>
+      </div>
+    </section>
+    <section>
+      <h2>Nhật ký</h2>
+      <ul id="log"></ul>
+    </section>
+  </div>
+  <div class="col">
+    <section>
+      <h2>Quy trình <span id="runinfo" class="muted" style="text-transform:none;letter-spacing:0"></span></h2>
+      <div class="steps" id="steps"></div>
+    </section>
+    <section>
+      <h2>Quyết định <span id="declabel" class="muted" style="text-transform:none;letter-spacing:0"></span></h2>
+      <div id="decision" class="muted">Chưa có cảnh báo nào.</div>
+    </section>
+    <section>
+      <h2>Vòi</h2>
+      <div class="nozzles" id="nozzles"></div>
+    </section>
+    <section id="truthbox" class="truth">
+      <h2>Sự thật trên sa bàn ảo <span class="muted" style="text-transform:none;letter-spacing:0">(orchestrator không thấy)</span></h2>
+      <div id="truth"></div>
+    </section>
+    <section>
+      <h2>Các lượt gần đây</h2>
+      <table><thead><tr><th>#</th><th>Node</th><th>Kết quả</th><th>Lần phun</th><th>Lệch laser</th></tr></thead><tbody id="runs"></tbody></table>
+    </section>
+  </div>
+</main>
+<script>
+const STEPS = ["IDLE","ALERT","LOCALIZE","DECIDE","AIM","CORRECT","FIRE","VERIFY"];
+const QLABEL = {real_fire: "Cháy thật?", action: "Hành động", target: "Bia", nozzle: "Vòi", after_verify: "Sau khi phun"};
+const OUT = {extinguished: "đã dập", ignored: "bỏ qua", alarm_only: "chỉ báo động", human: "gọi người", fault: "lỗi", stopped: "đã dừng"};
+const KIND = {fire: "🔥 lửa", lamp: "💡 đèn nóng", object: "🟠 vật cam", steam: "♨ hơi nước", spike: "⚡ xung"};
+let placeKind = "fire", lastSeq = 0, state = null, offline = {}, deciderSet = false;
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+
+async function cmd(body) {
+  try {
+    const r = await fetch("/api/cmd", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)});
+    const j = await r.json();
+    if (!j.ok) flash(j.error || "lỗi");
+    return j;
+  } catch (e) { flash("không gửi được lệnh"); }
+}
+function flash(msg) { addLog([{seq: 0, time: Date.now()/1000, kind: "dashboard", level: "error", text: msg}]); }
+
+// ---- điều khiển ----
+$("stop").onclick = () => cmd({cmd: "stop"});
+$("enable").onclick = () => cmd({cmd: "enable", on: !(state && state.orch.enabled)});
+$("decider").onchange = (e) => cmd({cmd: "decider", kind: e.target.value});
+$("recommission").onclick = () => cmd({cmd: "recommission"});
+document.querySelectorAll("[data-kind]").forEach(b => b.onclick = () => {
+  placeKind = b.dataset.kind;
+  document.querySelectorAll("[data-kind]").forEach(x => x.classList.toggle("on", x === b));
+});
+document.querySelectorAll("[data-act]").forEach(b => b.onclick = () => cmd({cmd: b.dataset.act}));
+document.querySelectorAll("[data-off]").forEach(b => b.onclick = () => {
+  const n = b.dataset.off; offline[n] = !offline[n];
+  cmd({cmd: "online", node: n, on: !offline[n]});
+  b.textContent = (offline[n] ? "Nối lại " : "Ngắt ") + n; b.classList.toggle("on", offline[n]);
+});
+document.querySelectorAll("[data-move]").forEach(b => b.onclick = () => cmd({cmd: "move_node", node: b.dataset.move, dx: 0.03}));
+$("stream").onclick = (e) => {
+  if (!state || !state.sim) return;
+  const img = e.target, r = img.getBoundingClientRect();
+  const nw = img.naturalWidth, nh = img.naturalHeight;
+  const s = Math.min(r.width / nw, r.height / nh), ox = (r.width - nw * s) / 2, oy = (r.height - nh * s) / 2;
+  const u = (e.clientX - r.left - ox) / s, v = (e.clientY - r.top - oy) / s;
+  if (u < 0 || v < 0 || u > nw || v > nh) return;
+  cmd({cmd: placeKind, u, v});
+};
+$("stream").src = "/stream.mjpg";
+
+// ---- vẽ ----
+function renderSteps(phase, run) {
+  const seen = new Set((run && run.phases || []).map(p => p[0]));
+  const idx = STEPS.indexOf(phase);
+  $("steps").innerHTML = STEPS.map((s, i) =>
+    `<div class="step ${s === phase ? "now" : (seen.has(s) || (idx > 0 && i < idx) ? "done" : "")}">${s}</div>`).join("") +
+    (["ALARM","HUMAN","FAULT"].includes(phase) ? `<div class="step now" style="background:var(--bad);border-color:var(--bad)">${phase}</div>` : "");
+  const el = $("phase");
+  el.textContent = phase;
+  el.className = "phase " + (phase === "IDLE" ? "" : ["FAULT","HUMAN","ALARM"].includes(phase) ? phase.toLowerCase() : "busy");
+  $("runinfo").textContent = run ? `lượt ${run.id} · cảnh báo từ ${run.node}` + (run.target ? ` · bia ${run.target.id}` : "") + (run.nozzle ? ` · vòi ${run.nozzle}` : "") : "";
+}
+
+function renderDecision(run) {
+  const decs = run && run.decisions || [];
+  if (!decs.length) { $("decision").innerHTML = '<span class="muted">Chưa có quyết định trong lượt này.</span>'; $("declabel").textContent = ""; return; }
+  const d = decs[decs.length - 1];
+  $("declabel").textContent = `${d.decider} · ${d.stage === "verify" ? "sau lần phun " + d.attempt : "lúc báo động"} · ${d.latency_ms} ms`;
+  let h = "";
+  for (const [q, a] of Object.entries(d.answers)) {
+    const probs = Object.entries(a.probs).sort((x, y) => y[1] - x[1]);
+    const ans = typeof a.answer === "boolean" ? (a.answer ? "có" : "không") : a.answer;
+    h += `<div class="q"><div class="head"><span>${QLABEL[q] || q}<span class="tag ${a.source}">${a.source === "model" ? "mô hình" : "luật"}</span></span><span>${Math.round(a.confidence * 100)}%</span></div>`;
+    h += `<div class="ans">${esc(ans)}</div>`;
+    if (probs.length > 1 || a.source === "model") for (const [k, p] of probs.slice(0, 4)) {
+      const chosen = String(k) === String(a.answer).toLowerCase() || k === a.answer;
+      h += `<div class="bar ${chosen ? "chosen" : ""}"><span class="name" title="${esc(k)}">${esc(k)}</span><span class="track"><span class="fill" style="width:${(p*100).toFixed(0)}%;display:block"></span></span><span>${(p*100).toFixed(0)}%</span></div>`;
+    }
+    h += "</div>";
+  }
+  h += `<details><summary>STATE đưa vào mô hình</summary><pre>${esc(d.state)}</pre></details>`;
+  if (decs.length > 1) h += `<details><summary>Các quyết định trước trong lượt (${decs.length - 1})</summary><pre>${esc(decs.slice(0, -1).map(x => x.stage + ": " + Object.entries(x.answers).map(([q, a]) => q + "=" + a.answer).join(", ")).join("\n"))}</pre></details>`;
+  $("decision").innerHTML = h;
+}
+
+function fmtAge(v, unit) { return v === null || v === undefined ? "—" : (v >= 9999 ? "∞" : v.toFixed(unit === "ms" ? 0 : 0) + " " + unit); }
+function renderNozzles(o, truth) {
+  $("nozzles").innerHTML = Object.entries(o.nozzles).map(([n, z]) => {
+    const hbOk = z.hb_ms !== null && z.hb_ms < 1500, poseOk = z.pose_s !== null && z.pose_s < 60 && !z.blockers.length;
+    const laser = truth && truth.lasers[n], pump = truth && truth.pumping[n];
+    return `<div class="nz"><h3><span class="dot ${hbOk && poseOk ? "ok" : "bad"}"></span>${n}
+      ${laser ? '<span class="chip hot">laser</span>' : ""}${pump ? '<span class="chip on">bơm</span>' : ""}</h3>
+      <div class="kv">heartbeat <b>${fmtAge(z.hb_ms, "ms")}</b></div>
+      <div class="kv">pose <b>${fmtAge(z.pose_s, "s")}</b></div>
+      ${truth ? `<div class="kv">nhiệt / khí <b>${truth.readings[n].temp.toFixed(1)}° / ${truth.readings[n].gas.toFixed(0)}</b></div>` : ""}
+      ${z.blockers.map(b => `<div class="warnline">${esc(b)}</div>`).join("")}</div>`;
+  }).join("");
+}
+
+function renderTruth(t) {
+  $("truthbox").classList.toggle("hidden", !t);
+  if (!t) return;
+  $("truth").innerHTML = t.sources.length ? t.sources.map(s =>
+    `<div class="src"><span>${KIND[s.kind] || s.kind}${s.node ? " " + s.node : ""}${s.kind !== "spike" && s.kind !== "steam" ? ` <span class="muted">x ${s.x.toFixed(2)} z ${s.z.toFixed(2)}</span>` : ""}</span>
+     <span>${s.kind === "fire" ? (s.out ? '<span class="chip on">đã tắt</span>' : `<span class="chip hot">đang cháy · còn ${s.hp.toFixed(1)}</span>`) : s.kind === "object" ? '<span class="chip">chỉ đánh lừa camera</span>' : `<span class="chip">tín hiệu ${Math.round(s.level*100)}%</span>`}</span></div>`).join("")
+    : '<span class="muted">Sa bàn trống. Bấm lên video để đặt lửa hoặc vật gây nhiễu.</span>';
+}
+
+function renderRuns(runs) {
+  $("runs").innerHTML = runs.slice().reverse().map(r => {
+    const last = r.shots.filter(s => s.miss_cm !== null).slice(-1)[0];
+    return `<tr><td>${r.id}</td><td>${r.node}</td><td class="out-${r.outcome}">${OUT[r.outcome] || r.outcome || "…"}</td><td>${r.attempts || "—"}</td><td>${last ? last.miss_cm.toFixed(1) + " cm" : "—"}</td></tr>`;
+  }).join("") || '<tr><td colspan="5" class="muted">Chưa có lượt nào.</td></tr>';
+}
+
+function chart(canvas, series, key, limit) {
+  const dpr = window.devicePixelRatio || 1, w = canvas.clientWidth, h = canvas.clientHeight;
+  canvas.width = w * dpr; canvas.height = h * dpr;
+  const c = canvas.getContext("2d"); c.scale(dpr, dpr); c.clearRect(0, 0, w, h);
+  const span = 120, pad = {l: 34, r: 6, t: 6, b: 16};
+  let vals = [limit]; for (const s of Object.values(series)) for (const p of s) if (p.t > -span) vals.push(p[key]);
+  let lo = Math.min(...vals), hi = Math.max(...vals); const m = (hi - lo) * 0.12 || 1; lo -= m; hi += m;
+  const X = t => pad.l + (t + span) / span * (w - pad.l - pad.r), Y = v => pad.t + (hi - v) / (hi - lo) * (h - pad.t - pad.b);
+  c.strokeStyle = "#2a313b"; c.fillStyle = "#8b95a3"; c.font = "10px system-ui"; c.lineWidth = 1;
+  for (let i = 0; i <= 3; i++) { const v = lo + (hi - lo) * i / 3, y = Y(v); c.beginPath(); c.moveTo(pad.l, y); c.lineTo(w - pad.r, y); c.stroke(); c.fillText(v.toFixed(0), 2, y + 3); }
+  c.fillText("-2 phút", pad.l, h - 3); c.fillText("bây giờ", w - pad.r - 38, h - 3);
+  c.strokeStyle = "#ff5d5d"; c.setLineDash([4, 4]); c.beginPath(); c.moveTo(pad.l, Y(limit)); c.lineTo(w - pad.r, Y(limit)); c.stroke(); c.setLineDash([]);
+  const colors = {s1: "#ff8a3d", s2: "#4cc2ff"};
+  for (const [n, s] of Object.entries(series)) {
+    c.strokeStyle = colors[n] || "#fff"; c.lineWidth = 2; c.beginPath(); let first = true;
+    for (const p of s) { if (p.t <= -span) continue; const x = X(p.t), y = Y(p[key]); first ? c.moveTo(x, y) : c.lineTo(x, y); first = false; }
+    c.stroke();
+  }
+}
+
+function addLog(evs) {
+  const ul = $("log");
+  for (const e of evs) {
+    const li = document.createElement("li"); li.className = e.level;
+    const t = new Date(e.time * 1000).toLocaleTimeString("vi-VN", {hour12: false});
+    li.innerHTML = `<span class="t">${t}</span><span class="k">${esc(e.kind)}</span><span class="x">${esc(e.text)}</span>`;
+    ul.prepend(li);
+  }
+  while (ul.children.length > 300) ul.lastChild.remove();
+}
+
+async function tick() {
+  try {
+    const [s, evs] = await Promise.all([
+      fetch("/api/state").then(r => r.json()),
+      fetch("/api/events?since=" + lastSeq).then(r => r.json()),
+    ]);
+    state = s; $("conn").className = "dot ok";
+    if (evs.length) { lastSeq = evs[evs.length - 1].seq; addLog(evs); }
+    const o = s.orch;
+    $("mode").textContent = s.sim ? ` · sa bàn ảo · detector ${s.detector}` : ` · phần cứng · ${s.detector}`;
+    $("simbar").classList.toggle("hidden", !s.sim); $("hint").classList.toggle("hidden", !s.sim);
+    $("faultbar").querySelectorAll("[data-off],[data-move]").forEach(b => b.classList.toggle("hidden", !s.sim));
+    $("enable").textContent = "Tự động: " + (o.enabled ? "bật" : "tắt"); $("enable").classList.toggle("on", o.enabled);
+    if (!deciderSet) { const k = o.decider.startsWith("hybrid") ? "hybrid" : o.decider; $("decider").value = k; deciderSet = true; }
+    $("camerr").textContent = s.camera_error || (o.decider_error ? "mô hình lỗi, đang dùng luật: " + o.decider_error : "");
+    const run = o.run || (o.runs.length ? o.runs[o.runs.length - 1] : null);
+    renderSteps(o.phase, o.phase === "IDLE" ? null : run);
+    renderDecision(run);
+    renderNozzles(o, s.truth);
+    renderTruth(s.truth);
+    renderRuns(o.runs);
+    chart($("ctemp"), s.sensors, "temp", s.limits.temp);
+    chart($("cgas"), s.sensors, "gas", s.limits.gas);
+  } catch (e) { $("conn").className = "dot bad"; }
+}
+setInterval(tick, 600); tick();
+</script>
+</body>
+</html>

@@ -72,6 +72,23 @@ actuator:
   nodes:
     s1: {pan_limits: null, tilt_limits: null}
     s2: {pan_limits: null, tilt_limits: null}
+  # Tâm quay pan–tilt tính từ tâm tag đế, trong hệ tag (X phải, Y về mép trên tag, Z lên). Hiếu đo.
+  pivot_offset: [0.0, 0.0, 0.08]
+  water_tilt_deg: 0.0          # góc cộng thêm vào tilt khi phun nước (quỹ đạo rơi); đo ở tuần 3
   heartbeat_ms: 500
   aim_ttl_ms: 1500
   fire_ms: 2000
+
+sensors:
+  # Ngưỡng báo động trên node; orchestrator và mô hình quyết định dùng cùng số. Đo thực ở tuần 2.
+  temp_alarm_c: 45
+  gas_alarm: 600
+
+network:
+  # CoAP server trên Pi và địa chỉ node (trước khi có SRP/DNS-SD ở tuần 4). Xem docs/orchestrator.md.
+  bind: "::"
+  port: 5683
+  transports: null             # null: mặc định aiocoap (udp6). Máy không có IPv6: [simplesocketserver]
+  nodes:
+    s1: null                   # ví dụ "fd11:22::1" (địa chỉ mesh-local của H2) hoặc "s1.local"
+    s2: null
