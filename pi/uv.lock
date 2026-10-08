@@ -1095,14 +1095,14 @@ requires-dist = [
     { name = "peft", marker = "extra == 'decider'", specifier = ">=0.13" },
     { name = "pillow", specifier = ">=10.0" },
     { name = "pyyaml", specifier = ">=6.0" },
-    { name = "sentence-transformers", marker = "extra == 'decider'", specifier = ">=5.0" },
+    { name = "sentence-transformers", marker = "extra == 'decider'", specifier = ">=6.1" },
     { name = "torch", marker = "sys_platform == 'win32' and extra == 'decider'", specifier = ">=2.6", index = "https://download.pytorch.org/whl/cu126" },
     { name = "torch", marker = "sys_platform == 'win32' and extra == 'yolo'", specifier = ">=2.6", index = "https://download.pytorch.org/whl/cu126" },
     { name = "torch", marker = "sys_platform != 'win32' and extra == 'decider'", specifier = ">=2.6" },
     { name = "torch", marker = "sys_platform != 'win32' and extra == 'yolo'", specifier = ">=2.6" },
     { name = "torchvision", marker = "sys_platform == 'win32' and extra == 'yolo'", specifier = ">=0.21", index = "https://download.pytorch.org/whl/cu126" },
     { name = "torchvision", marker = "sys_platform != 'win32' and extra == 'yolo'", specifier = ">=0.21" },
-    { name = "transformers", marker = "extra == 'decider'", specifier = ">=5.0" },
+    { name = "transformers", marker = "extra == 'decider'", specifier = ">=5.19" },
     { name = "ultralytics", marker = "extra == 'yolo'", specifier = ">=8.3" },
 ]
 provides-extras = ["yolo", "decider"]

@@ -14,7 +14,7 @@ dependencies = [
 [project.optional-dependencies]
 yolo = ["ultralytics>=8.3", "torch>=2.6", "torchvision>=0.21"]
 # Thử mô hình quyết định dựa trên EmbeddingGemma 2 (ảnh + văn bản vào cùng không gian 768 chiều)
-decider = ["sentence-transformers>=5.0", "transformers>=5.0", "torch>=2.6", "peft>=0.13"]
+decider = ["sentence-transformers>=6.1", "transformers>=5.19", "torch>=2.6", "peft>=0.13"]
 
 [dependency-groups]
 dev = ["pytest>=8.0", "ruff>=0.6"]
