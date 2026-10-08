@@ -85,10 +85,14 @@ class Geometry:
     match_radius: float
 
 
-def load_geometry() -> Geometry:
+def load_geometry(with_nodes: bool = True) -> Geometry:
+    """`with_nodes=False` chỉ lấy ngưỡng và kích thước bảng từ site.yaml, không cần file
+    commissioning (không nằm trên git). Đủ cho chấm điểm vì `dist`/`reach` đã tính sẵn trong obs."""
     site = read_site()
-    com = yaml.safe_load((REPO_ROOT / "data/sim/commissioning.yaml").read_text(encoding="utf-8"))
-    nodes = {n: tuple(com["nodes"][n]["position"]) for n in NOZZLES}
+    nodes = {}
+    if with_nodes:
+        com = yaml.safe_load((REPO_ROOT / "data/sim/commissioning.yaml").read_text(encoding="utf-8"))
+        nodes = {n: tuple(com["nodes"][n]["position"]) for n in NOZZLES}
     b = site["board"]
     return Geometry(
         nodes, b["plane_y"], b["width"], b["height"],

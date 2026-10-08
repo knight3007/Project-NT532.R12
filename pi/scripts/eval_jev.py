@@ -128,7 +128,7 @@ def main() -> None:
     p.add_argument("--lat-n", type=int, default=100, help="số bản ghi đo độ trễ decide()")
     args = p.parse_args()
 
-    geo = load_geometry()
+    geo = load_geometry(with_nodes=False)
     model = JevModel.load(OUT / args.name, device=args.device, precision=args.precision)
     model.eval()
     result: dict = {}

@@ -53,7 +53,7 @@ def main() -> None:
     p.add_argument("--splits", nargs="+", default=["test", "test_shift"])
     args = p.parse_args()
 
-    geo = load_geometry()
+    geo = load_geometry(with_nodes=False)
     result = {}
     for split in args.splits:
         with (DIR / "scenarios" / f"{split}.jsonl").open(encoding="utf-8") as f:

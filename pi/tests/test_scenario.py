@@ -67,7 +67,7 @@ def test_labels_match_truth():
 
 
 def test_rules_run_on_both_profiles():
-    geo = load_geometry()
+    geo = load_geometry(with_nodes=False)
     for prof in (NORMAL, SHIFT):
         for r in make(80, prof=prof):
             ans = rule_answers(r, geo)

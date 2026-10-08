@@ -181,6 +181,9 @@ def main() -> None:
                 heads = {k: v.clone() for k, v in model.state_dict().items()
                          if not k.startswith("backbone.")}
                 best_state = (heads, bb.trainable_state())
+                # ghi ngay (chưa khớp T) để phiên bị cắt giữa chừng vẫn còn mô hình dùng được
+                model.save(OUT / args.name, extra={"args": vars(args), "partial_step": step,
+                                                   "history": hist})
 
     if best_state is not None:
         model.load_state_dict(best_state[0], strict=False)
