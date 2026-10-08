@@ -53,7 +53,27 @@ def evaluate(model: JevModel, records: list[dict], batch: int) -> tuple[float, d
                 a[0] += hit
                 a[1] += c
     model.train()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()  # tránh phân mảnh làm chậm dần trên GPU 6 GB
     return tot / n, {q: h / c for q, (h, c) in acc.items()}
+
+
+def host_gb() -> float:
+    """RAM máy chủ của tiến trình này (GB): max(working set, private bytes)."""
+    try:
+        import psutil
+    except ImportError:
+        return 0.0
+    mi = psutil.Process().memory_info()
+    return max(mi.rss, getattr(mi, "private", 0)) / 1e9
+
+
+def check_rss(limit: float) -> float:
+    gb = host_gb()
+    if limit and gb > limit:
+        raise SystemExit(f"DỪNG: RAM máy chủ {gb:.1f} GB vượt --max-rss-gb {limit} "
+                         "(nghi rò bộ nhớ hoặc VRAM tràn sang RAM)")
+    return gb
 
 
 def fmt_eta(sec: float) -> str:
@@ -77,6 +97,10 @@ def main() -> None:
     p.add_argument("--fit-records", type=int, default=0, help="số bản ghi val để khớp T (0 = hết)")
     p.add_argument("--freeze-backbone", action="store_true", help="đối chứng: bỏ LoRA, chỉ train đầu")
     p.add_argument("--no-checkpointing", action="store_true")
+    p.add_argument("--precision", choices=["auto", "bf16", "fp32"], default="auto",
+                   help="auto = bf16 nếu GPU hỗ trợ, ngược lại fp32 (không dùng fp16)")
+    p.add_argument("--max-rss-gb", type=float, default=8.0,
+                   help="dừng với thông báo rõ nếu RAM máy chủ của tiến trình vượt ngưỡng (0 = tắt)")
     p.add_argument("--seed", type=int, default=0)
     args = p.parse_args()
 
@@ -89,7 +113,8 @@ def main() -> None:
 
     lora_r = 0 if args.freeze_backbone else args.lora_r
     bb = GemmaBackbone(args.device, lora_r=lora_r, max_len=args.max_len,
-                       checkpointing=not args.no_checkpointing)
+                       checkpointing=not args.no_checkpointing, precision=args.precision)
+    print(f"độ chính xác: {bb.precision}", flush=True)
     model = JevModel(bb)
     model.to(args.device).train()
     head_params = list(model.choice.parameters()) + list(model.boolean.parameters())
@@ -111,6 +136,7 @@ def main() -> None:
         random.shuffle(perm)
         order += perm
 
+    on_cuda = args.device.startswith("cuda")
     best, best_state, hist = float("inf"), None, []
     t0, seen = time.time(), 0
     run_loss = 0.0
@@ -128,6 +154,10 @@ def main() -> None:
             (loss / args.accum).backward()
             run_loss += loss.item() / args.accum
             seen += len(chunk)
+            if on_cuda:
+                # allocator giữ cache theo từng hình dạng chuỗi; trên Windows (WDDM) phần giữ này
+                # tính vào bộ nhớ cam kết của tiến trình và tràn sang RAM -> giải phóng mỗi lô
+                torch.cuda.empty_cache()
         torch.nn.utils.clip_grad_norm_(all_params, 1.0)
         opt.step()
         opt.zero_grad(set_to_none=True)
@@ -135,8 +165,11 @@ def main() -> None:
         rate = seen / (time.time() - t0)
         if step % 5 == 0 or step == total:
             eta = (total * per_step - seen) / rate
+            gb = check_rss(args.max_rss_gb)
+            cu = (f" | cuda cấp {torch.cuda.memory_allocated() / 1e9:.2f} giữ "
+                  f"{torch.cuda.memory_reserved() / 1e9:.2f} GB" if args.device.startswith("cuda") else "")
             print(f"bước {step}/{total} loss {run_loss / min(step, 5):.3f} "
-                  f"{rate:.2f} bản ghi/s ETA {fmt_eta(eta)}", flush=True)
+                  f"{rate:.2f} bản ghi/s ETA {fmt_eta(eta)} | RAM {gb:.2f} GB{cu}", flush=True)
             run_loss = 0.0
         if step % args.val_every == 0 or step == total:
             vl, acc = evaluate(model, val, args.batch * 2)

@@ -33,6 +33,16 @@ QUESTION_TEXT = {
 LORA_TARGETS = r".*layers\.\d+\.(self_attn\.(q|k|v|o)_proj|mlp\.(gate|up|down)_proj)"
 
 
+def resolve_precision(device: str, precision: str | None = None) -> str:
+    """'bf16' hoặc 'fp32'. Mặc định: bf16 nếu GPU hỗ trợ, ngược lại fp32. Không bao giờ fp16."""
+    if precision in (None, "auto"):
+        ok = torch.device(device).type == "cuda" and torch.cuda.is_bf16_supported()
+        return "bf16" if ok else "fp32"
+    if precision not in ("bf16", "fp32"):
+        raise ValueError(f"precision phải là bf16 hoặc fp32 (không dùng fp16), nhận {precision!r}")
+    return "fp32" if torch.device(device).type != "cuda" else precision
+
+
 def format_sequence(state: str, qid: str, candidate: str | None) -> str:
     """Chuỗi đưa vào backbone; câu hỏi boolean không có dòng answer."""
     text = f"{state}\nquestion: {QUESTION_TEXT.get(qid, qid)}"
@@ -50,12 +60,14 @@ class GemmaBackbone(nn.Module):
 
     def __init__(self, device: str = "cpu", lora_r: int = 16, lora_alpha: int | None = None,
                  lora_dropout: float = 0.05, max_len: int = 512, checkpointing: bool = False,
-                 prefix: str = TASK_PREFIX, model_id: str = MODEL_ID):
+                 prefix: str = TASK_PREFIX, model_id: str = MODEL_ID,
+                 precision: str | None = None):
         super().__init__()
         from sentence_transformers import SentenceTransformer
 
         self.device_type = torch.device(device).type
-        dtype = torch.bfloat16 if self.device_type == "cuda" else torch.float32
+        self.precision = resolve_precision(device, precision)
+        dtype = torch.bfloat16 if self.precision == "bf16" else torch.float32
         st = SentenceTransformer(model_id, device="cpu", model_kwargs={"torch_dtype": dtype},
                                  config_kwargs={"audio_config": None})
         self.tok = st.tokenizer
@@ -103,7 +115,7 @@ class GemmaBackbone(nn.Module):
         ids, mask = ids.to(dev), mask.to(dev)
         use_grad = torch.is_grad_enabled() and any(p.requires_grad for p in self.parameters())
         with torch.set_grad_enabled(use_grad), torch.autocast(
-            self.device_type, dtype=torch.bfloat16, enabled=self.device_type == "cuda"
+            self.device_type, dtype=torch.bfloat16, enabled=self.precision == "bf16"
         ):
             h = self.lm(input_ids=ids, attention_mask=mask).last_hidden_state
         m = mask.unsqueeze(-1).float()

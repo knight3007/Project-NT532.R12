@@ -121,6 +121,7 @@ def main() -> None:
     p = argparse.ArgumentParser()
     p.add_argument("--name", default="jev")
     p.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
+    p.add_argument("--precision", choices=["auto", "bf16", "fp32"], default="auto")
     p.add_argument("--splits", nargs="+", default=["test", "test_shift"])
     p.add_argument("--max-records", type=int, default=0, help="chỉ đo N bản ghi đầu mỗi split")
     p.add_argument("--batch", type=int, default=8)
@@ -128,7 +129,7 @@ def main() -> None:
     args = p.parse_args()
 
     geo = load_geometry()
-    model = JevModel.load(OUT / args.name, device=args.device)
+    model = JevModel.load(OUT / args.name, device=args.device, precision=args.precision)
     model.eval()
     result: dict = {}
     for split in args.splits:

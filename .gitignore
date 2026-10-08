@@ -32,3 +32,6 @@ Thumbs.db
 
 # Trọng số Ultralytics tự tải về khi train
 weights/
+
+# Gói dữ liệu Kaggle
+kaggle/*.zip
