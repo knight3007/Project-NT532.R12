@@ -1,0 +1,6 @@
+## IDF Component Manager: libcoap do Espressif đóng gói (các bản 4.3.5 và 4.3.5~N có trên registry)
+dependencies:
+  espressif/coap:
+    version: ">=4.3.5"
+  idf:
+    version: ">=5.2.0"

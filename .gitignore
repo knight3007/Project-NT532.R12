@@ -35,3 +35,4 @@ weights/
 
 # Gói dữ liệu Kaggle
 kaggle/*.zip
+firmware/*/test/test_run

@@ -1,0 +1,135 @@
+menu "NT532 node"
+
+    config NT532_NODE_ID
+        string "Mã node (s1 hoặc s2)"
+        default "s1"
+        help
+            Khóa "n" trong mọi bản tin. Ghi đè được bằng NVS (key node_id), nên một firmware dùng cho cả hai board.
+
+    config NT532_PI_ADDR
+        string "Địa chỉ IPv6 của Pi (nhận /t, /a, /status)"
+        default ""
+        help
+            Địa chỉ mesh-local hoặc OMR của Pi trên mạng Thread, ví dụ fd11:22:33:0:1234:5678:9abc:def0.
+            Để trống thì node vẫn nhận lệnh nhưng không gửi được gì lên Pi.
+
+    config NT532_COAP_PORT
+        int "Cổng CoAP"
+        default 5683
+        range 1 65535
+
+    menu "Thread (phải khớp OTBR trên Pi)"
+        config NT532_THREAD_NETWORK_NAME
+            string "Network name"
+            default "NT532"
+        config NT532_THREAD_CHANNEL
+            int "Channel"
+            default 15
+            range 11 26
+        config NT532_THREAD_PANID
+            hex "PAN ID"
+            default 0x1234
+            range 0 0xfffe
+        config NT532_THREAD_EXTPANID
+            string "Extended PAN ID (16 chữ số hex)"
+            default "1111111122222222"
+        config NT532_THREAD_NETWORK_KEY
+            string "Network key (32 chữ số hex)"
+            default "00112233445566778899aabbccddeeff"
+        config NT532_THREAD_MESH_LOCAL_PREFIX
+            string "Mesh-local prefix"
+            default "fd00:db8:a0:0::/64"
+    endmenu
+
+    menu "Cảm biến và báo động"
+        config NT532_TEMP_ALARM_DECI_C
+            int "Ngưỡng nhiệt, đơn vị 0,1 độ C"
+            default 450
+            help
+                450 = 45,0 độ C, khớp config/site.yaml. Ghi đè bằng NVS key temp_c (độ C, chuỗi).
+        config NT532_GAS_ALARM
+            int "Ngưỡng gas (giá trị ADC thô 0..4095)"
+            default 600
+            help
+                Số đọc g là giá trị thô của ADC 12 bit sau cầu phân áp, không đổi ra ppm. Ghi đè bằng NVS key gas.
+        config NT532_GAS_WARMUP_S
+            int "Bỏ qua gas sau khi cấp nguồn (giây)"
+            default 180
+        config NT532_TELEMETRY_S
+            int "Chu kỳ gửi /t (giây)"
+            default 5
+            range 1 60
+        config NT532_REMOTE_ALARM_S
+            int "Thời gian nháy còi khi nhận /alarm từ node kia (giây)"
+            default 5
+    endmenu
+
+    menu "Chân GPIO"
+        config NT532_GPIO_PUMP
+            int "MOSFET bơm"
+            default 12
+        config NT532_GPIO_LASER
+            int "MOSFET laser"
+            default 14
+        config NT532_GPIO_SERVO_PAN
+            int "Servo pan"
+            default 4
+        config NT532_GPIO_SERVO_TILT
+            int "Servo tilt"
+            default 5
+        config NT532_GPIO_BUZZER
+            int "Còi hoặc LED báo động"
+            default 13
+        config NT532_GPIO_MQ2
+            int "MQ-2 (ADC1, qua cầu phân áp)"
+            default 1
+        config NT532_GPIO_I2C_SDA
+            int "I2C SDA (SHT31)"
+            default 10
+        config NT532_GPIO_I2C_SCL
+            int "I2C SCL (SHT31)"
+            default 11
+    endmenu
+
+    menu "Servo và chấp hành"
+        config NT532_SERVO_PULSE_MIN_US
+            int "Độ rộng xung ứng với -90 độ (us)"
+            default 500
+        config NT532_SERVO_PULSE_MAX_US
+            int "Độ rộng xung ứng với +90 độ (us)"
+            default 2500
+        config NT532_PAN_OFFSET_DECI
+            int "Lệch cơ khí pan, đơn vị 0,1 độ"
+            default 0
+            help
+                Góc thật = dấu * góc lệnh + lệch. Ghi đè bằng NVS key pan_off (độ).
+        config NT532_TILT_OFFSET_DECI
+            int "Lệch cơ khí tilt, đơn vị 0,1 độ"
+            default 0
+        config NT532_PAN_INVERT
+            bool "Đảo chiều pan"
+            default n
+        config NT532_TILT_INVERT
+            bool "Đảo chiều tilt"
+            default n
+        config NT532_PAN_MIN
+            int "Giới hạn pan thấp (độ)"
+            default -50
+        config NT532_PAN_MAX
+            int "Giới hạn pan cao (độ)"
+            default 50
+        config NT532_TILT_MIN
+            int "Giới hạn tilt thấp (độ)"
+            default -35
+        config NT532_TILT_MAX
+            int "Giới hạn tilt cao (độ)"
+            default 45
+        config NT532_HB_TIMEOUT_MS
+            int "Mất heartbeat quá chừng này thì tắt bơm và laser (ms)"
+            default 1500
+        config NT532_MAX_FIRE_MS
+            int "Trần thời gian bật bơm/laser cho một /fire (ms)"
+            default 3000
+    endmenu
+
+endmenu
