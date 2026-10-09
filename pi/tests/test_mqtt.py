@@ -210,13 +210,16 @@ def test_integration_real_broker():
     lock = threading.Lock()
 
     def on_msg(c, u, m):
+        if m.topic.startswith("homeassistant/") and f"/{sid}_" not in m.topic:
+            return  # thực thể của trạm khác trên cùng broker
         with lock:
             got[m.topic] = m.payload.decode()
 
     watcher = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
     watcher.on_message = on_msg
     watcher.connect(host, int(port or 1883))
-    watcher.subscribe([(f"nt532/{sid}/#", 1), (f"homeassistant/+/{sid}_+/config", 1)])
+    # `+` phải chiếm trọn một cấp chủ đề (không viết được `<sid>_+`), nên lọc theo sid trong on_msg
+    watcher.subscribe([(f"nt532/{sid}/#", 1), ("homeassistant/+/+/config", 1)])
     watcher.loop_start()
     st = build_sim("rules")
     bridge = None
