@@ -37,6 +37,8 @@ class Station:
     world: object | None = None  # SimWorld khi chạy sa bàn ảo
     detector_name: str = ""
     fake_nodes: dict | None = None  # {tên: FakeNode} khi build_sim(link="coap")
+    decider_url: str | None = None  # cho bộ quyết định remote, để đổi qua lại từ dashboard
+    decider_timeout: float = 3.0
 
     def start(self, orchestrate: bool = True) -> "Station":
         """`orchestrate=False`: chỉ bật sa bàn ảo và heartbeat, orchestrator không chạy nên không tự
@@ -62,9 +64,25 @@ class Station:
             close()
 
     def set_decider(self, kind: str, run: str = "jev1", tau: float = 0.8, stages: str = "verify") -> None:
-        self.orch.decider = make_decider(kind, run, tau, stages=stages)
+        self.orch.decider = make_decider(kind, run, tau, stages=stages, url=self.decider_url,
+                                         timeout_s=self.decider_timeout)
         self.events.emit("config", f"bộ quyết định: {self.orch.decider.name}")
         warm_up(self.orch.decider, self.events)
+
+
+def telemetry_recorder(events: EventLog, period_s: float = 1.0):
+    """Ghi mỗi mẫu /t vào file log (kind "tel", gọn, không lên dashboard), tối đa một mẫu mỗi
+    `period_s` giây cho mỗi node. fit_sensor_model.py đọc các dòng này."""
+    last: dict[str, float] = {}
+
+    def record(tel) -> None:
+        now = time.monotonic()
+        if now - last.get(tel.n, -1e9) < period_s:
+            return
+        last[tel.n] = now
+        events.record("tel", n=tel.n, s=tel.s, t=tel.t, g=tel.g, h=tel.h)
+
+    return record
 
 
 def warm_up(decider, events: EventLog) -> None:
@@ -97,18 +115,20 @@ def _yolo(site: dict, device: str | None = None):
 
 
 def _wire(site, vision, hub, link, decider, events, settings, world=None, detector_name="",
-          fake_nodes=None):
-    sensors = SensorHistory()
+          fake_nodes=None, decider_url=None, decider_timeout=3.0):
+    sensors = SensorHistory(recorder=telemetry_recorder(events))
     orch = Orchestrator(site, vision, hub, link, decider, sensors, events, settings)
     hb = HeartbeatSender(link.heartbeat, link.nodes, site["actuator"]["heartbeat_ms"])
     warm_up(decider, events)
-    return Station(site, vision, hub, link, sensors, events, orch, hb, world, detector_name, fake_nodes)
+    return Station(site, vision, hub, link, sensors, events, orch, hb, world, detector_name, fake_nodes,
+                   decider_url, decider_timeout)
 
 
 def build_sim(decider: str = "rules", jev_run: str = "jev1", tau: float = 0.8,
               detector: str = "oracle", seed: int = 0, fps: float = 10.0,
               log_path: str | Path | None = None, settings: Settings | None = None,
-              link: str = "mem", model_stages: str = "verify") -> Station:
+              link: str = "mem", model_stages: str = "verify", decider_url: str | None = None,
+              decider_timeout: float = 3.0) -> Station:
     """`link="mem"`: node ảo trong bộ nhớ (SimLink). `"coap"`: mỗi node là một FakeNode chạy lõi C của
     firmware, lệnh và telemetry đi qua UDP localhost bằng CoapLink thật."""
     from .sim.world import OracleDetector, SimLink, SimWorld
@@ -135,8 +155,10 @@ def build_sim(decider: str = "rules", jev_run: str = "jev1", tau: float = 0.8,
         link, fakes = _coap_nodes(world, events)
     else:
         link = SimLink(world)
-    st = _wire(site, vision, hub, link, make_decider(decider, jev_run, tau, stages=model_stages),
-               events, settings, world, detector, fakes)
+    st = _wire(site, vision, hub, link,
+               make_decider(decider, jev_run, tau, stages=model_stages, url=decider_url,
+                            timeout_s=decider_timeout),
+               events, settings, world, detector, fakes, decider_url, decider_timeout)
     if fakes:
         # telemetry và cảnh báo do node giả gửi qua UDP; world không tự đẩy nữa (tránh nạp hai lần)
         link.on_telemetry, link.on_alert = st.sensors.add, st.orch.on_alert
@@ -191,7 +213,8 @@ def _coap_nodes(world, events):
 def build_real(decider: str = "rules", jev_run: str = "jev1", tau: float = 0.8,
                source: int | str | None = None, fps: float = 15.0, yolo_device: str | None = None,
                log_path: str | Path | None = None, settings: Settings | None = None,
-               model_stages: str = "verify") -> Station:
+               model_stages: str = "verify", decider_url: str | None = None,
+               decider_timeout: float = 3.0) -> Station:
     """Webcam + CoAP. Cần calibration/camera.yaml, commissioning và `network.nodes` trong site.yaml."""
     from .net.coap import CoapLink
     from .vision import open_camera
@@ -215,8 +238,11 @@ def build_real(decider: str = "rules", jev_run: str = "jev1", tau: float = 0.8,
         raise ValueError("chưa khai địa chỉ node trong network.nodes của config/site.yaml")
     link = CoapLink(nodes, (net.get("bind", "::"), int(net.get("port", 5683))),
                     transports=net.get("transports")).start()
-    st = _wire(site, vision, hub, link, make_decider(decider, jev_run, tau, stages=model_stages),
-               events, settings, detector_name="yolo")
+    st = _wire(site, vision, hub, link,
+               make_decider(decider, jev_run, tau, stages=model_stages, url=decider_url,
+                            timeout_s=decider_timeout),
+               events, settings, detector_name="yolo", decider_url=decider_url,
+               decider_timeout=decider_timeout)
     link.on_telemetry = st.sensors.add
     link.on_alert = st.orch.on_alert
     if vision.blockers():

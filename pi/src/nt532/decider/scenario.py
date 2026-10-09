@@ -6,7 +6,7 @@ thật (scripts/cache_yolo_obs.py); số đọc cảm biến là phân phối GI
 
 import json
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, fields, replace
 from pathlib import Path
 
 import numpy as np
@@ -51,6 +51,28 @@ class SensorModel:
 
 
 SENSOR = SensorModel()
+
+
+def load_sensor_model(path: str | Path | None, base: SensorModel = SENSOR) -> SensorModel:
+    """Ghi đè các trường của `base` bằng yaml từ fit_sensor_model.py; không có `path` thì giữ nguyên.
+    Khóa lạ hoặc sai kiểu bị từ chối để lỗi chính tả không âm thầm bị bỏ qua."""
+    if path is None:
+        return base
+    data = yaml.safe_load(Path(path).read_text(encoding="utf-8")) or {}
+    data = data.get("sensor_model", data)
+    known = {f.name for f in fields(SensorModel)}
+    bad = set(data) - known
+    if bad:
+        raise ValueError(f"{path}: khóa không thuộc SensorModel: {sorted(bad)}")
+    over = {}
+    for k, v in data.items():
+        if isinstance(getattr(base, k), tuple):
+            if not isinstance(v, (list, tuple)) or len(v) != 2:
+                raise ValueError(f"{path}: {k} phải là [min, max]")
+            over[k] = (float(v[0]), float(v[1]))
+        else:
+            over[k] = float(v)
+    return replace(base, **over)
 
 
 @dataclass(frozen=True)
@@ -257,7 +279,8 @@ def _spread_x(rng, geo: Geometry, k: int) -> list[float]:
     return xs
 
 
-def make_scenario(rng, geo: Geometry, pool: Pool, prof: Profile, sid: str) -> list[dict]:
+def make_scenario(rng, geo: Geometry, pool: Pool, prof: Profile, sid: str,
+                  sm: SensorModel = SENSOR) -> list[dict]:
     """Một kịch bản -> 1 bản ghi giai đoạn `decide`, thêm 1 bản `verify` nếu đã phun."""
     kind = KINDS[int(rng.choice(len(KINDS), p=prof.kinds))]
     n_frames = int(rng.integers(3, 6))
@@ -279,7 +302,7 @@ def make_scenario(rng, geo: Geometry, pool: Pool, prof: Profile, sid: str) -> li
             things.append((x, z, _pick(rng, pool.neg_noisy if noisy else pool.neg_quiet), False))
     src_x = xs[0] if real else float(rng.uniform(0.05, geo.width - 0.05))
 
-    sensors, alarm, blind = simulate_sensors(rng, kind, src_x, geo, prof)
+    sensors, alarm, blind = simulate_sensors(rng, kind, src_x, geo, prof, sm)
 
     # bia nhìn thấy, đánh số từ trái sang phải theo x đo được
     cands = []
@@ -309,7 +332,7 @@ def make_scenario(rng, geo: Geometry, pool: Pool, prof: Profile, sid: str) -> li
     }
     obs = {
         "stage": "decide", "alarm": alarm,
-        "limits": {"temp": SENSOR.temp_thr, "gas": SENSOR.gas_thr},
+        "limits": {"temp": sm.temp_thr, "gas": sm.gas_thr},
         "sensors": sensors, "frames": n_frames, "targets": targets, "nozzles": nozzles,
     }
 
@@ -402,11 +425,12 @@ def _verify_record(rng, geo, pool, prof, sid, d_obs, sensors, true_idx, true_t, 
     }
 
 
-def generate(n: int, pool: Pool, prof: Profile, split: str, seed: int) -> list[dict]:
+def generate(n: int, pool: Pool, prof: Profile, split: str, seed: int,
+             sm: SensorModel = SENSOR) -> list[dict]:
     """n kịch bản, tái lập được theo (seed, split)."""
     geo = load_geometry()
     rng = np.random.default_rng([seed, sum(map(ord, split))])
     out = []
     for i in range(n):
-        out.extend(make_scenario(rng, geo, pool, prof, f"{split}-{i:05d}"))
+        out.extend(make_scenario(rng, geo, pool, prof, f"{split}-{i:05d}", sm))
     return out

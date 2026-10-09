@@ -32,8 +32,9 @@ class Sample:
 class SensorHistory:
     """Các mẫu telemetry gần nhất của từng node, an toàn khi nhiều luồng cùng đọc ghi."""
 
-    def __init__(self, nodes=NOZZLES, size: int = 600, clock=time.monotonic) -> None:
+    def __init__(self, nodes=NOZZLES, size: int = 600, clock=time.monotonic, recorder=None) -> None:
         self.clock = clock
+        self.recorder = recorder  # gọi với mỗi Telemetry nhận được (để ghi log)
         self._lock = threading.Lock()
         self._data = {n: deque(maxlen=size) for n in nodes}
 
@@ -41,6 +42,8 @@ class SensorHistory:
         with self._lock:
             if tel.n in self._data:
                 self._data[tel.n].append(Sample(self.clock(), tel.s, tel.t, tel.g, tel.h))
+        if self.recorder is not None:
+            self.recorder(tel)
 
     def samples(self, node: str, n: int | None = None) -> list[Sample]:
         with self._lock:

@@ -29,6 +29,15 @@ class EventLog:
                 self._file.flush()
         return ev
 
+    def record(self, kind: str, **data) -> None:
+        """Chỉ ghi ra file JSONL (nếu có), không vào hàng đợi hiển thị: cho dữ liệu dày như telemetry."""
+        if self._file is None:
+            return
+        with self._lock:
+            self._file.write(json.dumps({"time": time.time(), "kind": kind, **data},
+                                        ensure_ascii=False, default=str) + "\n")
+            self._file.flush()
+
     def since(self, seq: int = 0, limit: int = 200) -> list[dict]:
         with self._lock:
             out = [e for e in self._items if e["seq"] > seq]

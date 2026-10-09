@@ -99,6 +99,7 @@ th { color: var(--muted); font-weight: 500; }
     <option value="rules">Luật</option>
     <option value="hybrid">Lai (mô hình khi tự tin)</option>
     <option value="jev">Mô hình Jev</option>
+    <option value="remote">Máy khác (remote)</option>
   </select>
   <button id="enable" class="on" title="Tắt thì vẫn nhận cảnh báo nhưng không phun">Tự động: bật</button>
   <span title="Kết nối tới trạm"><span id="conn" class="dot"></span></span>
@@ -319,7 +320,7 @@ async function tick() {
     $("simbar").classList.toggle("hidden", !s.sim); $("hint").classList.toggle("hidden", !s.sim);
     $("faultbar").querySelectorAll("[data-off],[data-move]").forEach(b => b.classList.toggle("hidden", !s.sim));
     $("enable").textContent = "Tự động: " + (o.enabled ? "bật" : "tắt"); $("enable").classList.toggle("on", o.enabled);
-    if (!deciderSet) { const k = o.decider.startsWith("hybrid") ? "hybrid" : o.decider; $("decider").value = k; deciderSet = true; }
+    if (!deciderSet) { const k = o.decider.startsWith("hybrid") ? "hybrid" : o.decider.startsWith("remote") ? "remote" : o.decider; $("decider").value = k; deciderSet = true; }
     $("camerr").textContent = s.camera_error || (o.decider_error ? "mô hình lỗi, đang dùng luật: " + o.decider_error : "");
     const run = o.run || (o.runs.length ? o.runs[o.runs.length - 1] : null);
     renderSteps(o.phase, o.phase === "IDLE" ? null : run);

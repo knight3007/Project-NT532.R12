@@ -276,7 +276,9 @@ class Orchestrator:
             self.events.emit("fault", f"lỗi không lường trước: {type(e).__name__}: {e}", level="error")
         finally:
             self.link.stop()
-            self.events.emit("run", f"lượt {run.id} kết thúc: {run.outcome}", outcome=run.outcome)
+            self.events.emit("run", f"lượt {run.id} kết thúc: {run.outcome}", outcome=run.outcome,
+                             run=run.id, node=run.node, target=run.target, nozzle=run.nozzle,
+                             attempts=run.attempts)
             with self._lock:
                 self.runs.append(run)
                 self.phase = Phase.IDLE
@@ -309,14 +311,15 @@ class Orchestrator:
         node_x = {n: float(p[0]) if (p := self._node_pos(n)) is not None else -1.0 for n in NOZZLES}
         obs, by_id = decide_obs(alarm, self.sensors, tracks, nozzles, node_x, len(frames),
                                 alarm_limits(self.site))
-        dec = self.decider.decide(obs, questions_for(obs))
+        questions = questions_for(obs)
+        dec = self.decider.decide(obs, questions)
         run.decisions.append({"stage": "decide", **dec.to_json()})
         action = dec.get("action")
         tid = candidate_id(dec.get("target") or "")
         nozzle = dec.get("nozzle") or alarm
         self.events.emit("decision", f"{dec.decider}: cháy thật {'có' if dec.get('real_fire') else 'không'}, {action}, "
                                      f"bia {tid}, vòi {nozzle} ({dec.latency_ms:.0f} ms)",
-                         decision=dec.to_json())
+                         decision=dec.to_json(), run=run.id, obs=obs, questions=questions)
         if action == ACTIONS[2]:
             return "ignored"
         if action != ACTIONS[0] or tid is None or tid not in by_id:
@@ -379,11 +382,12 @@ class Orchestrator:
             post = post or [s.temp for s in self.sensors.samples(nozzle, 1)] or [0.0]
             post = [round(post[0], 1)] * (3 - len(post)) + [round(v, 1) for v in post]
             vobs = verify_obs(obs, tid, nozzle, attempt, status, post, conf, mark_cm, self.sensors)
-            dec = self.decider.decide(vobs, questions_for(vobs))
+            vq = questions_for(vobs)
+            dec = self.decider.decide(vobs, vq)
             run.decisions.append({"stage": "verify", "attempt": attempt, **dec.to_json()})
             nxt = dec.get("after_verify")
             self.events.emit("decision", f"{dec.decider} sau lần phun {attempt}: {nxt}",
-                             decision=dec.to_json())
+                             decision=dec.to_json(), run=run.id, obs=vobs, questions=vq)
             if nxt == VERIFY[0]:
                 return "extinguished"
             if nxt == VERIFY[3]:

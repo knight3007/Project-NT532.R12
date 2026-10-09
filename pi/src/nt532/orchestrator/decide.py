@@ -143,11 +143,18 @@ class HybridDecider:
 
 
 def make_decider(kind: str, run: str = "jev1", tau: float = 0.8, device: str = "cpu",
-                 stages: str | frozenset[str] = "verify"):
+                 stages: str | frozenset[str] = "verify", url: str | None = None,
+                 timeout_s: float = 3.0):
+    if kind == "remote":
+        if not url:
+            raise ValueError("--decider remote cần --decider-url")
+        from .remote import RemoteDecider
+
+        return RemoteDecider(url, timeout_s)
     if kind == "rules":
         return RuleDecider()
     if kind == "jev":
         return JevDecider(run, device)
     if kind == "hybrid":
         return HybridDecider(JevDecider(run, device), tau=tau, stages=stages)
-    raise ValueError(f"không biết bộ quyết định {kind!r} (rules, jev, hybrid)")
+    raise ValueError(f"không biết bộ quyết định {kind!r} (rules, jev, hybrid, remote)")

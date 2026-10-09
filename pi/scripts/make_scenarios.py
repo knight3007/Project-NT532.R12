@@ -2,6 +2,7 @@
 
     uv run python scripts/make_scenarios.py
     uv run python scripts/make_scenarios.py --sizes 2000 200 200 200 --seed 1
+    uv run python scripts/make_scenarios.py --sensor-model ../runs/decider/sensor_fit.yaml
 
 Ghi runs/decider/scenarios/{train,val,test,test_shift}.jsonl. train/val/test dùng quan sát của
 fire-n.pt và hồ sơ nhiễu thường; test_shift dùng mix26-neg-20261003.pt, cảm biến nhiễu hơn,
@@ -13,7 +14,7 @@ import json
 from collections import Counter
 
 from nt532.config import REPO_ROOT
-from nt532.decider.scenario import NORMAL, SHIFT, generate, load_pool
+from nt532.decider.scenario import NORMAL, SHIFT, generate, load_pool, load_sensor_model
 
 OUT = REPO_ROOT / "runs/decider"
 
@@ -25,7 +26,11 @@ def main() -> None:
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--obs", default=str(OUT / "yolo_obs_fire-n_cap.jsonl"))
     p.add_argument("--obs-shift", default=str(OUT / "yolo_obs_mix26-neg_test.jsonl"))
+    p.add_argument("--sensor-model", default=None, metavar="YAML",
+                   help="ghi đè SensorModel mặc định (placeholder) bằng file từ fit_sensor_model.py, "
+                        "vd ../runs/decider/sensor_fit.yaml")
     args = p.parse_args()
+    sm = load_sensor_model(args.sensor_model)
 
     jobs = [
         ("train", "train", args.obs, NORMAL, args.sizes[0]),
@@ -36,7 +41,7 @@ def main() -> None:
     (OUT / "scenarios").mkdir(parents=True, exist_ok=True)
     for name, img_split, obs_path, prof, n in jobs:
         pool = load_pool(obs_path, img_split)
-        records = generate(n, pool, prof, name, args.seed)
+        records = generate(n, pool, prof, name, args.seed, sm)
         path = OUT / "scenarios" / f"{name}.jsonl"
         with path.open("w", encoding="utf-8") as f:
             for r in records:

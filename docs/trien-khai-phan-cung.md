@@ -209,6 +209,8 @@ cd ~/nt532/pi
 uv run --no-sync python scripts/run_station.py --decider rules     # camera theo camera.stream.url; mở http://<ip-pi>:8080/
 ```
 
+Jev trên laptop (Pi không chạy nổi mô hình): trên laptop `uv run python scripts/serve_decider.py --decider hybrid --device cuda --host 0.0.0.0` (cùng LAN, không xác thực), trên Pi thêm `--decider remote --decider-url http://<ip laptop>:8090`; laptop tắt hoặc chậm thì Pi tự dùng luật. Chi tiết ở [orchestrator.md](orchestrator.md).
+
 Chạy nền: `bash pi/deploy/setup_pi.sh --install-services` rồi `sudo systemctl start nt532-station`, xem log `journalctl -u nt532-station -f`.
 
 - [ ] Dashboard: "Vòi" cho s1, s2 báo heartbeat và pose không bị chặn (không có lý do chặn).

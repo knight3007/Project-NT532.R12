@@ -47,6 +47,15 @@ Không rò rỉ giữa các split: kịch bản của split X chỉ dùng ảnh 
 
 Số đọc cảm biến chưa đo thực. Toàn bộ phân phối nằm trong `SensorModel` ở `pi/src/nt532/decider/scenario.py` (nền, nhiễu, ngưỡng 45 °C và 600, độ suy giảm theo khoảng cách, hình dạng xung, độ ẩm khi có hơi nước). Cũng là giả định: giới hạn pan ±50° và tilt -35 đến 45° (site.yaml còn để null), xác suất vòi hỏng và lỗi, phân phối độ lệch điểm trúng, ngưỡng pose cũ 60 s. Khi có số đo ở tuần 2 chỉ cần sửa các hằng này rồi sinh lại.
 
+## Đưa số đo thật vào pipeline
+
+Trạm ghi mỗi mẫu `/t` nhận được vào nhật ký `runs/station/*.jsonl` (dòng `"kind": "tel"`, tối đa 1 mẫu/giây/node, không hiện trên dashboard) và mỗi quyết định kèm `obs` và `questions`.
+
+- `scripts/fit_sensor_model.py --logs ... --csv ... [--write]` ước lượng `SensorModel` bằng thống kê bền (trung vị, MAD, phân vị) và in bảng "giả định hiện tại / đo được (n)". `--write` ghi `runs/decider/sensor_fit.yaml`, chỉ chứa đại lượng đã ước lượng được; sinh lại kịch bản bằng `make_scenarios.py --sensor-model ../runs/decider/sensor_fit.yaml` (không truyền thì dùng mặc định như cũ).
+- Từ log trạm chỉ lấy được phần NỀN (mẫu dưới ngưỡng, cách mọi cảnh báo >= 60 s): `*_amb` (p5-p95) và `*_noise` (MAD của sai phân). Các đại lượng còn lại cần CSV nhóm ghi tay lúc đo: `t_s,node,temp,gas,hum,label,dist_m` với label thuộc `baseline|fire|steam|spike|lamp`, `hum` và `dist_m` có thể trống. Mỗi đợt có nhãn nên mở đầu bằng 3 mẫu còn ở mức nền, vì mức nền được lấy riêng cho từng đợt.
+- Ước lượng được từ CSV: `fire_gain`, `quiet_gain`, `steam_gain`, `spike_gain` (đỉnh / (ngưỡng - nền), cần >= 3 đợt), `steam_hum_rise`, `fire_hum_shift`, `onset`, `tau` (từ đợt `fire`), `decay_m` (cần `dist_m` ở >= 2 node trong >= 2 lần cháy). Không ước lượng: `temp_thr`, `gas_thr` (nhóm đặt, ở site.yaml) và nhãn `lamp` (kịch bản đèn dùng chung `fire_gain`). Chỗ nào thiếu thì in "không đủ dữ liệu" và giữ mặc định. Các hằng ngoài `SensorModel` (xác suất vòi hỏng, giới hạn pan/tilt, hình xung 3 đến 5 mẫu) vẫn là giả định.
+- `scripts/export_episodes.py --logs runs/station/*.jsonl [--annotate nhan.csv]` xuất mỗi lượt đã hoàn tất thành bản ghi cùng định dạng kịch bản (thêm `source: "real"`). Nhãn chỉ có khi biết: từ chú thích `run_id,real_fire,fire_out,target,nozzle,action` (xem docstring script), còn lại vắng mặt. `eval_rules.py --data real.jsonl` chấm luật trên đó (nhãn vắng thì bỏ qua câu hỏi tương ứng). Log ghi trước khi có `obs` trong sự kiện `decision` thì không xuất được.
+
 ## Sinh lại
 
 ```
