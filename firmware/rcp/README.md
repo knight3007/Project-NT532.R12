@@ -159,7 +159,14 @@ sudo ot-ctl childip                        # địa chỉ IPv6 con đã đăng k
 sudo ot-ctl ping ff03::1                   # ping multicast mesh: mỗi node đáp, thấy địa chỉ nguồn (CHƯA KIỂM)
 ```
 
-Cách chắc nhất lấy địa chỉ node: **monitor của chính node** (`idf.py monitor`) in `địa chỉ ... [mesh-local EID  <- dùng cho site.yaml]` lúc khởi động. Chép vào `config/site.yaml`:
+Cách nhanh nhất: node tự đăng ký SRP với OTBR (`sudo ot-ctl srp server state` phải ra `running`; ot-br-posix bật mặc định, CHƯA KIỂM trên bản cài thật), rồi trên Pi:
+
+```sh
+sudo ot-ctl srp server service     # thấy s1._nt532._udp.default.service.arpa. ... addresses: [...]
+cd pi && uv run python scripts/find_nodes.py
+```
+
+`build_real` làm việc này tự động (`network.discover: srp`) và chỉ dùng `network.nodes` khi không thấy. Dự phòng nhập tay: **monitor của chính node** (`idf.py monitor`) in `địa chỉ ... [mesh-local EID  <- dùng cho site.yaml]` lúc khởi động. Chép vào `config/site.yaml`:
 
 ```yaml
 network:

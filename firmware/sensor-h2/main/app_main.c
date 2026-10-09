@@ -40,6 +40,6 @@ void app_main(void)
     coap_node_init(&cfg);  // hàng đợi ra có trước để các task khác đẩy được
     act_task_start(&cfg);
     sensors_start(&cfg);
-    net_ot_start();
+    net_ot_start(cfg.node_id);
     coap_node_start();
 }

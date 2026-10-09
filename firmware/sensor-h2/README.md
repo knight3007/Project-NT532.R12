@@ -78,7 +78,18 @@ python -m esptool --chip esp32h2 -p /dev/ttyACM0 write_flash 0x9000 s2.bin
 
 Nạp ảnh NVS xóa luôn dữ liệu OpenThread trong cùng phân vùng, không sao vì dataset được đặt lại mỗi lần khởi động. Nạp lại ảnh sau mỗi `idf.py erase-flash`.
 
-## Đưa địa chỉ node vào `config/site.yaml`
+## Đăng ký SRP và địa chỉ node
+
+Sau khi gắn mạng, node đăng ký với SRP server của border router (`NT532_SRP`, mặc định bật): host `<id>`, dịch vụ `_nt532._udp` instance `<id>`, cổng `NT532_COAP_PORT`, TXT `n=<id>`. Monitor in `SRP: tìm thấy server ...` rồi `SRP: OK, host ... Registered, dịch vụ Registered`. Trên Pi:
+
+```sh
+ot-ctl srp server service        # thấy s1._nt532._udp.default.service.arpa. với addresses
+uv run python scripts/find_nodes.py
+```
+
+`build_real` tự dùng kết quả này (`network.discover: srp`); node nào không thấy thì rơi về `network.nodes` trong site.yaml. Cách nhập tay dưới đây là dự phòng.
+
+### Nhập tay (dự phòng)
 
 Khi chạy, monitor in các dòng `địa chỉ ... [mesh-local EID  <- dùng cho site.yaml]`. Chép địa chỉ đó vào:
 
@@ -89,7 +100,7 @@ network:
     s2: "fd11:22:33:0:..."
 ```
 
-Mesh-local EID có thể đổi sau khi xóa dữ liệu Thread; khi đó cập nhật lại (SRP/DNS-SD ở tuần 4 sẽ thay bước này, đã để TODO trong `net_ot.c`).
+Mesh-local EID có thể đổi sau khi xóa dữ liệu Thread; khi đó cập nhật lại (SRP ở trên thay bước này khi chạy được).
 
 ## Thử tay từ Pi
 
@@ -131,9 +142,17 @@ PY
 
 ## Checklist lần build đầu và các mục CHƯA KIỂM
 
-1. `idf.py build` không lỗi: tên component trong `main/CMakeLists.txt` (`esp_driver_*`, `espressif__coap`), include `coap3/coap.h`.
-2. `espressif/coap` bản `>=4.3.5` kéo về được; `CONFIG_COAP_MBEDTLS_PSK=n` và `CONFIG_COAP_TCP_SUPPORT=n` vẫn biên dịch (nếu lỗi, bật lại PSK/TCP theo ví dụ `coap_server` của component).
-3. Trường `addr.sin6` của `coap_address_t`, macro `COAP_RESPONSE_CLASS`, `COAP_INVALID_MID` trong libcoap 4.3.5 (`coap_node.c`).
+Mức biên dịch (đã xác nhận bằng CI ngày 2026-10-09, firmware build với ESP-IDF `release-v5.4`, ứng dụng 0x101ed0 byte, còn trống 33% trong phân vùng 0x180000):
+
+1. [x] `idf.py build` không lỗi: tên component trong `main/CMakeLists.txt` (`esp_driver_*`, `espressif__coap`), include `coap3/coap.h`.
+2. [x] `espressif/coap` kéo về được; `CONFIG_COAP_MBEDTLS_PSK=n` và `CONFIG_COAP_TCP_SUPPORT=n` (DTLS và TCP tắt) biên dịch được.
+3. [x] Trường `addr.sin6` của `coap_address_t`, macro `COAP_RESPONSE_CLASS`, `COAP_INVALID_MID` (`coap_node.c`).
+13a. [x] Kích thước ứng dụng nằm trong phân vùng 1,5 MB.
+
+Mã SRP thêm sau lần build đó (`net_ot.c`, `CONFIG_OPENTHREAD_SRP_CLIENT`) CHƯA qua CI; xem mục SRP dưới.
+
+Mức chạy thật (vẫn CHƯA KIỂM):
+
 4. Monitor thấy `vai trò Thread: ... -> child/router` và các dòng địa chỉ. Nếu không gắn mạng: sai dataset, sai kênh, hoặc `otDatasetSetActive` đòi thêm trường (channel mask, security policy).
 5. `coap_join_mcast_group_intf(ff03::1)` trả 0 và node thật sự nhận `/alarm` từ node kia qua netif OpenThread (lwIP MLD). Hop limit multicast đặt 8 bằng `coap_mcast_set_hops`.
 6. Hai node nhận `/alarm` của nhau, và node nhận có trả `2.04` cho multicast hay không (libcoap có thể tự nén phản hồi multicast; vô hại).
@@ -143,6 +162,7 @@ PY
 10. LEDC 50 Hz với 14 bit xin được bộ chia hợp lệ (nếu `ledc_timer_config` lỗi, hạ xuống 13 bit); đo xung bằng máy hiện sóng hoặc quan sát servo: `NT532_SERVO_PULSE_MIN_US/MAX_US`, offset, chiều.
 11. GPIO13 và 14 trên H2 cũng là chân xtal 32 kHz; chỉ có tác dụng nếu bật nguồn xung đó, mặc định không. Đối chiếu sơ đồ chân thực của board.
 12. Libcoap gửi lại gói CON bằng tham số mặc định (ACK_TIMEOUT 2 s, 4 lần); xem `/a` và `/status` có tới Pi đủ nhanh trên multi-hop, chỉnh `coap_session_set_ack_timeout` nếu cần.
-13. Kích thước ứng dụng nằm trong 1,5 MB của `partitions.csv`; stack các task (coap 8 KB, ot_main 10 KB, act 4 KB, sensors 4 KB) đủ, xem `uxTaskGetStackHighWaterMark` khi chạy lâu.
+13. Stack các task (coap 8 KB, ot_main 10 KB, act 4 KB, sensors 4 KB) đủ, xem `uxTaskGetStackHighWaterMark` khi chạy lâu.
 14. `crc8` SHT31 (đa thức 0x31, khởi tạo 0xFF) khớp với sample trong datasheet (0xBE 0xEF -> 0x92).
 15. Kiểm thử an toàn trước khi nối bơm: rút Thread/ngắt Pi lúc đang `/fire`, bơm phải tắt trong khoảng 1,5 s; `/stop` rồi `/aim` id nhỏ hơn phải bị `rejected`.
+16. SRP (CHƯA KIỂM): CI build qua với `net_ot.c` mới; `srp server state` trên OTBR là `running`; node in `SRP: ... Registered`; `ot-ctl srp server service` thấy `<id>._nt532._udp` với đúng địa chỉ; đổi OMR prefix hoặc khởi động lại otbr-agent thì node tự đăng ký lại; ba service/host của hai node không đụng tên.

@@ -17,7 +17,9 @@
 #include "freertos/task.h"
 #include "openthread/dataset.h"
 #include "openthread/instance.h"
+#include "openthread/dns.h"
 #include "openthread/ip6.h"
+#include "openthread/srp_client.h"
 #include "openthread/thread.h"
 #include "sdkconfig.h"
 
@@ -25,6 +27,7 @@ static const char *TAG = "ot";
 
 #define ATTACHED_BIT BIT0
 
+static char s_node_id[8] = "s1";
 static EventGroupHandle_t s_ev;
 static otDeviceRole s_last_role = OT_DEVICE_ROLE_DISABLED;
 
@@ -45,7 +48,7 @@ static size_t hex_to_bin(const char *hex, uint8_t *out, size_t cap)
     return n / 2;
 }
 
-// Ghi địa chỉ của node để dán vào config/site.yaml (network.nodes).
+// Ghi địa chỉ của node (dùng khi nhập tay vào config/site.yaml network.nodes; thường Pi tự tìm qua SRP).
 static void log_addresses(otInstance *inst)
 {
     const otIp6Address *eid = otThreadGetMeshLocalEid(inst);
@@ -140,6 +143,66 @@ static bool apply_dataset(otInstance *inst)
     return true;
 }
 
+#if CONFIG_NT532_SRP
+// OpenThread giữ con trỏ tới các chuỗi này nên phải nằm trong bộ nhớ tĩnh.
+static char s_node_id_srp[8];
+static const uint8_t *s_txt_n_value;
+static otDnsTxtEntry s_txt[1];
+static otSrpClientService s_service = {
+    .mName = "_nt532._udp",
+    .mInstanceName = s_node_id_srp,
+    .mPort = CONFIG_NT532_COAP_PORT,
+};
+
+static void on_srp_update(otError err, const otSrpClientHostInfo *host, const otSrpClientService *services,
+                          const otSrpClientService *removed, void *ctx)
+{
+    (void)ctx;
+    (void)removed;
+    ESP_LOGI(TAG, "SRP: %s, host %s %s, dịch vụ %s", otThreadErrorToString(err),
+             host && host->mName ? host->mName : "?", host ? otSrpClientItemStateToString(host->mState) : "?",
+             services ? otSrpClientItemStateToString(services->mState) : "(không)");
+}
+
+static void on_srp_server(const otSockAddr *server, void *ctx)
+{
+    (void)ctx;
+    if (server) {
+        ESP_LOGI(TAG, "SRP: tìm thấy server (border router), cổng %u", server->mPort);
+    } else {
+        ESP_LOGW(TAG, "SRP: server đã dừng hoặc mất");
+    }
+}
+
+// Chạy trong ot_task trước khi vào mainloop, như các lời gọi otDatasetSetActive/otThreadSetEnabled ở trên.
+// Chế độ tự khởi động: client tự chọn server trong Network Data khi node đã gắn mạng, tự đăng ký lại khi đổi.
+static void srp_setup(otInstance *inst)
+{
+    strncpy(s_node_id_srp, s_node_id, sizeof(s_node_id_srp) - 1);
+    s_txt_n_value = (const uint8_t *)s_node_id_srp;
+    s_txt[0].mKey = "n";
+    s_txt[0].mValue = s_txt_n_value;
+    s_txt[0].mValueLength = (uint16_t)strlen(s_node_id_srp);
+    s_service.mTxtEntries = s_txt;
+    s_service.mNumTxtEntries = 1;
+
+    otSrpClientSetCallback(inst, on_srp_update, NULL);
+    otError e = otSrpClientSetHostName(inst, s_node_id_srp);
+    if (e == OT_ERROR_NONE) {
+        e = otSrpClientEnableAutoHostAddress(inst);
+    }
+    if (e == OT_ERROR_NONE) {
+        e = otSrpClientAddService(inst, &s_service);
+    }
+    if (e != OT_ERROR_NONE) {
+        ESP_LOGE(TAG, "SRP: cấu hình lỗi: %s", otThreadErrorToString(e));
+        return;
+    }
+    otSrpClientEnableAutoStartMode(inst, on_srp_server, NULL);
+    ESP_LOGI(TAG, "SRP: đăng ký %s._nt532._udp cổng %d khi có server", s_node_id_srp, CONFIG_NT532_COAP_PORT);
+}
+#endif
+
 static void ot_task(void *arg)
 {
     (void)arg;
@@ -165,7 +228,9 @@ static void ot_task(void *arg)
     } else {
         ESP_LOGE(TAG, "không bật được Thread; sửa dataset trong menuconfig");
     }
-    // TODO tuần 4: đăng ký dịch vụ qua SRP client (otSrpClient*) để Pi tìm node bằng DNS-SD thay vì site.yaml.
+#if CONFIG_NT532_SRP
+    srp_setup(inst);
+#endif
 
     esp_openthread_launch_mainloop();  // không trở về trừ khi lỗi
 
@@ -175,8 +240,9 @@ static void ot_task(void *arg)
     vTaskDelete(NULL);
 }
 
-void net_ot_start(void)
+void net_ot_start(const char *node_id)
 {
+    strncpy(s_node_id, node_id, sizeof(s_node_id) - 1);
     s_ev = xEventGroupCreate();
     configASSERT(s_ev);
     xTaskCreate(ot_task, "ot_main", 10240, NULL, 5, NULL);

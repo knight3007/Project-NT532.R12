@@ -78,7 +78,7 @@ idf.py build flash monitor
 - [ ] Điền theo bảng ở rcp/README.md mục 4: `NT532_THREAD_*` và `NT532_PI_ADDR`. Nạp ảnh NVS cho `node_id` (`s1`, `s2`) theo sensor-h2/README.md ("Cấu hình trong NVS") hoặc đổi `NT532_NODE_ID` rồi build riêng cho từng board.
 - [ ] Monitor thấy `vai trò Thread: ... child` hoặc `router` (checklist mục 4). Không gắn được: dataset sai (kênh, key, ext PAN ID, prefix có `/64`), hoặc `otDatasetSetActive` đòi thêm trường.
 - [ ] `sudo ot-ctl child table` (hoặc `router table`) trên Pi thấy node.
-- [ ] Chép địa chỉ mesh-local EID từ dòng `[mesh-local EID  <- dùng cho site.yaml]` vào **`config/site.yaml` → `network.nodes.s1` / `s2`** (đang `null`).
+- [ ] Node tự đăng ký SRP: `sudo ot-ctl srp server state` ra `running` (ot-br-posix bật SRP server mặc định, CHƯA KIỂM trên bản cài thật), rồi `cd pi && uv run python scripts/find_nodes.py` in địa chỉ `s1`, `s2`. Không có `ot-ctl` hoặc thiếu quyền thì chạy bằng sudo, hoặc **dự phòng nhập tay**: chép địa chỉ mesh-local EID từ dòng `[mesh-local EID  <- dùng cho site.yaml]` vào **`config/site.yaml` → `network.nodes.s1` / `s2`** (đang `null`; `build_real` dùng làm dự phòng cho node SRP không thấy). Đặt `network.discover: static` để tắt tìm tự động.
 - [ ] **Qua:** `ping -c3 <địa chỉ node>` từ Pi đáp. Lặp cho node thứ hai (nạp NVS `node_id=s2`).
 - [ ] Hậu: kiểm `/alarm` multicast giữa hai node (checklist mục 5, 6): kích node 1 (khói hoặc `NT532_GAS_ALARM` hạ tạm), node 2 nháy còi.
 

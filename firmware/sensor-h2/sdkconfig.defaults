@@ -15,6 +15,8 @@ CONFIG_OPENTHREAD_FTD=y
 CONFIG_OPENTHREAD_RADIO_NATIVE=y
 CONFIG_OPENTHREAD_BORDER_ROUTER=n
 CONFIG_OPENTHREAD_CLI=n
+# SRP client: node đăng ký _nt532._udp với border router (mặc định đã bật, ghi rõ cho chắc)
+CONFIG_OPENTHREAD_SRP_CLIENT=y
 
 # mbedTLS như ví dụ ot_cli (OpenThread cần ECJPAKE/DTLS để biên dịch); CoAP của ta không dùng DTLS
 CONFIG_MBEDTLS_CMAC_C=y

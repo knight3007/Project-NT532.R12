@@ -4,7 +4,8 @@
 #include <stdbool.h>
 
 // Cần esp_event_loop, esp_netif_init và esp_vfs_eventfd_register đã gọi (app_main lo).
-void net_ot_start(void);
+// `node_id` (s1/s2) là tên host và tên instance khi đăng ký SRP; chuỗi được sao lại.
+void net_ot_start(const char *node_id);
 // Chặn tới khi node gắn vào mạng Thread (vai trò child, router hoặc leader). Nhiều task gọi được.
 void net_ot_wait_attached(void);
 bool net_ot_is_attached(void);

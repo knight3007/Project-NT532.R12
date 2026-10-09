@@ -210,6 +210,36 @@ def _coap_nodes(world, events):
     return link, fakes
 
 
+def resolve_nodes(net: dict, events: EventLog) -> dict[str, str]:
+    """Địa chỉ node: tìm qua SRP (network.discover: srp, mặc định) rồi bù bằng network.nodes; `static` chỉ dùng
+    network.nodes. Mỗi node ghi một sự kiện cho biết địa chỉ đến từ đâu."""
+    from .net.discover import discover_nodes
+
+    static = {n: a for n, a in (net.get("nodes") or {}).items() if a}
+    names = sorted(set(net.get("nodes") or {}) | set(static)) or ["s1", "s2"]
+    mode = net.get("discover", "srp")
+    if mode not in ("srp", "static"):
+        raise ValueError(f"network.discover phải là srp hoặc static, nhận {mode!r}")
+    found: dict[str, str] = {}
+    if mode == "srp":
+        found, why = discover_nodes(names, float(net.get("discover_timeout_s", 5.0)))
+        if why:
+            events.emit("config", f"tìm node qua SRP: {why}", level="warn" if not found else "info")
+    nodes = {}
+    for n in names:
+        if n in found:
+            nodes[n] = found[n]
+            events.emit("config", f"node {n}: {found[n]} (SRP)")
+        elif n in static:
+            nodes[n] = static[n]
+            events.emit("config", f"node {n}: {static[n]} (site.yaml)")
+        else:
+            events.emit("config", f"node {n}: không có địa chỉ (SRP không thấy, site.yaml trống)", level="error")
+    if not nodes:
+        raise ValueError("không tìm được node nào: node chưa đăng ký SRP và network.nodes trong config/site.yaml trống")
+    return nodes
+
+
 def build_real(decider: str = "rules", jev_run: str = "jev1", tau: float = 0.8,
                source: int | str | None = None, fps: float = 15.0, yolo_device: str | None = None,
                log_path: str | Path | None = None, settings: Settings | None = None,
@@ -233,9 +263,7 @@ def build_real(decider: str = "rules", jev_run: str = "jev1", tau: float = 0.8,
     # Stream từ điện thoại tự đóng dấu thời điểm chụp (đã trừ độ trễ), để fresh() sau khi bật laser đúng
     hub = FrameHub(getattr(cap, "read_stamped", read), fps).start()
     net = site.get("network") or {}
-    nodes = {n: a for n, a in (net.get("nodes") or {}).items() if a}
-    if not nodes:
-        raise ValueError("chưa khai địa chỉ node trong network.nodes của config/site.yaml")
+    nodes = resolve_nodes(net, events)
     link = CoapLink(nodes, (net.get("bind", "::"), int(net.get("port", 5683))),
                     transports=net.get("transports")).start()
     st = _wire(site, vision, hub, link,

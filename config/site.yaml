@@ -92,10 +92,14 @@ sensors:
   gas_alarm: 600
 
 network:
-  # CoAP server trên Pi và địa chỉ node (trước khi có SRP/DNS-SD ở tuần 4). Xem docs/orchestrator.md.
+  # CoAP server trên Pi và địa chỉ node (tự tìm qua SRP, bù bằng nodes). Xem docs/orchestrator.md.
   bind: "::"
   port: 5683
   transports: null             # null: mặc định aiocoap (udp6). Máy không có IPv6: [simplesocketserver]
+  # srp: hỏi SRP server của border router (ot-ctl srp server service), node nào không thấy thì dùng nodes bên dưới.
+  # static: chỉ dùng nodes bên dưới.
+  discover: srp
+  discover_timeout_s: 5
   nodes:
     s1: null                   # ví dụ "fd11:22::1" (địa chỉ mesh-local của H2) hoặc "s1.local"
     s2: null

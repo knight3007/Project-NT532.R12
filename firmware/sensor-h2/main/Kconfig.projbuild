@@ -18,6 +18,13 @@ menu "NT532 node"
         default 5683
         range 1 65535
 
+    config NT532_SRP
+        bool "Đăng ký dịch vụ _nt532._udp qua SRP với border router"
+        default y
+        help
+            Host và instance mang tên node id, cổng NT532_COAP_PORT, TXT n=<id>. Pi tìm node bằng
+            `ot-ctl srp server service` (scripts/find_nodes.py). Cần CONFIG_OPENTHREAD_SRP_CLIENT (mặc định bật).
+
     menu "Thread (phải khớp OTBR trên Pi)"
         config NT532_THREAD_NETWORK_NAME
             string "Network name"
