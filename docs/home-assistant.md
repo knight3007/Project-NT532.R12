@@ -43,8 +43,8 @@ Cài đặt > Thiết bị và dịch vụ > Thêm tích hợp > MQTT, nhập br
 | `sensor.nt532_{s1,s2}_hum` | sensor | %, nếu node có cảm biến |
 | `binary_sensor.nt532_{s1,s2}_alarm` | smoke | bật khi node báo động, tắt khi "hết báo động" |
 | `binary_sensor.nt532_{s1,s2}_hb_ok` | connectivity | heartbeat còn trong 3 chu kỳ |
-| `binary_sensor.nt532_{s1,s2}_pump` | running | suy ra từ pha FIRE của vòi đó |
-| `binary_sensor.nt532_{s1,s2}_laser` | binary | suy ra từ pha CORRECT của vòi đó |
+| `binary_sensor.nt532_{s1,s2}_pump` | running | bật khi pha FIRE và vòi đó nằm trong danh sách vòi đang phun (`overlay.active`); lượt hai vòi thì cả hai cùng bật |
+| `binary_sensor.nt532_{s1,s2}_laser` | binary | bật khi pha CORRECT và vòi đó đang được ngắm (`overlay.active`); lượt hai vòi thì lần lượt từng vòi, không bao giờ cả hai |
 | `sensor.nt532_phase`, `_target`, `_decider` | sensor | pha (enum), bia đang xử lý, bộ quyết định |
 | `sensor.nt532_runs`, `_extinguished`, `_alarm_only`, `_ignored`, `_human`, `_faults`, `_sprays` | sensor | `total_increasing`; đếm từ lúc trạm khởi động, HA xử lý việc về 0 |
 | `sensor.nt532_latency` | sensor | ms, độ trễ của quyết định gần nhất |
@@ -53,7 +53,7 @@ Cài đặt > Thiết bị và dịch vụ > Thêm tích hợp > MQTT, nhập br
 | `button.nt532_emergency_stop` | button | dừng khẩn cấp |
 | `select.nt532_decider_select` | select | `rules`, `hybrid`, `jev` (và `remote` nếu có `--decider-url`) |
 
-Bơm và laser của node thật không đọc từ phần cứng mà suy ra từ pha orchestrator; khi mất heartbeat node đó, hai thực thể ở trạng thái "không rõ". Số đo gửi tối đa 1 lần/giây mỗi node, trạng thái đổi cờ (báo động, kết nối, bơm, laser) gửi ngay; trạng thái trạm được retain.
+Bơm và laser của node thật không đọc từ phần cứng mà suy ra từ pha orchestrator cùng danh sách vòi đang làm việc `overlay.active` (một vòi bị bỏ giữa lượt hai vòi thì tắt theo); khi mất heartbeat node đó, hai thực thể ở trạng thái "không rõ". Số đo gửi tối đa 1 lần/giây mỗi node, trạng thái đổi cờ (báo động, kết nối, bơm, laser) gửi ngay; trạng thái trạm được retain.
 
 Đổi `station_id` thì tiền tố entity id đổi theo (`sensor.<station_id>_s1_temp`) và `dashboard.yaml` phải sửa cho khớp.
 

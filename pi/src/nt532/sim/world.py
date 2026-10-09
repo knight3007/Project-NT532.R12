@@ -35,6 +35,7 @@ AMBIENT = {"temp": 27.0, "gas": 180.0, "hum": 55.0}
 NOISE = {"temp": 0.4, "gas": 10.0, "hum": 0.8}
 DECAY_M = 0.35  # tín hiệu giảm theo e^(-khoảng cách/DECAY_M)
 HIT_M = 0.035  # nước rơi cách tâm thẻ lửa dưới chừng này thì có tác dụng
+SPRAY_CREDIT_MAX_S = 0.5  # mỗi lần ghi nước tối đa chừng này giây, dù vòng lặp bị kẹt lâu hơn
 # Lửa lớn (giả định, cùng hướng với large_gain/large_decay của bộ kịch bản): thẻ to hơn, tín hiệu
 # mạnh hơn và suy giảm chậm hơn (với tới cả hai node), cần nhiều nước hơn để tắt.
 FIRE_SIZES = ("small", "large")
@@ -364,12 +365,20 @@ class SimLink(NodeLink):
                 self._cancel[node].wait(msg.ms / 1000)
                 self.world.laser(node, False)
             else:
-                end = time.monotonic() + msg.ms / 1000
-                while time.monotonic() < end and not self._cancel[node].is_set():
+                # ghi nước theo thời gian thật đã trôi (không phải 0.1 s cố định): vòng lặp có thể bị
+                # kẹt lâu khi `world.lock` đang bận dựng khung hình; tối đa SPRAY_CREDIT_MAX_S mỗi
+                # lần và không quá thời gian của lệnh
+                t_prev = time.monotonic()
+                end = t_prev + msg.ms / 1000
+                while t_prev < end and not self._cancel[node].is_set():
                     if not self.world.online[node]:
                         break
                     time.sleep(0.1)
-                    self.world.spray(node, 0.1)
+                    now = time.monotonic()
+                    if self._cancel[node].is_set():
+                        break
+                    self.world.spray(node, min(now - t_prev, SPRAY_CREDIT_MAX_S, end - t_prev))
+                    t_prev = now
                 self.world.pumping[node] = False
             self._reply(node, msg.id, "fault" if self._cancel[node].is_set() else "done",
                          "stopped" if self._cancel[node].is_set() else None)

@@ -36,6 +36,7 @@ TICK_S = 0.010  # như act_task.c
 CMD_Q_LEN = 16  # như act_task.c
 OUT_Q_LEN = 16  # như coap_node.c
 DEV_NAMES = ("pump", "laser")
+SPRAY_CREDIT_MAX_S = 0.5  # như sim.world: mỗi lần ghi nước tối đa chừng này giây
 EVENTS = {0: None, 1: "alert", 2: "clear"}  # alarm_event_t
 
 
@@ -205,11 +206,19 @@ class SimWorldHardware(RecordHardware):
             (self._pump.set if on else self._pump.clear)()
 
     def _spray(self) -> None:
+        """Ghi nước theo thời gian thật đã trôi từ lần ghi trước (không phải `spray_dt` cố định): vòng
+        lặp có thể bị kẹt lâu khi `world.lock` đang bận dựng khung hình. Bơm tắt thì không ghi nữa."""
         while not self._halt.is_set():
-            if self._pump.wait(0.2):
+            if not self._pump.wait(0.2):
+                continue
+            t_prev = time.monotonic()
+            while self._pump.is_set() and not self._halt.is_set():
                 time.sleep(self.spray_dt)
-                if self._pump.is_set():
-                    self.world.spray(self.node, self.spray_dt)
+                now = time.monotonic()
+                if not self._pump.is_set():
+                    break
+                self.world.spray(self.node, min(now - t_prev, SPRAY_CREDIT_MAX_S))
+                t_prev = now
 
     def close(self) -> None:
         self._halt.set()

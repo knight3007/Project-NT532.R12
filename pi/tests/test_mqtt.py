@@ -155,6 +155,47 @@ def test_both_nozzles_show_pump_on_for_both_nodes(bridge):
     assert [s[f"nt532/t1/{n}/state"]["pump"] for n in ("s1", "s2")] == ["OFF", "OFF"]
 
 
+def test_pump_and_laser_follow_overlay_active(bridge):
+    st = bridge.st
+    for n in ("s1", "s2"):
+        st.sensors.add(tel(n=n, s=1, t=30.0, g=100.0, h=55))
+    st.orch.snap.update(run={"nozzle": BOTH, "target": {"id": "T1"}},
+                        nozzles={"s1": {"hb_ms": 100.0}, "s2": {"hb_ms": 100.0}})
+
+    def flags(phase, active):
+        st.orch.snap.update(phase=phase, overlay={"active": active})
+        s = bridge.states()
+        return {k: [s[f"nt532/t1/{n}/state"][k] for n in ("s1", "s2")] for k in ("pump", "laser")}
+
+    # lượt hai vòi: CORRECT lần lượt từng vòi, mỗi lúc chỉ một laser, chưa bơm nào chạy
+    assert flags("CORRECT", ["s1"]) == {"pump": ["OFF", "OFF"], "laser": ["ON", "OFF"]}
+    assert flags("CORRECT", ["s2"]) == {"pump": ["OFF", "OFF"], "laser": ["OFF", "ON"]}
+    assert flags("AIM", ["s2"]) == {"pump": ["OFF", "OFF"], "laser": ["OFF", "OFF"]}  # AIM chưa bật laser
+    # FIRE: chưa bơm nào chạy lúc ngắm lần cuối (active rỗng), rồi hai bơm cùng chạy
+    assert flags("FIRE", []) == {"pump": ["OFF", "OFF"], "laser": ["OFF", "OFF"]}
+    assert flags("FIRE", ["s1", "s2"]) == {"pump": ["ON", "ON"], "laser": ["OFF", "OFF"]}
+    # vòi bị bỏ giữa lượt thì không còn trong active dù run.nozzle chưa kịp đổi
+    assert flags("FIRE", ["s1"]) == {"pump": ["ON", "OFF"], "laser": ["OFF", "OFF"]}
+    assert flags("VERIFY", []) == {"pump": ["OFF", "OFF"], "laser": ["OFF", "OFF"]}
+    # mất heartbeat thì không rõ, kể cả khi vòi đó nằm trong active
+    st.orch.snap["nozzles"]["s2"]["hb_ms"] = None
+    assert flags("FIRE", ["s1", "s2"]) == {"pump": ["ON", None], "laser": ["OFF", None]}
+
+
+def test_pump_and_laser_fall_back_to_run_nozzle_without_active(bridge):
+    st = bridge.st
+    for n in ("s1", "s2"):
+        st.sensors.add(tel(n=n, s=1, t=30.0, g=100.0, h=55))
+    st.orch.snap.update(phase="CORRECT", run={"nozzle": "s2", "target": {"id": "T1"}},
+                        nozzles={"s1": {"hb_ms": 100.0}, "s2": {"hb_ms": 100.0}}, overlay={})
+    s = bridge.states()  # overlay có nhưng thiếu `active` (snapshot cũ): dùng vòi của lượt
+    assert [s[f"nt532/t1/{n}/state"]["laser"] for n in ("s1", "s2")] == ["OFF", "ON"]
+    st.orch.snap.update(phase="FIRE", run={"nozzle": BOTH, "target": {"id": "T1"}})
+    st.orch.snap.pop("overlay")  # hẳn không có overlay
+    s = bridge.states()
+    assert [s[f"nt532/t1/{n}/state"]["pump"] for n in ("s1", "s2")] == ["ON", "ON"]
+
+
 def test_events_not_consumed(bridge):
     bridge.st.events.emit("alert", "a", node="s1")
     bridge.states()

@@ -3,7 +3,7 @@
     GET  /                 trang dashboard (static/index.html)
     GET  /api/state        trạng thái orchestrator, cảm biến, sức khỏe vòi, ground truth (sim)
     GET  /api/events?since=N
-    GET  /stream.mjpg      video MJPEG có vẽ bảng bia, bia, điểm ngắm, vết laser
+    GET  /stream.mjpg      video MJPEG có vẽ bảng bia, bia, điểm ngắm và vết laser của từng vòi
     GET  /snapshot.jpg     một khung
     POST /api/cmd          {"cmd": ...}: stop, enable, recommission, decider, và lệnh sa bàn ảo
 
@@ -115,10 +115,16 @@ class Dashboard:
             c = px(ov["target"]["x"], ov["target"]["z"])
             cv2.drawMarker(img, c, RED, cv2.MARKER_CROSS, 34, 2)
             cv2.putText(img, ov["target"]["id"], (c[0] + 14, c[1] + 22), 0, 0.6, RED, 2)
-        if "aim" in ov:
-            cv2.drawMarker(img, px(ov["aim"]["x"], ov["aim"]["z"]), WHITE, cv2.MARKER_TILTED_CROSS, 16, 1)
-        if "spot" in ov:
-            cv2.circle(img, px(ov["spot"]["x"], ov["spot"]["z"]), 7, GREEN, 2)
+        # mỗi vòi một điểm ngắm (chữ thập nghiêng trắng) và một vết laser (vòng xanh), ghi tên vòi
+        # bên cạnh để lượt hai vòi vẫn phân biệt được
+        for n, a in ov.get("aims", {}).items():
+            c = px(a["x"], a["z"])
+            cv2.drawMarker(img, c, WHITE, cv2.MARKER_TILTED_CROSS, 16, 1)
+            cv2.putText(img, n, (c[0] + 10, c[1] - 8), 0, 0.4, WHITE, 1)
+        for n, sp in ov.get("spots", {}).items():
+            c = px(sp["x"], sp["z"])
+            cv2.circle(img, c, 7, GREEN, 2)
+            cv2.putText(img, n, (c[0] + 10, c[1] + 16), 0, 0.4, GREEN, 1)
         for name, pose in vision.nodes.items():
             u, v = project(pose.position, cam)
             cv2.putText(img, name, (int(u) - 12, int(v) + 34), 0, 0.7, WHITE, 2)
@@ -156,10 +162,18 @@ class Dashboard:
             x = min(max(x, 0.05), board["width"] - 0.05)
         if z is not None:
             z = min(max(z, 0.05), board["height"] - 0.05)
-        make = {"fire": w.ignite, "lamp": w.add_lamp, "object": w.add_object}
-        if cmd in make:
-            s = make[cmd](x, z)
-            text = {"fire": "đám cháy", "lamp": "đèn nóng", "object": "vật màu cam"}[cmd]
+        from ..sim.world import FIRE_SIZES  # chỉ lệnh sa bàn ảo mới cần tới sim
+
+        make = {"lamp": (w.add_lamp, "đèn nóng"), "object": (w.add_object, "vật màu cam")}
+        if cmd in ("fire", "fire_large"):  # `fire` nhận thêm "size": small hoặc large
+            size = "large" if cmd == "fire_large" else body.get("size", "small")
+            if size not in FIRE_SIZES:
+                return {"ok": False, "error": f"cỡ đám cháy phải là {' hoặc '.join(FIRE_SIZES)}, "
+                                              f"không phải {size!r}"}
+            s = w.ignite(x, z, size=size)
+            text = "đám cháy lớn" if size == "large" else "đám cháy"
+        elif cmd in make:
+            s, text = make[cmd][0](x, z), make[cmd][1]
         elif cmd == "steam":
             s, text = w.add_steam(x), "hơi nước"
         elif cmd == "spike":

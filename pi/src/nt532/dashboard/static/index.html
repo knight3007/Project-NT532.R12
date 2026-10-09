@@ -70,6 +70,7 @@ pre { white-space: pre-wrap; font-size: 11.5px; background: var(--panel2); paddi
 .kv b { color: var(--text); font-weight: 600; }
 .chip { font-size: 11px; padding: 1px 7px; border-radius: 999px; background: #222a33; color: var(--muted); }
 .chip.hot { background: #3a2410; color: var(--fire); } .chip.on { background: #0f3324; color: var(--ok); }
+.chip.aim { background: #0f2a3a; color: var(--accent); } .chip.spray { background: #0f3324; color: var(--ok); font-weight: 600; }
 .warnline { color: var(--warn); font-size: 12px; margin-top: 4px; }
 canvas { width: 100%; height: 150px; display: block; }
 .legend { display: flex; gap: 12px; font-size: 12px; color: var(--muted); flex-wrap: wrap; }
@@ -113,6 +114,7 @@ th { color: var(--muted); font-weight: 500; }
       <div class="toolbar" id="simbar">
         <span class="lbl">Đặt khi bấm:</span>
         <button data-kind="fire" class="on">🔥 Lửa</button>
+        <button data-kind="fire_large" title="Cháy to: tín hiệu mạnh, lan xa, cần nhiều nước hơn">🔥 Lửa lớn</button>
         <button data-kind="lamp">💡 Đèn nóng</button>
         <button data-kind="object">🟠 Vật cam</button>
         <span class="lbl" style="margin-left:8px">Thêm:</span>
@@ -161,7 +163,7 @@ th { color: var(--muted); font-weight: 500; }
     </section>
     <section>
       <h2>Các lượt gần đây</h2>
-      <table><thead><tr><th>#</th><th>Node</th><th>Kết quả</th><th>Lần phun</th><th>Lệch laser</th></tr></thead><tbody id="runs"></tbody></table>
+      <table><thead><tr><th>#</th><th>Node</th><th>Vòi</th><th>Kết quả</th><th>Lần phun</th><th>Lệch laser</th></tr></thead><tbody id="runs"></tbody></table>
     </section>
   </div>
 </main>
@@ -169,6 +171,7 @@ th { color: var(--muted); font-weight: 500; }
 const STEPS = ["IDLE","ALERT","LOCALIZE","DECIDE","AIM","CORRECT","FIRE","VERIFY"];
 const QLABEL = {real_fire: "Cháy thật?", action: "Hành động", target: "Bia", nozzle: "Vòi", after_verify: "Sau khi phun"};
 const OUT = {extinguished: "đã dập", ignored: "bỏ qua", alarm_only: "chỉ báo động", human: "gọi người", fault: "lỗi", stopped: "đã dừng"};
+const nzName = (n) => !n ? "—" : n.startsWith("both") ? "cả hai" : n;  // BOTH = "both (s1 + s2)"
 const KIND = {fire: "🔥 lửa", lamp: "💡 đèn nóng", object: "🟠 vật cam", steam: "♨ hơi nước", spike: "⚡ xung"};
 let placeKind = "fire", lastSeq = 0, state = null, offline = {}, deciderSet = false;
 const $ = (id) => document.getElementById(id);
@@ -221,7 +224,7 @@ function renderSteps(phase, run) {
   const el = $("phase");
   el.textContent = phase;
   el.className = "phase " + (phase === "IDLE" ? "" : ["FAULT","HUMAN","ALARM"].includes(phase) ? phase.toLowerCase() : "busy");
-  $("runinfo").textContent = run ? `lượt ${run.id} · cảnh báo từ ${run.node}` + (run.target ? ` · bia ${run.target.id}` : "") + (run.nozzle ? ` · vòi ${run.nozzle}` : "") : "";
+  $("runinfo").textContent = run ? `lượt ${run.id} · cảnh báo từ ${run.node}` + (run.target ? ` · bia ${run.target.id}` : "") + (run.nozzle ? ` · vòi ${nzName(run.nozzle)}` : "") : "";
 }
 
 function renderDecision(run) {
@@ -251,8 +254,12 @@ function renderNozzles(o, truth) {
   $("nozzles").innerHTML = Object.entries(o.nozzles).map(([n, z]) => {
     const hbOk = z.hb_ms !== null && z.hb_ms < 1500, poseOk = z.pose_s !== null && z.pose_s < 60 && !z.blockers.length;
     const laser = truth && truth.lasers[n], pump = truth && truth.pumping[n];
+    // vòi đang được orchestrator làm việc: có cả trên phần cứng thật (không cần `truth`)
+    const busy = ((o.overlay && o.overlay.active) || []).includes(n);
+    const work = !busy ? "" : o.phase === "FIRE" ? '<span class="chip spray">đang phun</span>'
+      : o.phase === "AIM" || o.phase === "CORRECT" ? '<span class="chip aim">đang ngắm</span>' : "";
     return `<div class="nz"><h3><span class="dot ${hbOk && poseOk ? "ok" : "bad"}"></span>${n}
-      ${laser ? '<span class="chip hot">laser</span>' : ""}${pump ? '<span class="chip on">bơm</span>' : ""}</h3>
+      ${work}${laser ? '<span class="chip hot">laser</span>' : ""}${pump ? '<span class="chip on">bơm</span>' : ""}</h3>
       <div class="kv">heartbeat <b>${fmtAge(z.hb_ms, "ms")}</b></div>
       <div class="kv">pose <b>${fmtAge(z.pose_s, "s")}</b></div>
       ${truth ? `<div class="kv">nhiệt / khí <b>${truth.readings[n].temp.toFixed(1)}° / ${truth.readings[n].gas.toFixed(0)}</b></div>` : ""}
@@ -264,7 +271,7 @@ function renderTruth(t) {
   $("truthbox").classList.toggle("hidden", !t);
   if (!t) return;
   $("truth").innerHTML = t.sources.length ? t.sources.map(s =>
-    `<div class="src"><span>${KIND[s.kind] || s.kind}${s.node ? " " + s.node : ""}${s.kind !== "spike" && s.kind !== "steam" ? ` <span class="muted">x ${s.x.toFixed(2)} z ${s.z.toFixed(2)}</span>` : ""}</span>
+    `<div class="src"><span>${s.kind === "fire" && s.size === "large" ? "🔥 lửa lớn" : KIND[s.kind] || s.kind}${s.node ? " " + s.node : ""}${s.kind !== "spike" && s.kind !== "steam" ? ` <span class="muted">x ${s.x.toFixed(2)} z ${s.z.toFixed(2)}</span>` : ""}</span>
      <span>${s.kind === "fire" ? (s.out ? '<span class="chip on">đã tắt</span>' : `<span class="chip hot">đang cháy · còn ${s.hp.toFixed(1)}</span>`) : s.kind === "object" ? '<span class="chip">chỉ đánh lừa camera</span>' : `<span class="chip">tín hiệu ${Math.round(s.level*100)}%</span>`}</span></div>`).join("")
     : '<span class="muted">Sa bàn trống. Bấm lên video để đặt lửa hoặc vật gây nhiễu.</span>';
 }
@@ -272,8 +279,8 @@ function renderTruth(t) {
 function renderRuns(runs) {
   $("runs").innerHTML = runs.slice().reverse().map(r => {
     const last = r.shots.filter(s => s.miss_cm !== null).slice(-1)[0];
-    return `<tr><td>${r.id}</td><td>${r.node}</td><td class="out-${r.outcome}">${OUT[r.outcome] || r.outcome || "…"}</td><td>${r.attempts || "—"}</td><td>${last ? last.miss_cm.toFixed(1) + " cm" : "—"}</td></tr>`;
-  }).join("") || '<tr><td colspan="5" class="muted">Chưa có lượt nào.</td></tr>';
+    return `<tr><td>${r.id}</td><td>${r.node}</td><td>${nzName(r.nozzle)}</td><td class="out-${r.outcome}">${OUT[r.outcome] || r.outcome || "…"}</td><td>${r.attempts || "—"}</td><td>${last ? last.miss_cm.toFixed(1) + " cm" : "—"}</td></tr>`;
+  }).join("") || '<tr><td colspan="6" class="muted">Chưa có lượt nào.</td></tr>';
 }
 
 function chart(canvas, series, key, limit) {

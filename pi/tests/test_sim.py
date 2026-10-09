@@ -1,9 +1,14 @@
+import time
+
 import cv2
 import numpy as np
 import pytest
 
-from nt532.sim import Scene, SimCamera, aim_angles
+from nt532.net.fakenode import SimWorldHardware
+from nt532.net.protocol import Aim, Fire
+from nt532.sim import Scene, SimCamera, aim_angles, sim_site
 from nt532.sim.loop import correct
+from nt532.sim.world import SimLink
 from nt532.vision import Detection, Vision, project, read_frames, read_fresh
 
 TARGET = np.array([0.50, 0.80, 0.30])
@@ -179,3 +184,71 @@ def test_missing_cards_error_is_clear(tmp_path):
     scene = Scene(cards_dir=tmp_path)
     with pytest.raises(FileNotFoundError, match="make_target_cards"):
         scene.add_card(0.3, 0.3)
+
+
+# --- thời gian phun: ghi theo thời gian thật đã trôi, không phải 0.1 s cho mỗi vòng lặp ----------------
+
+class StallWorld:
+    """Thế giới giả đủ cho SimLink/SimWorldHardware: ghi số giây của mỗi lần `spray`; lần đầu bị kẹt
+    0.3 s như lúc `world.lock` bận dựng khung hình."""
+
+    def __init__(self, stall_s: float = 0.3) -> None:
+        self.site, self.stall_s = sim_site(write=False), stall_s
+        self.nodes = ["s1", "s2"]
+        self.online = dict.fromkeys(self.nodes, True)
+        self.pumping = dict.fromkeys(self.nodes, False)
+        self.credits: list[float] = []
+
+    def aim(self, node, pan, tilt) -> None:
+        pass
+
+    def laser(self, node, on) -> None:
+        pass
+
+    def spray(self, node, seconds) -> None:
+        self.credits.append(seconds)
+        if len(self.credits) == 1:
+            time.sleep(self.stall_s)
+
+
+def test_simlink_pump_credits_real_elapsed_time_but_not_beyond_command():
+    world = StallWorld()
+    link = SimLink(world, latency_s=0.0)
+    link._handle("s1", "aim", Aim(1, 0.0, 0.0, 1500))
+    link._handle("s1", "fire", Fire(1, "pump", 1000))  # chạy tới hết 1 s rồi mới trả về
+    assert link.wait(1, ("done",), 0.1) is not None
+    assert not world.pumping["s1"]
+    total = sum(world.credits)
+    assert total <= 1.0 + 1e-6  # không quá thời gian của lệnh
+    assert total == pytest.approx(1.0, abs=0.2)  # vòng kẹt 0.3 s vẫn được tính đủ (cũ: ~0,6)
+    assert max(world.credits) <= 0.5 + 1e-6
+
+
+def test_simlink_pump_credit_is_capped_per_iteration():
+    world = StallWorld(stall_s=0.8)  # kẹt lâu hơn mức trần: phần thừa không được cộng bù
+    link = SimLink(world, latency_s=0.0)
+    link._handle("s1", "aim", Aim(1, 0.0, 0.0, 1500))
+    link._handle("s1", "fire", Fire(1, "pump", 1500))
+    assert max(world.credits) <= 0.5 + 1e-6
+    assert sum(world.credits) <= 1.5 + 1e-6
+
+
+def test_sim_world_hardware_credits_real_elapsed_time_until_pump_off():
+    world = StallWorld()
+    hw = SimWorldHardware(world, "s1")
+    try:
+        t0 = time.monotonic()
+        hw.set_dev("pump", True)
+        time.sleep(1.0)
+        hw.set_dev("pump", False)
+        ran = time.monotonic() - t0
+        time.sleep(0.15)
+        n = len(world.credits)
+        time.sleep(0.4)
+        assert len(world.credits) == n  # bơm đã tắt thì không ghi thêm
+    finally:
+        hw.close()
+    total = sum(world.credits)
+    assert total <= ran + 0.05
+    assert total >= 0.8  # vòng kẹt 0.3 s vẫn được tính đủ (cũ: ~0,6)
+    assert max(world.credits) <= 0.5 + 1e-6

@@ -46,7 +46,7 @@ Tránh dùng: GPIO8 và 9 (chân strapping, thường nối LED và nút BOOT), 
 Câu hỏi `nozzle` của bộ quyết định có ba đáp án: `s1`, `s2`, `both (s1 + s2)`. Mô hình Jev được dạy chọn `both` cho đám cháy lớn mà cả hai vòi khỏe và với tới bia; baseline luật không bao giờ trả `both`, chỉ chọn vòi đơn gần bia nhất (theo `dist3`). Orchestrator thực thi đúng đáp án:
 
 - Hai vòi bị chặn thì chỉ báo động (`alarm_only`). Một vòi bị chặn lúc quyết định thì ghi cảnh báo `safety` và chạy như lượt một vòi bằng vòi còn lại.
-- AIM và CORRECT làm lần lượt từng vòi (mỗi lúc chỉ một laser, vì `find_spot` so khung tắt/bật). Mỗi vòi giữ điểm ngắm và độ lệch riêng; mỗi vòng CORRECT ghi tên vòi.
+- AIM và CORRECT làm lần lượt từng vòi (mỗi lúc chỉ một laser, vì `find_spot` so khung tắt/bật). Mỗi vòi giữ điểm ngắm và độ lệch riêng; mỗi vòng CORRECT ghi tên vòi. Vòi nào gặp `LinkError` lúc AIM hoặc CORRECT thì bị bỏ (cảnh báo `safety`, "hỏng lúc ngắm") và lượt chạy tiếp bằng vòi còn lại; vòi cuối cùng hỏng thì FAULT như lượt một vòi. `Abort` (dừng khẩn cấp, góc ngoài giới hạn) vẫn dừng cả lượt.
 - Ngay trước FIRE, orchestrator gửi `/aim` cuối cho cả hai vòi rồi mới gửi hai lệnh `/fire pump` liền nhau để hai bơm chạy cùng lúc. Vòi nào lúc đó mất heartbeat, bị chặn hoặc không trả lời lệnh ngắm thì bị bỏ (cảnh báo `safety`) và lượt chạy tiếp bằng vòi còn lại; hết vòi thì FAULT như lượt một vòi.
 - VERIFY coi hai vòi là một lần phun: nhiệt sau phun lấy trung bình hai node, độ lệch `mark_cm` lấy giá trị lớn hơn của hai vòi, `nozzle` trong obs là `both (s1 + s2)`. `done`, `re-aim` (làm lại AIM + CORRECT cả hai vòi), `spray more` (phun lại, không ngắm lại) và `call human` xử lý như lượt một vòi, vẫn tối đa 3 lần.
 - Dừng khẩn cấp gửi `/stop` tới mọi node nên tắt cả hai bơm và laser.

@@ -12,8 +12,9 @@ Chủ đề (base = nt532/<station_id>):
 
 AN TOÀN: chỉ có HAI lệnh ghi được, dừng khẩn cấp và đổi bộ quyết định. KHÔNG BAO GIỜ thêm lệnh ngắm, bắn,
 bơm hay laser ở đây: mọi lệnh tác động phần cứng chỉ đi qua orchestrator sau khi qua các kiểm tra an toàn.
-Trạng thái bơm/laser của node thật là suy ra từ pha orchestrator (FIRE/CORRECT của vòi đó), không đọc từ
-phần cứng; mất heartbeat thì để "không rõ".
+Trạng thái bơm/laser của node thật là suy ra từ pha orchestrator và danh sách vòi đang làm việc
+(`overlay.active`): laser bật khi pha CORRECT và vòi đó đang được ngắm, bơm bật khi pha FIRE và vòi đó
+đang phun; không đọc từ phần cứng. Mất heartbeat thì để "không rõ".
 """
 
 import json
@@ -203,12 +204,16 @@ class MqttBridge:
         snap = self.st.orch.snapshot()
         run = snap.get("run") or {}
         phase = snap.get("phase", "IDLE")
+        active = (snap.get("overlay") or {}).get("active")  # None: snapshot cũ chưa có danh sách này
         out: dict[str, dict] = {}
         for n in self.nodes:
             s = (self.st.sensors.samples(n, 1) or [None])[-1]
             hb = ((snap.get("nozzles") or {}).get(n) or {}).get("hb_ms")
             hb_ok = hb is not None and hb < self.heartbeat_ok_ms
-            busy = bool(run.get("nozzle")) and n in nozzles_of(run["nozzle"])  # BOTH: cả hai vòi
+            if active is not None:  # vòi đang được ngắm (CORRECT) hoặc đang phun (FIRE)
+                busy = n in active
+            else:  # không có `active`: vòi của lượt (BOTH: cả hai vòi)
+                busy = bool(run.get("nozzle")) and n in nozzles_of(run["nozzle"])
             out[self.node_topic(n)] = {
                 "temp": None if s is None else round(s.temp, 1),
                 "gas": None if s is None else round(s.gas),

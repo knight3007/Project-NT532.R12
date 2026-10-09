@@ -92,21 +92,23 @@ Giao thức: `POST /decide` với `{"obs", "questions"}` (đúng dạng orchestr
 
 ![Dashboard trên sa bàn ảo, chế độ lai](img/dashboard.png)
 
-- **Camera:** video có vẽ viền bảng, bia (vòng vàng và conf), bia được chọn (dấu đỏ), điểm ngắm, vết laser đo được. Trên sa bàn ảo, bấm lên bảng để đặt lửa, đèn nóng hoặc vật cam.
+- **Camera:** video có vẽ viền bảng, bia (vòng vàng và conf), bia được chọn (dấu đỏ), điểm ngắm (chữ thập nghiêng trắng) và vết laser đo được (vòng xanh) của từng vòi, mỗi dấu ghi tên vòi bên cạnh để lượt hai vòi vẫn phân biệt được. Trên sa bàn ảo, bấm lên bảng để đặt lửa, lửa lớn (🔥 Lửa lớn, để thử phun hai vòi), đèn nóng hoặc vật cam.
 - **Quy trình:** bước hiện tại của state machine, lượt, bia, vòi.
 - **Quyết định:** từng câu hỏi, đáp án, độ tin cậy, nguồn (luật hoặc mô hình), thanh xác suất, đoạn STATE.
-- **Vòi:** tuổi heartbeat và pose, lý do bị chặn; trên sa bàn ảo còn có trạng thái laser và bơm.
-- **Sự thật trên sa bàn ảo:** lửa còn cháy hay đã tắt, vật gây nhiễu. Orchestrator không thấy phần này, dùng để so với quyết định.
-- **Cảm biến** 2 phút gần nhất kèm ngưỡng, **nhật ký**, **các lượt gần đây**.
+- **Vòi:** tuổi heartbeat và pose, lý do bị chặn, và thẻ "đang ngắm" (pha AIM, CORRECT) hoặc "đang phun" (pha FIRE) cho vòi nào đang được orchestrator làm việc, lấy từ `overlay.active` nên có cả trên phần cứng thật; trên sa bàn ảo còn có trạng thái laser và bơm.
+- **Sự thật trên sa bàn ảo:** lửa còn cháy hay đã tắt (lửa lớn ghi rõ), vật gây nhiễu. Orchestrator không thấy phần này, dùng để so với quyết định.
+- **Cảm biến** 2 phút gần nhất kèm ngưỡng, **nhật ký**, **các lượt gần đây** (có cột Vòi: `s1`, `s2` hoặc "cả hai").
 - **Nút:** dừng khẩn cấp, tắt chế độ tự động, commissioning lại, đổi bộ quyết định. Trên sa bàn ảo còn có hơi nước, xung cảm biến, ngắt liên lạc từng node, dời node.
 
-API cho script khác: `GET /api/state`, `GET /api/events?since=N`, `GET /snapshot.jpg`, `GET /stream.mjpg`, `POST /api/cmd` với `{"cmd": "stop" | "enable" | "recommission" | "decider" | "fire" | "lamp" | "object" | "steam" | "spike" | "clear" | "online" | "move_node", ...}`. Không có xác thực, chỉ mở trong LAN của sa bàn.
+API cho script khác: `GET /api/state`, `GET /api/events?since=N`, `GET /snapshot.jpg`, `GET /stream.mjpg`, `POST /api/cmd` với `{"cmd": "stop" | "enable" | "recommission" | "decider" | "fire" | "fire_large" | "lamp" | "object" | "steam" | "spike" | "clear" | "online" | "move_node", ...}` (`fire` nhận thêm `"size": "small" | "large"`, giá trị khác bị từ chối). Không có xác thực, chỉ mở trong LAN của sa bàn.
+
+`orch.overlay` trong `/api/state` (và `Orchestrator.snapshot()["overlay"]`) gồm `tracks`, `target`, `nozzle`, cùng ba trường theo vòi: `active` (danh sách vòi đang được ngắm hoặc phun, rỗng lúc VERIFY và hết lượt), `aims` và `spots` (`{vòi: {"x", "z"}}`: điểm ngắm đã bù và vết laser đo được của từng vòi). Cầu nối MQTT cũng suy ra bơm và laser của từng node từ `active`.
 
 ## Sa bàn ảo
 
 `SimWorld` chạy theo thời gian thực. Mọi số liệu dưới đây là **giả định để demo**, không phải số đo:
 - **Cảm biến:** mỗi nguồn kéo nhiệt, khí, ẩm của từng node lên theo `e^(-khoảng cách/0,35 m)` với hằng số thời gian vài giây. Node lấy mẫu 1 Hz, báo động khi 3 mẫu liên tiếp vượt ngưỡng, hủy khi 5 mẫu dưới ngưỡng.
-- **Lửa:** cần khoảng 0,8 đến 2,6 "giây phun trúng" (nước rơi trong 3,5 cm quanh tâm) mới tắt. Tắt rồi thì thẻ đổi sang thẻ cháy sém. `SimWorld.ignite(size="large")` tạo lửa lớn: thẻ to gấp 1,8, đỉnh tín hiệu ×1,5, suy giảm theo khoảng cách chậm gấp đôi (với tới cả hai node) và cần 1,6 đến 5,2 giây phun trúng, để thử phun hai vòi.
+- **Lửa:** cần khoảng 0,8 đến 2,6 "giây phun trúng" (nước rơi trong 3,5 cm quanh tâm) mới tắt. Tắt rồi thì thẻ đổi sang thẻ cháy sém. `SimWorld.ignite(size="large")` tạo lửa lớn: thẻ to gấp 1,8, đỉnh tín hiệu ×1,5, suy giảm theo khoảng cách chậm gấp đôi (với tới cả hai node) và cần 1,6 đến 5,2 giây phun trúng, để thử phun hai vòi. Nước được ghi theo thời gian thật đã trôi giữa hai lần ghi (tối đa 0,5 s mỗi lần, và không quá thời gian lệnh bơm), không phải 0,1 s cố định mỗi vòng lặp, nên vòng lặp bị kẹt lúc `world.lock` bận dựng khung hình không làm lửa nhận ít nước hơn thời gian bơm.
 - **Servo:** mỗi node lệch ngẫu nhiên tới 3° để vòng CORRECT có việc. `/aim` mất 0,15 s cộng thời gian quay (150°/s).
 - **Detector:** khi chưa có `models/fire-n.pt` và thẻ in từ D-Fire, dùng `OracleDetector`. Detector này đọc thẻ thật trong scene và cho conf theo loại: lửa 0,55 đến 0,92, đèn 0,2 đến 0,6, vật cam 0,08 đến 0,45, thẻ đã tắt gần 0. Mỗi khung có 10% bỏ sót. Có trọng số thì dùng `--detector yolo`; thẻ tổng hợp (`data/sim/cards_synth/`) chưa được YOLO học nên nên dùng thẻ D-Fire.
 

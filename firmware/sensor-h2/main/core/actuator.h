@@ -28,8 +28,10 @@ extern "C" {
 
 typedef enum { ACT_DEV_PUMP = 0, ACT_DEV_LASER = 1 } act_dev_t;
 
+// Giới hạn góc (độ) trong act_default_config chỉ là giá trị dự phòng của lõi cho test trên máy chủ
+// (pan ±50, tilt -35..45). act_task.c luôn ghi đè từ Kconfig/NVS (mặc định pan ±70, tilt -35..45).
 typedef struct {
-    float pan_min, pan_max, tilt_min, tilt_max;  // độ; mặc định ±50, -35..45 như bộ kịch bản
+    float pan_min, pan_max, tilt_min, tilt_max;  // độ
     float deg_per_s;                              // tốc độ quay ước tính để báo "reached"
     uint32_t settle_ms;                           // cộng thêm sau khi quay xong cho servo ổn định
     uint32_t hb_timeout_ms;                       // mất heartbeat quá chừng này thì tắt (3 nhịp x 500)
