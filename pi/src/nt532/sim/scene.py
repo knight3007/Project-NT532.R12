@@ -14,8 +14,8 @@ có rơ hay rung; mặt bàn và bảng là ảnh sinh ra chứ không phải v�
 """
 
 import copy
-from functools import lru_cache
 from dataclasses import dataclass, field
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -437,7 +437,7 @@ class Scene:
     def _draw_spot(self, img: np.ndarray, pixel: tuple[float, float]) -> None:
         sigma = self.spot_sigma_px
         r = int(np.ceil(4 * sigma))
-        u0, v0 = int(round(pixel[0])), int(round(pixel[1]))
+        u0, v0 = round(pixel[0]), round(pixel[1])
         x0, x1 = max(u0 - r, 0), min(u0 + r + 1, img.shape[1])
         y0, y1 = max(v0 - r, 0), min(v0 + r + 1, img.shape[0])
         if x1 <= x0 or y1 <= y0:

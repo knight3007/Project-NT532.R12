@@ -1,0 +1,84 @@
+# Kiểm tra mỗi lần push: test phía Pi, test lõi C của firmware, build firmware H2 bằng ESP-IDF thật.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pi:
+    name: Pi (không torch)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: pi
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libgl1 libglib2.0-0 gcc make
+      - run: uv sync --python 3.13
+      # data/ không lên git: dựng commissioning của sa bàn ảo mà test_scenario cần
+      - run: timeout 300 uv run --no-sync python scripts/commission.py --source sim
+      - run: uv run --no-sync ruff check src tests scripts
+      - run: uv run --no-sync pytest -q --ignore=tests/test_decider.py --ignore=tests/test_jev.py
+
+  decider:
+    name: Bộ quyết định (torch CPU)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: pi
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libgl1 libglib2.0-0
+      - run: uv sync --python 3.13
+      # torch bản CPU cho nhẹ; các gói còn lại của nhóm decider lấy từ PyPI
+      - run: uv pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+      - run: uv pip install "sentence-transformers>=6.1" "transformers>=5.19" "peft>=0.13"
+      - run: uv run --no-sync pytest -q tests/test_decider.py tests/test_jev.py
+
+  firmware-host:
+    name: Lõi C firmware (ASan)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - run: make -C firmware/sensor-h2/test CC=gcc SAN='-fsanitize=address,undefined -fno-sanitize-recover=all'
+      - run: make -C firmware/sensor-h2/test CC=gcc libcore.so
+
+  firmware-build:
+    name: Build firmware H2 (ESP-IDF)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    container: espressif/idf:release-v5.4
+    steps:
+      - uses: actions/checkout@v4
+      - name: idf.py build
+        working-directory: firmware/sensor-h2
+        shell: bash
+        run: |
+          . "$IDF_PATH/export.sh"
+          idf.py set-target esp32h2
+          idf.py build
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: sensor-h2-build
+          path: |
+            firmware/sensor-h2/build/*.bin
+            firmware/sensor-h2/build/*.map
+            firmware/sensor-h2/build/log/
+          if-no-files-found: ignore

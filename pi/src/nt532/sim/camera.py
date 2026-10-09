@@ -26,7 +26,7 @@ class SimCamera:
             pass
         return cls(scene)
 
-    def isOpened(self) -> bool:  # noqa: N802 - giữ tên của cv2.VideoCapture
+    def isOpened(self) -> bool:  # giữ tên của cv2.VideoCapture
         return self._open
 
     def grab(self) -> bool:

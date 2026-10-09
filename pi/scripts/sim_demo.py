@@ -203,8 +203,8 @@ def main() -> None:
         frame = read_fresh(cap)
         targets = vision.targets(frame, sensor=sensor)
 
-        def nearest(pos):
-            return min(ids, key=lambda i: np.linalg.norm((pos - truth[i])[[0, 2]]))
+        def nearest(pos, ids=ids, truth=truth):
+            return min(ids, key=lambda j: np.linalg.norm((pos - truth[j])[[0, 2]]))
 
         matched = [
             t
