@@ -200,7 +200,7 @@ Cổng kiểm tra: kích cảm biến thật, YOLO thấy bia, laser tâm ngắm
 
 - **Hậu:** ép multi-hop bằng `macfilter` hoặc giảm công suất phát, cho cả hai vòi (lệnh ngắm cũng đi hai hop, đo lại `ttl`). Rút Pi để kiểm tra `/alarm`. Kiểm tra SRP và DNS-SD khi reset node. Đo PDR và độ trễ theo số hop. Nối Home Assistant qua MQTT trên Pi thật.
 - **Hùng:** bước CORRECT và commissioning lại khi dời node đã có **[xong]**; chỉnh `correct_done_m` theo vết laser thật. Kiểm tra camera bị lệch bằng tag tham chiếu. Chạy `log_pi_load.py` song song với các lượt end-to-end.
-- **Hiếu:** tiêm lỗi: mất Thread, mất heartbeat, lệnh trễ, lệnh trùng, góc ngoài giới hạn, `/stop` giữa chừng, cho cả hai node. Cố định cơ khí, đi dây gọn, che nước cho mạch và cảm biến vì vòi nằm ngay trên node.
+- **Hiếu:** tiêm lỗi: mất Thread, mất heartbeat, lệnh trễ, lệnh trùng, góc ngoài giới hạn, `/stop` giữa chừng, cho cả hai node. Cố định cơ khí, đi dây gọn, che nước cho mạch và cảm biến vì vòi nằm ngay trên node. Thử cả hai bơm chạy cùng lúc (phun hai vòi) và kiểm nguồn 12 V.
 
 Cổng kiểm tra (MVP): 10 lượt liên tiếp từ cảm biến tới phun nước, ít nhất 8 lượt tia nước trúng thẻ bia. Mọi lỗi tiêm vào đều kết thúc với bơm và laser tắt.
 
@@ -220,7 +220,7 @@ Cổng kiểm tra: demo chạy trọn hai lần liên tiếp mà không phải s
 
 ### Tuần 7 (16–22/11): dự phòng
 
-- Chỉ sửa lỗi, không thêm tính năng. Nếu còn thời gian thì thử hai vòi phun cùng lúc, hoặc dùng lại ESP32-S3 làm đường lui nếu một node H2 hỏng (hai việc còn chưa quyết, xem thay-doi-hai-voi.md).
+- Chỉ sửa lỗi, không thêm tính năng. Hai vòi phun cùng lúc đã làm xong phía phần mềm (xem thay-doi-hai-voi.md); trên phần cứng thử ở tuần 4–5 cùng với nguồn (cả hai bơm chạy một lúc). Nếu còn thời gian thì dùng lại ESP32-S3 làm đường lui nếu một node H2 hỏng (việc còn chưa quyết).
 
 ## 6. Phân công
 

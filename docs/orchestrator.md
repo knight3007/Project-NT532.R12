@@ -48,10 +48,10 @@ uv run python scripts/run_station.py --decider rules                 # phần c�
    - `ignore`: về IDLE.
    - `alarm only` hoặc không chọn được bia: sang ALARM (node đã tự hú còi).
    - `spray`: qua bước chặn an toàn rồi ngắm.
-4. **Chặn an toàn (luôn là luật):** chưa commissioning hoặc node bị dời, pose quá 60 s, mất heartbeat quá 1,5 s, mục tiêu ngoài bảng, góc ngoài giới hạn. Vòi được chọn bị chặn thì thử vòi còn lại, không được thì ALARM.
-5. **AIM và CORRECT:** gửi `/aim`, chờ `reached` (hết giờ thì gửi lại đúng một lần với id mới). Bật laser bằng `/fire dev=laser`, so ảnh bật và tắt để tìm vết, bù độ lệch, lặp tối đa `correct_max_iters` hoặc tới khi lệch dưới `correct_done_m`.
-6. **FIRE:** cộng `water_tilt_deg`, ngắm lại, `/fire dev=pump ms=fire_ms`, chờ `done`.
-7. **VERIFY:** chờ 3 s, chụp 3 khung lấy conf quanh bia, lấy nhiệt sau phun của node, độ lệch laser đo được ở vòng CORRECT cuối. Hỏi `after_verify`:
+4. **Chặn an toàn (luôn là luật):** chưa commissioning hoặc node bị dời, pose quá 60 s, mất heartbeat quá 1,5 s, mục tiêu ngoài bảng, góc ngoài giới hạn. Vòi được chọn bị chặn thì thử vòi còn lại, không được thì ALARM. Đáp án `both (s1 + s2)`: kiểm cả hai vòi, một vòi bị chặn thì ghi cảnh báo `safety` và phun như lượt một vòi bằng vòi kia, cả hai bị chặn thì ALARM.
+5. **AIM và CORRECT:** gửi `/aim`, chờ `reached` (hết giờ thì gửi lại đúng một lần với id mới). Bật laser bằng `/fire dev=laser`, so ảnh bật và tắt để tìm vết, bù độ lệch, lặp tối đa `correct_max_iters` hoặc tới khi lệch dưới `correct_done_m`. Lượt hai vòi làm lần lượt từng vòi (mỗi lúc một laser, vì `find_spot` so khung tắt/bật); dòng sự kiện `vòng i: lệch x cm (s1)` và `run.shots[].nozzle` cho biết vòi nào.
+6. **FIRE:** cộng `water_tilt_deg`, ngắm lại, `/fire dev=pump ms=fire_ms`, chờ `done`. Lượt hai vòi: ngắm lần cuối cho cả hai vòi (kiểm lại từng vòi: mất heartbeat, bị chặn hay không trả lời lệnh ngắm thì bị bỏ và lượt chạy tiếp bằng vòi còn lại), rồi gửi hai `/fire dev=pump` liền nhau để hai bơm chạy cùng lúc và chờ cả hai báo xong; `status` là `ok` chỉ khi cả hai `done`.
+7. **VERIFY:** chờ 3 s, chụp 3 khung lấy conf quanh bia, lấy nhiệt sau phun của node, độ lệch laser đo được ở vòng CORRECT cuối. Hai vòi thì coi như một lần phun: nhiệt trung bình hai node, độ lệch lớn hơn của hai vòi, `nozzle` = `both (s1 + s2)`. Hỏi `after_verify`:
    - `done`: xong.
    - `re-aim`: AIM và CORRECT lại.
    - `spray more`: phun tiếp không ngắm lại.
@@ -106,7 +106,7 @@ API cho script khác: `GET /api/state`, `GET /api/events?since=N`, `GET /snapsho
 
 `SimWorld` chạy theo thời gian thực. Mọi số liệu dưới đây là **giả định để demo**, không phải số đo:
 - **Cảm biến:** mỗi nguồn kéo nhiệt, khí, ẩm của từng node lên theo `e^(-khoảng cách/0,35 m)` với hằng số thời gian vài giây. Node lấy mẫu 1 Hz, báo động khi 3 mẫu liên tiếp vượt ngưỡng, hủy khi 5 mẫu dưới ngưỡng.
-- **Lửa:** cần khoảng 0,8 đến 2,6 "giây phun trúng" (nước rơi trong 3,5 cm quanh tâm) mới tắt. Tắt rồi thì thẻ đổi sang thẻ cháy sém.
+- **Lửa:** cần khoảng 0,8 đến 2,6 "giây phun trúng" (nước rơi trong 3,5 cm quanh tâm) mới tắt. Tắt rồi thì thẻ đổi sang thẻ cháy sém. `SimWorld.ignite(size="large")` tạo lửa lớn: thẻ to gấp 1,8, đỉnh tín hiệu ×1,5, suy giảm theo khoảng cách chậm gấp đôi (với tới cả hai node) và cần 1,6 đến 5,2 giây phun trúng, để thử phun hai vòi.
 - **Servo:** mỗi node lệch ngẫu nhiên tới 3° để vòng CORRECT có việc. `/aim` mất 0,15 s cộng thời gian quay (150°/s).
 - **Detector:** khi chưa có `models/fire-n.pt` và thẻ in từ D-Fire, dùng `OracleDetector`. Detector này đọc thẻ thật trong scene và cho conf theo loại: lửa 0,55 đến 0,92, đèn 0,2 đến 0,6, vật cam 0,08 đến 0,45, thẻ đã tắt gần 0. Mỗi khung có 10% bỏ sót. Có trọng số thì dùng `--detector yolo`; thẻ tổng hợp (`data/sim/cards_synth/`) chưa được YOLO học nên nên dùng thẻ D-Fire.
 

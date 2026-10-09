@@ -10,8 +10,9 @@ from dataclasses import dataclass
 
 import numpy as np
 
-# Giả định khi site.yaml còn để null, cùng số với bộ kịch bản của mô hình quyết định.
-DEFAULT_PAN = (-50.0, 50.0)
+# Giả định khi site.yaml còn để null, cùng số với bộ kịch bản của mô hình quyết định (PAN_LIM = 70:
+# node ở X 0,30 và 0,90 cách bảng 0,24 m, với ±50 không có vùng nào cả hai vòi cùng với tới).
+DEFAULT_PAN = (-70.0, 70.0)
 DEFAULT_TILT = (-35.0, 45.0)
 DEFAULT_PIVOT_OFFSET = (0.0, 0.0, 0.08)
 

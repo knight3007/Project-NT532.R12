@@ -121,10 +121,16 @@ menu "NT532 node"
             default n
         config NT532_PAN_MIN
             int "Giới hạn pan thấp (độ)"
-            default -50
+            default -70
+            help
+                Số tạm, cùng với bộ kịch bản của mô hình quyết định (±70 để hai vòi có chung vùng
+                với tới). Giới hạn thật của từng node đặt trong NVS (pan_lo) ở tuần 2 sao cho tia
+                không ra khỏi bảng; phía ngoài của mỗi node thường cần giới hạn hẹp hơn.
         config NT532_PAN_MAX
             int "Giới hạn pan cao (độ)"
-            default 50
+            default 70
+            help
+                Xem NT532_PAN_MIN (NVS pan_hi).
         config NT532_TILT_MIN
             int "Giới hạn tilt thấp (độ)"
             default -35

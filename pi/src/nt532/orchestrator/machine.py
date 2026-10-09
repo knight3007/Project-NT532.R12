@@ -4,6 +4,9 @@
                                        \\-> ALARM (chỉ báo động) hoặc về IDLE (bỏ qua)
     lỗi ở bất kỳ bước nào -> FAULT: gửi /stop, ghi nguyên nhân
 
+Phun hai vòi (đáp án `nozzle` = BOTH): AIM và CORRECT lần lượt từng vòi (mỗi lúc một laser, vì
+`find_spot` so khung tắt/bật), FIRE bật hai bơm cùng lúc, VERIFY coi như một lần phun.
+
 Mô hình (hoặc luật) chỉ quyết định: có cháy thật không, làm gì, bia nào, vòi nào, sau khi phun
 thì làm gì. Các chặn an toàn cứng luôn là luật ở đây: chưa commissioning hoặc pose hết hạn, mất
 heartbeat, mục tiêu ngoài bảng, góc ngoài giới hạn, quá số lần thử, nút dừng khẩn cấp.
@@ -20,7 +23,7 @@ import numpy as np
 
 from ..decider.rules import HB_MAX_MS, POSE_MAX_S
 from ..decider.scenario import MAX_ATTEMPTS
-from ..decider.state_text import ACTIONS, BOTH, NOZZLES, VERIFY
+from ..decider.state_text import ACTIONS, BOTH, NOZZLES, VERIFY, nozzles_of
 from ..net.link import LinkError, NodeLink
 from ..net.protocol import Alert
 from ..vision import Vision
@@ -83,7 +86,7 @@ class Run:
     target: dict | None = None
     nozzle: str | None = None
     attempts: int = 0
-    shots: list = field(default_factory=list)  # [{round, miss_cm}] mỗi vòng CORRECT
+    shots: list = field(default_factory=list)  # [{round, miss_cm, nozzle}] mỗi vòng CORRECT
 
     def to_json(self) -> dict:
         return {"id": self.id, "node": self.node, "started": self.started,
@@ -329,52 +332,81 @@ class Orchestrator:
         target = by_id[tid].position
         run.target = {"id": tid, "x": round(float(target[0]), 3), "z": round(float(target[2]), 3)}
         self.overlay["target"] = run.target
-        if nozzle == BOTH:  # chưa phun hai vòi cùng lúc: dùng vòi gần bia hơn, vòi kia vẫn là dự phòng
-            d3 = next(t["dist3"] for t in obs["targets"] if t["id"] == tid)
-            nozzle = min(NOZZLES, key=lambda n: d3[n])
-            self.events.emit("safety", f"bộ quyết định chọn cả hai vòi, chưa hỗ trợ phun cùng lúc: dùng {nozzle}",
-                             level="warn")
 
         # chặn an toàn cứng; vòi được chọn bị chặn thì thử vòi còn lại
-        reasons = self._blocked(nozzle, target, pivots)
-        if reasons:
-            other = NOZZLES[1 - NOZZLES.index(nozzle)]
-            if not self._blocked(other, target, pivots):
-                self.events.emit("safety", f"vòi {nozzle} bị chặn ({'; '.join(reasons)}), đổi sang {other}",
-                                 level="warn")
-                nozzle = other
-            else:
-                self._set(Phase.ALARM, "bị chặn: " + "; ".join(reasons))
+        if nozzle == BOTH:  # hai vòi: vòi nào bị chặn thì bỏ, còn một vòi thì phun như lượt một vòi
+            blocked = {n: self._blocked(n, target, pivots) for n in nozzles_of(BOTH)}
+            usable = [n for n, why in blocked.items() if not why]
+            if not usable:
+                self._set(Phase.ALARM, "bị chặn: " + "; ".join(
+                    f"{n}: {'; '.join(why)}" for n, why in blocked.items()))
                 return "alarm_only"
+            if len(usable) == 1:
+                bad = next(n for n in blocked if n not in usable)
+                self.events.emit("safety", f"vòi {bad} bị chặn ({'; '.join(blocked[bad])}), "
+                                           f"chỉ phun bằng {usable[0]}", level="warn")
+                nozzle = usable[0]
+        else:
+            reasons = self._blocked(nozzle, target, pivots)
+            if reasons:
+                other = NOZZLES[1 - NOZZLES.index(nozzle)]
+                if not self._blocked(other, target, pivots):
+                    self.events.emit("safety", f"vòi {nozzle} bị chặn ({'; '.join(reasons)}), đổi sang {other}",
+                                     level="warn")
+                    nozzle = other
+                else:
+                    self._set(Phase.ALARM, "bị chặn: " + "; ".join(reasons))
+                    return "alarm_only"
         run.nozzle = nozzle
         self.overlay["nozzle"] = nozzle
-        return self._engage(run, obs, tid, target, nozzle, pivots[nozzle])
+        return self._engage(run, obs, tid, target, nozzles_of(nozzle), pivots)
 
-    def _engage(self, run, obs, tid, target, nozzle, pivot) -> str:
-        aim_point = np.asarray(target, float).copy()
+    def _use(self, run: Run, nozzles: list[str]) -> None:
+        """Ghi vòi đang dùng (BOTH nếu còn hai vòi) vào lượt và overlay."""
+        run.nozzle = BOTH if len(nozzles) > 1 else nozzles[0]
+        self.overlay["nozzle"] = run.nozzle
+
+    def _engage(self, run, obs, tid, target, nozzles: list[str], pivots: dict) -> str:
+        """AIM/CORRECT/FIRE/VERIFY với một hoặc hai vòi. Mỗi vòi giữ điểm ngắm và độ lệch CORRECT
+        cuối cùng của riêng nó; vòi bị bỏ trước lúc phun thì cả lượt chạy tiếp bằng vòi còn lại."""
+        nozzles = list(nozzles)
+        aim_points = {n: np.asarray(target, float).copy() for n in nozzles}
+        misses: dict[str, float | None] = dict.fromkeys(nozzles)
         need_aim = True
-        mark_cm = None
         attempt = 0
         while attempt < MAX_ATTEMPTS:
             attempt += 1
             run.attempts = attempt
             if need_aim:
-                aim_point, mark_cm = self._aim_and_correct(run, nozzle, pivot, target, aim_point)
+                for n in nozzles:  # lần lượt: mỗi lúc chỉ một laser
+                    self._check()
+                    aim_points[n], misses[n] = self._aim_and_correct(
+                        run, n, pivots[n], target, aim_points[n], dual=len(nozzles) > 1)
 
-            # FIRE
+            # FIRE: ngắm lần cuối cho mọi vòi rồi mới bật bơm, để hai bơm chạy cùng lúc
             self._set(Phase.FIRE, f"lần {attempt}")
-            pan, tilt = aiming.angles(pivot, aim_point)
-            tilt += aiming.water_tilt(self.site, nozzle, aiming.horizontal_distance(pivot, aim_point))
-            cmd = self._aim(nozzle, pan, tilt)
+            cmds = self._final_aim(nozzles, target, pivots, aim_points)
+            if len(cmds) < len(nozzles):
+                nozzles = list(cmds)
+                self._use(run, nozzles)
+            dual = len(nozzles) > 1
+            self._check()
             t_spray = self.clock()
-            self.link.fire(nozzle, cmd, "pump", self.acfg["fire_ms"])
-            st = self.link.wait(cmd, ("done", "fault", "rejected"),
-                                self.acfg["fire_ms"] / 1000 + self.cfg.status_timeout_s)
-            status = "ok" if st is not None and st.st == "done" else "fault"
-            if st is None:
-                self.events.emit("fault", f"{nozzle} không báo xong phun", level="warn")
+            for n in nozzles:
+                self.link.fire(n, cmds[n], "pump", self.acfg["fire_ms"])
+            deadline = t_spray + self.acfg["fire_ms"] / 1000 + self.cfg.status_timeout_s
+            status = "ok"
+            for n in nozzles:
+                st = self.link.wait(cmds[n], ("done", "fault", "rejected"),
+                                    max(0.0, deadline - self.clock()))
+                if st is None or st.st != "done":
+                    status = "fault"
+                if st is None:
+                    self.events.emit("fault", f"{n} không báo xong phun", level="warn")
+                elif st.st != "done" and dual:
+                    self.events.emit("fault", f"{n} {st.st} khi phun ({st.err or 'không rõ'})", level="warn")
 
-            # VERIFY
+            # VERIFY: hai vòi thì coi như một lần phun (nhiệt trung bình, độ lệch lớn nhất)
             self._set(Phase.VERIFY)
             self._sleep(self.cfg.verify_wait_s)
             conf = []
@@ -383,10 +415,15 @@ class Orchestrator:
                 near = [t.detection.conf for t in found
                         if np.hypot(*(t.position - target)[[0, 2]]) <= 0.05]
                 conf.append(round(max(near), 2) if near else None)
-            post = [s.temp for s in self.sensors.since(nozzle, t_spray)][-3:]
-            post = post or [s.temp for s in self.sensors.samples(nozzle, 1)] or [0.0]
-            post = [round(post[0], 1)] * (3 - len(post)) + [round(v, 1) for v in post]
-            vobs = verify_obs(obs, tid, nozzle, attempt, status, post, conf, mark_cm, self.sensors)
+            posts = []
+            for n in nozzles:
+                post = [s.temp for s in self.sensors.since(n, t_spray)][-3:]
+                post = post or [s.temp for s in self.sensors.samples(n, 1)] or [0.0]
+                posts.append([round(post[0], 1)] * (3 - len(post)) + [round(v, 1) for v in post])
+            post = posts[0] if len(posts) == 1 else [round(float(np.mean(c)), 1) for c in zip(*posts)]
+            marks = [misses[n] for n in nozzles if misses[n] is not None]
+            mark_cm = max(marks) if marks else None
+            vobs = verify_obs(obs, tid, run.nozzle, attempt, status, post, conf, mark_cm, self.sensors)
             vq = questions_for(vobs)
             dec = self.decider.decide(vobs, vq)
             run.decisions.append({"stage": "verify", "attempt": attempt, **dec.to_json()})
@@ -400,6 +437,28 @@ class Orchestrator:
             need_aim = nxt == VERIFY[1]
         self._set(Phase.HUMAN, f"sau {attempt} lần phun")
         return "human"
+
+    def _final_aim(self, nozzles: list[str], target, pivots: dict, aim_points: dict) -> dict[str, int]:
+        """AIM cuối (đã bù góc tia nước) cho từng vòi, trả {vòi: id lệnh} để /fire. Hai vòi thì kiểm lại
+        ngay trước khi phun: vòi nào mất heartbeat, bị chặn hoặc không trả lời lệnh ngắm bị bỏ và
+        phun bằng vòi còn lại; một vòi thì lỗi ném thẳng (FAULT) như trước."""
+        dual = len(nozzles) > 1
+        cmds: dict[str, int] = {}
+        for n in nozzles:
+            try:
+                if dual and (why := self._blocked(n, target, pivots)):
+                    raise LinkError("; ".join(why))
+                pan, tilt = aiming.angles(pivots[n], aim_points[n])
+                tilt += aiming.water_tilt(self.site, n, aiming.horizontal_distance(pivots[n], aim_points[n]))
+                cmds[n] = self._aim(n, pan, tilt)
+            except LinkError as e:
+                if not dual:
+                    raise
+                self.events.emit("safety", f"vòi {n} hỏng ngay trước khi phun ({e}), bỏ vòi này",
+                                 level="warn")
+        if not cmds:
+            raise LinkError("không vòi nào ngắm được trước khi phun")
+        return cmds
 
     def _aim(self, node: str, pan: float, tilt: float) -> int:
         self._check()
@@ -420,11 +479,12 @@ class Orchestrator:
         self._check()
         return cmd
 
-    def _aim_and_correct(self, run, node, pivot, target, aim_point):
-        """AIM rồi CORRECT bằng vết laser; trả (điểm ngắm đã bù, độ lệch đo được cuối cùng cm)."""
-        self._set(Phase.AIM)
+    def _aim_and_correct(self, run, node, pivot, target, aim_point, dual=False):
+        """AIM rồi CORRECT bằng vết laser; trả (điểm ngắm đã bù, độ lệch đo được cuối cùng cm).
+        `dual`: lượt hai vòi, ghi tên vòi vào pha và dòng sự kiện."""
+        self._set(Phase.AIM, node if dual else "")
         cmd = self._aim(node, *aiming.angles(pivot, aim_point))
-        self._set(Phase.CORRECT)
+        self._set(Phase.CORRECT, node if dual else "")
         miss_cm = None
         for i in range(self.tcfg["correct_max_iters"]):
             off = self.hub.fresh()
@@ -435,13 +495,13 @@ class Orchestrator:
             self.link.wait(cmd, ("done", "fault"), self.cfg.laser_ms / 1000 + 1)
             if spot is None:
                 self.events.emit("vision", "không thấy vết laser", level="warn")
-                run.shots.append({"round": i + 1, "miss_cm": None})
+                run.shots.append({"round": i + 1, "miss_cm": None, "nozzle": node})
                 break
             miss = np.asarray(target, float) - spot
             miss_cm = float(np.hypot(miss[0], miss[2]) * 100)
-            run.shots.append({"round": i + 1, "miss_cm": round(miss_cm, 2)})
+            run.shots.append({"round": i + 1, "miss_cm": round(miss_cm, 2), "nozzle": node})
             self.overlay["spot"] = {"x": round(float(spot[0]), 3), "z": round(float(spot[2]), 3)}
-            self.events.emit("correct", f"vòng {i + 1}: lệch {miss_cm:.1f} cm")
+            self.events.emit("correct", f"vòng {i + 1}: lệch {miss_cm:.1f} cm" + (f" ({node})" if dual else ""))
             if miss_cm < self.tcfg["correct_done_m"] * 100 or i == self.tcfg["correct_max_iters"] - 1:
                 break
             aim_point = aim_point + miss * np.array([1.0, 0.0, 1.0])

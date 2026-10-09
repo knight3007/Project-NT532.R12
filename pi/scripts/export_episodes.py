@@ -17,7 +17,8 @@ File chú thích (--annotate), mỗi lượt một dòng, ô trống là chưa b
 
 run_id = `<tên file log không đuôi>:<số lượt>` (chỉ số lượt là đủ khi chỉ có một log).
 real_fire 1/0; fire_out 1/0 = lửa đã tắt thật sau lượt; target = T<n> thật sự cháy (hoặc `none`);
-nozzle = vòi nên dùng; action = spray|alarm only|ignore. Nhãn suy ra:
+nozzle = vòi nên dùng: s1, s2 hoặc both (hai vòi cùng lúc, không phân biệt hoa thường; chỉ thành nhãn khi
+ứng viên của câu hỏi có BOTH); action = spray|alarm only|ignore. Nhãn suy ra:
   real_fire 0 -> action ignore, target none of these; real_fire 1 và máy đã phun -> action spray;
   target lấy từ chú thích, hoặc bia máy chọn nếu fire_out = 1; after_verify chỉ gán cho lần
   verify CUỐI của lượt khi biết fire_out (cùng quy tắc nhãn với bộ kịch bản).
@@ -31,7 +32,14 @@ from pathlib import Path
 
 from nt532.config import REPO_ROOT
 from nt532.decider.scenario import MAX_ATTEMPTS
-from nt532.decider.state_text import ACTIONS, NONE_OF_THESE, VERIFY, render_state, target_candidates
+from nt532.decider.state_text import (
+    ACTIONS,
+    BOTH,
+    NONE_OF_THESE,
+    VERIFY,
+    render_state,
+    target_candidates,
+)
 
 OUT = REPO_ROOT / "runs/decider/scenarios/real.jsonl"
 TRUE, FALSE = {"1", "true", "yes", "y", "co", "có", "đúng"}, {"0", "false", "no", "n", "khong", "không", "sai"}
@@ -119,8 +127,12 @@ def decide_labels(obs: dict, questions: dict, ann: dict, end: dict) -> dict:
             labels["target"] = cands[ids.index(want)]
         elif real and ann.get("fire_out") and (end.get("target") or {}).get("id") in ids:
             labels["target"] = cands[ids.index(end["target"]["id"])]
-    if "nozzle" in questions and ann.get("nozzle") in ("s1", "s2"):
-        labels["nozzle"] = ann["nozzle"]
+    if "nozzle" in questions:
+        want = (ann.get("nozzle") or "").lower()
+        if want in ("s1", "s2"):
+            labels["nozzle"] = want
+        elif want == "both" and BOTH in questions["nozzle"]["candidates"]:
+            labels["nozzle"] = BOTH
     return labels
 
 

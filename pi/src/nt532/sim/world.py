@@ -29,12 +29,20 @@ from ..vision.localize import project
 from ..vision.types import Detection
 from .camera import SimCamera
 from .cards import SYNTH_DIR, ensure_synth_cards
-from .scene import Scene, sim_site
+from .scene import CARD_SIZE, Scene, sim_site
 
 AMBIENT = {"temp": 27.0, "gas": 180.0, "hum": 55.0}
 NOISE = {"temp": 0.4, "gas": 10.0, "hum": 0.8}
 DECAY_M = 0.35  # tín hiệu giảm theo e^(-khoảng cách/DECAY_M)
 HIT_M = 0.035  # nước rơi cách tâm thẻ lửa dưới chừng này thì có tác dụng
+# Lửa lớn (giả định, cùng hướng với large_gain/large_decay của bộ kịch bản): thẻ to hơn, tín hiệu
+# mạnh hơn và suy giảm chậm hơn (với tới cả hai node), cần nhiều nước hơn để tắt.
+FIRE_SIZES = ("small", "large")
+LARGE_CARD = 1.8
+LARGE_GAIN = 1.5
+LARGE_DECAY = 2.0
+LARGE_HP = (1.6, 5.2)
+SMALL_HP = (0.8, 2.6)
 
 
 @dataclass
@@ -55,11 +63,13 @@ class Source:
     until: float | None = None  # hết hạn (giây thế giới) với steam, spike
     hp: float = 1.0  # lửa: số "giây phun trúng" cần để tắt
     out: bool = False
+    decay: float = DECAY_M  # tín hiệu cảm biến giảm theo e^(-khoảng cách/decay)
+    size: str = "small"  # lửa: small hoặc large
 
     def to_json(self) -> dict:
         return {"id": self.id, "kind": self.kind, "x": round(self.x, 3), "z": round(self.z, 3),
                 "level": round(self.level, 2), "hp": round(self.hp, 2), "out": self.out,
-                "node": self.node}
+                "node": self.node, "size": self.size}
 
 
 class SimNodeSensors:
@@ -162,7 +172,7 @@ class SimWorld:
         for s in self.sources.values():
             if s.node is not None and s.node != node:
                 continue
-            w = 1.0 if s.node else math.exp(-abs(s.x - nx) / DECAY_M)
+            w = 1.0 if s.node else math.exp(-abs(s.x - nx) / s.decay)
             for k, p in s.peak.items():
                 out[k] += s.level * p * w
         return out
@@ -181,21 +191,29 @@ class SimWorld:
         z = float(self.rng.uniform(0.12, b["height"] - 0.12)) if z is None else float(z)
         return x, z
 
-    def _card(self, kind: str, x: float, z: float) -> int:
+    def _card(self, kind: str, x: float, z: float, size: float = CARD_SIZE) -> int:
         idx = self.kinds[kind]
-        return self.scene.add_card(x, z, index=idx[int(self.rng.integers(len(idx)))])
+        return self.scene.add_card(x, z, index=idx[int(self.rng.integers(len(idx)))], size=size)
 
     def _delta(self, ratio_t: float, ratio_g: float, hum: float = 0.0) -> dict:
         return {"temp": ratio_t * (self.limits["temp"] - AMBIENT["temp"]),
                 "gas": ratio_g * (self.limits["gas"] - AMBIENT["gas"]), "hum": hum}
 
-    def ignite(self, x: float | None = None, z: float | None = None) -> Source:
-        """Đám cháy: thẻ lửa trên bảng, nhiệt và khí tăng dần quanh vị trí x."""
+    def ignite(self, x: float | None = None, z: float | None = None, size: str = "small") -> Source:
+        """Đám cháy: thẻ lửa trên bảng, nhiệt và khí tăng dần quanh vị trí x. `size="large"`: thẻ to
+        hơn, tín hiệu mạnh hơn và lan xa hơn (với tới cả hai node), cần nhiều nước hơn để tắt."""
+        if size not in FIRE_SIZES:
+            raise ValueError(f"size phải là một trong {FIRE_SIZES}, không phải {size!r}")
+        large = size == "large"
+        gain = LARGE_GAIN if large else 1.0
         with self.lock:
             x, z = self._pos(x, z)
-            return self._new(kind="fire", x=x, z=z, card=self._card("fire", x, z),
-                             peak=self._delta(2.2, 2.2, -3.0), tau_rise=4.0, tau_fall=10.0,
-                             hp=float(self.rng.uniform(0.8, 2.6)))
+            card = self._card("fire", x, z, CARD_SIZE * LARGE_CARD if large else CARD_SIZE)
+            return self._new(kind="fire", x=x, z=z, card=card,
+                             peak=self._delta(2.2 * gain, 2.2 * gain, -3.0 * gain),
+                             tau_rise=4.0, tau_fall=10.0,
+                             hp=float(self.rng.uniform(*(LARGE_HP if large else SMALL_HP))),
+                             decay=DECAY_M * (LARGE_DECAY if large else 1.0), size=size)
 
     def add_lamp(self, x: float | None = None, z: float | None = None) -> Source:
         """Đèn nóng: trông giống lửa vừa vừa, nóng nhưng không có khí."""

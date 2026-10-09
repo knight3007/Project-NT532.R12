@@ -23,6 +23,7 @@ import threading
 import time
 from importlib import metadata
 
+from ..decider.state_text import nozzles_of
 from ..orchestrator.fusion import alarm_limits
 from ..orchestrator.machine import Phase
 
@@ -207,7 +208,7 @@ class MqttBridge:
             s = (self.st.sensors.samples(n, 1) or [None])[-1]
             hb = ((snap.get("nozzles") or {}).get(n) or {}).get("hb_ms")
             hb_ok = hb is not None and hb < self.heartbeat_ok_ms
-            busy = run.get("nozzle") == n
+            busy = bool(run.get("nozzle")) and n in nozzles_of(run["nozzle"])  # BOTH: cả hai vòi
             out[self.node_topic(n)] = {
                 "temp": None if s is None else round(s.temp, 1),
                 "gas": None if s is None else round(s.gas),

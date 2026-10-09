@@ -288,7 +288,7 @@ class FakeNode:
     def __init__(self, name: str, bind: tuple[str, int] = ("127.0.0.1", 5683), pi: str | None = None,
                  hardware: RecordHardware | None = None, sensors=None, telemetry_s: float = 1.0,
                  sample_s: float = 1.0, temp_c: float = 45.0, gas: float = 600.0, warmup_s: float = 0.0,
-                 limits: tuple[float, float, float, float] = (-50.0, 50.0, -35.0, 45.0),
+                 limits: tuple[float, float, float, float] = (-70.0, 70.0, -35.0, 45.0),
                  hb_timeout_ms: int = 1500, max_fire_ms: int = 5000, transports: list[str] | None = None,
                  alarm_peers: list[str] | None = None, on_event: Callable[[str, str], None] | None = None,
                  seed: int | None = None, fw: str = "fake-1.0", srp: bool = True) -> None:

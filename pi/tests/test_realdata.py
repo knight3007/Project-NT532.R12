@@ -199,6 +199,19 @@ def test_station_logs_telemetry_and_fit_reads_it(station_log):
     assert raw[0].label is None and raw[0].gas > 0
 
 
+def test_export_episodes_both_nozzle_annotation():
+    from nt532.decider.state_text import BOTH
+
+    exp = script("export_episodes")
+    both_q = {"nozzle": {"type": "choice", "candidates": ["s1", "s2", BOTH]}}
+    two_q = {"nozzle": {"type": "choice", "candidates": ["s1", "s2"]}}
+    for text in ("both", "BOTH", "Both"):
+        assert exp.decide_labels({}, both_q, {"nozzle": text}, {})["nozzle"] == BOTH
+    assert exp.decide_labels({}, both_q, {"nozzle": "S2"}, {})["nozzle"] == "s2"
+    assert exp.decide_labels({}, two_q, {"nozzle": "both"}, {}) == {}  # không có ứng viên BOTH: không đoán
+    assert exp.decide_labels({}, two_q, {"nozzle": "s1"}, {})["nozzle"] == "s1"
+
+
 def test_export_episodes_are_scorable_and_annotated(station_log):
     exp, ev = script("export_episodes"), script("eval_rules")
     runs = exp.read_runs(station_log)

@@ -9,6 +9,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from nt532.decider.state_text import BOTH
 from nt532.integrations.mqtt import COUNTERS, MqttBridge
 from nt532.orchestrator.events import EventLog
 from nt532.orchestrator.fusion import SensorHistory
@@ -136,6 +137,22 @@ def test_state_mapping(bridge):
     assert stn["latency_ms"] == 12.5 and stn["outcome"] == "fault"
     st.events.emit("alert", "s1 hết báo động", node="s1")
     assert bridge.states()["nt532/t1/s1/state"]["alarm"] == "OFF"
+
+
+def test_both_nozzles_show_pump_on_for_both_nodes(bridge):
+    st = bridge.st
+    for n in ("s1", "s2"):
+        st.sensors.add(tel(n=n, s=1, t=30.0, g=100.0, h=55))
+    st.orch.snap.update(phase="FIRE", run={"nozzle": BOTH, "target": {"id": "T1"}},
+                        nozzles={"s1": {"hb_ms": 100.0}, "s2": {"hb_ms": 100.0}})
+    s = bridge.states()
+    assert [s[f"nt532/t1/{n}/state"]["pump"] for n in ("s1", "s2")] == ["ON", "ON"]
+    st.orch.snap.update(run={"nozzle": "s2", "target": {"id": "T1"}})  # một vòi: chỉ vòi đó
+    s = bridge.states()
+    assert [s[f"nt532/t1/{n}/state"]["pump"] for n in ("s1", "s2")] == ["OFF", "ON"]
+    st.orch.snap.update(phase="VERIFY", run={"nozzle": BOTH, "target": {"id": "T1"}})
+    s = bridge.states()
+    assert [s[f"nt532/t1/{n}/state"]["pump"] for n in ("s1", "s2")] == ["OFF", "OFF"]
 
 
 def test_events_not_consumed(bridge):

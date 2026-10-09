@@ -1,9 +1,11 @@
+import re
+import threading
 import time
 
 import numpy as np
 import pytest
 
-from nt532.decider.state_text import ACTIONS, BOTH, VERIFY, render_state
+from nt532.decider.state_text import ACTIONS, BOTH, VERIFY, nozzles_of, render_state
 from nt532.net.protocol import Aim, Fire, Stop, Telemetry
 from nt532.orchestrator import aiming
 from nt532.orchestrator.decide import Answer, HybridDecider, RuleDecider
@@ -170,7 +172,7 @@ def test_aiming_matches_sim_convention_and_limits():
     pivot, target = (0.3, 0.55, 0.33), (0.1, 0.8, 0.4)
     assert aiming.angles(pivot, target) == pytest.approx(aim_angles(pivot, target))
     lim = aiming.limits(SITE, "s1")
-    assert lim.ok(0, 0) and not lim.ok(60, 0) and not lim.ok(0, -40)
+    assert lim.ok(0, 0) and lim.ok(60, 0) and not lim.ok(80, 0) and not lim.ok(0, -40)
     assert aiming.reachable(SITE, "s1", pivot, 0.35, 0.3)
 
 
@@ -219,15 +221,114 @@ class BothDecider(RuleDecider):
         return ans
 
 
-def test_both_answer_falls_back_to_one_nozzle(station):
-    # chưa phun hai vòi cùng lúc: trạm không được sập, dùng vòi gần bia hơn và ghi cảnh báo
+class PumpSampler:
+    """Lấy mẫu `pumping` của sa bàn mỗi 50 ms, nhớ hai bơm có chạy cùng lúc lần nào không."""
+
+    def __init__(self, world) -> None:
+        self.world, self.overlap, self.seen = world, False, set()
+        self._halt = threading.Event()
+        self._thread = threading.Thread(target=self._run, daemon=True)
+
+    def _run(self) -> None:
+        while not self._halt.wait(0.05):
+            on = {n for n, v in self.world.truth()["pumping"].items() if v}
+            self.seen |= on
+            self.overlap |= len(on) == 2
+
+    def __enter__(self):
+        self._thread.start()
+        return self
+
+    def __exit__(self, *exc) -> None:
+        self._halt.set()
+        self._thread.join(2)
+
+
+def test_both_sprays_two_nozzles_together(station):
+    site, pivots = station.site, {}
+    for n in ("s1", "s2"):
+        pivots[n] = station.vision.nodes[n].to_world(aiming.pivot_offset(site))
+        assert aiming.reachable(site, n, pivots[n], 0.60, 0.30)  # cả hai vòi với tới bia
+    station.orch.decider = BothDecider()
+    with PumpSampler(station.world) as pumps:
+        station.world.ignite(0.60, 0.30, size="large")
+        assert wait_for(lambda: station.orch.runs, 90), "không có lượt nào hoàn tất"
+    run = station.orch.runs[0]
+    assert run.decisions[0]["answers"]["nozzle"]["answer"] == BOTH
+    assert run.nozzle == BOTH and run.outcome in ("extinguished", "human"), run.to_json()
+    assert pumps.overlap, "hai bơm không chạy cùng lúc"
+    assert {"s1", "s2"} <= set(station.world.marks)  # cả hai vòi đều đã phun
+    ev = station.events.since(0, 10_000)
+    vobs = [e["obs"]["verify"] for e in ev if e["kind"] == "decision" and e["obs"]["stage"] == "verify"]
+    assert vobs and all(v["nozzle"] == BOTH and v["status"] in ("ok", "fault") for v in vobs)
+    assert f"with {BOTH}" in next(d for d in run.decisions if d["stage"] == "verify")["state"]
+    # AIM + CORRECT lần lượt từng vòi: có vòng của cả hai vòi, mỗi vòng ghi tên vòi
+    assert {s["nozzle"] for s in run.shots} == {"s1", "s2"}
+    corr = [e["text"] for e in ev if e["kind"] == "correct"]
+    assert corr and all(re.match(r"vòng \d+: lệch [\d.]+ cm \(s[12]\)$", t) for t in corr)
+    # cả hai node cùng báo động nên có thể còn một lượt thứ hai (thường chỉ thấy thẻ cháy đen rồi bỏ qua)
+    assert wait_for(lambda: station.orch.phase.value == "IDLE" and not station.orch.snapshot()["queue"], 90)
+    time.sleep(0.3)
+    assert not any(station.world.truth()["lasers"].values())
+    assert not any(station.world.pumping.values())
+
+
+def test_both_with_one_nozzle_down_sprays_with_other(station):
+    station.world.set_online("s2", False)
     station.orch.decider = BothDecider()
     station.world.ignite(0.32, 0.30)
+    station.world.add_spike("s1")
     assert wait_for(lambda: station.orch.runs, 60), "không có lượt nào hoàn tất"
     run = station.orch.runs[0]
     assert run.decisions[0]["answers"]["nozzle"]["answer"] == BOTH
     assert run.nozzle == "s1" and run.outcome in ("extinguished", "human"), run.to_json()
-    assert any(e["kind"] == "safety" and "cả hai vòi" in e["text"] for e in station.events.since(0, 10_000))
+    ev = station.events.since(0, 10_000)
+    assert any(e["kind"] == "safety" and "s2" in e["text"] and "chỉ phun bằng s1" in e["text"] for e in ev)
+    assert "s1" in station.world.marks and "s2" not in station.world.marks
+    assert not any(s["nozzle"] == "s2" for s in run.shots)
+
+
+def test_both_drops_nozzle_that_fails_right_before_fire(station):
+    from nt532.net.link import LinkError
+
+    orch = station.orch
+    real_aim = orch._aim
+
+    def flaky(node, pan, tilt):  # s2 ngắm được lúc CORRECT nhưng mất liên lạc ngay lúc FIRE
+        if node == "s2" and orch.phase.value == "FIRE":
+            raise LinkError("s2 không trả lời lệnh ngắm")
+        return real_aim(node, pan, tilt)
+
+    orch._aim = flaky
+    orch.decider = BothDecider()
+    station.world.ignite(0.60, 0.30, size="large")
+    assert wait_for(lambda: orch.runs, 90), "không có lượt nào hoàn tất"
+    run = orch.runs[0]
+    assert run.nozzle == "s1" and run.outcome in ("extinguished", "human"), run.to_json()
+    ev = station.events.since(0, 10_000)
+    assert any(e["kind"] == "safety" and "s2" in e["text"] and "bỏ vòi" in e["text"] for e in ev)
+    vobs = [e["obs"]["verify"] for e in ev if e["kind"] == "decision" and e["obs"]["stage"] == "verify"]
+    assert vobs and all(v["nozzle"] == "s1" for v in vobs)
+    assert "s1" in station.world.marks and "s2" not in station.world.marks
+    assert {s["nozzle"] for s in run.shots} == {"s1", "s2"}  # s2 vẫn đã qua CORRECT trước đó
+
+
+def test_emergency_stop_during_dual_fire(station):
+    station.orch.decider = BothDecider()
+    station.world.ignite(0.60, 0.30, size="large")
+    assert wait_for(lambda: station.orch.phase.value == "FIRE", 90)
+    assert wait_for(lambda: any(station.world.pumping.values()), 3), "chưa bơm nào chạy"
+    station.orch.emergency_stop("thử hai vòi")
+    assert wait_for(lambda: station.orch.runs, 10)
+    assert station.orch.runs[0].outcome == "stopped"
+    time.sleep(0.3)
+    assert not any(station.world.truth()["lasers"].values())
+    assert not any(station.world.pumping.values())
+
+
+def test_nozzles_of():
+    assert nozzles_of("s1") == ["s1"] and nozzles_of("s2") == ["s2"]
+    assert nozzles_of(BOTH) == ["s1", "s2"]
 
 
 def test_emergency_stop_turns_everything_off(station):

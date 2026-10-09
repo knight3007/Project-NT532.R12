@@ -12,7 +12,7 @@ File kế hoạch gốc chưa sửa; các mục dưới đây ghi đè lên nó.
 | Số cụm pan–tilt, bơm, laser | 1 | 2 |
 | Vị trí vòi | Giữa bàn phía trước, cách bảng 65 cm | Tại hai vị trí sensor |
 | Tag | Tag sensor 5–6 cm và tag đế vòi 8 cm | Một tag 8 cm trên đế cố định của mỗi node |
-| Chọn vòi | Chỉ có một | Node nào báo động thì vòi của node đó phun |
+| Chọn vòi | Chỉ có một | Bộ quyết định chọn `s1`, `s2` hoặc cả hai cùng phun (mục dưới); không còn mặc định node báo động |
 | Hợp đồng CoAP | `/aim`, `/fire`, `/stop`, `/hb`, `/status` tới S3 | Giữ nguyên, gửi tới node H2 tương ứng qua Thread |
 
 ## Việc phát sinh
@@ -41,8 +41,18 @@ File kế hoạch gốc chưa sửa; các mục dưới đây ghi đè lên nó.
 
 Tránh dùng: GPIO8 và 9 (chân strapping, thường nối LED và nút BOOT), GPIO2, 3 và 25 (strapping), GPIO23 và 24 (UART0), GPIO26 và 27 (USB).
 
+## Phun một hay hai vòi
+
+Câu hỏi `nozzle` của bộ quyết định có ba đáp án: `s1`, `s2`, `both (s1 + s2)`. Mô hình Jev được dạy chọn `both` cho đám cháy lớn mà cả hai vòi khỏe và với tới bia; baseline luật không bao giờ trả `both`, chỉ chọn vòi đơn gần bia nhất (theo `dist3`). Orchestrator thực thi đúng đáp án:
+
+- Hai vòi bị chặn thì chỉ báo động (`alarm_only`). Một vòi bị chặn lúc quyết định thì ghi cảnh báo `safety` và chạy như lượt một vòi bằng vòi còn lại.
+- AIM và CORRECT làm lần lượt từng vòi (mỗi lúc chỉ một laser, vì `find_spot` so khung tắt/bật). Mỗi vòi giữ điểm ngắm và độ lệch riêng; mỗi vòng CORRECT ghi tên vòi.
+- Ngay trước FIRE, orchestrator gửi `/aim` cuối cho cả hai vòi rồi mới gửi hai lệnh `/fire pump` liền nhau để hai bơm chạy cùng lúc. Vòi nào lúc đó mất heartbeat, bị chặn hoặc không trả lời lệnh ngắm thì bị bỏ (cảnh báo `safety`) và lượt chạy tiếp bằng vòi còn lại; hết vòi thì FAULT như lượt một vòi.
+- VERIFY coi hai vòi là một lần phun: nhiệt sau phun lấy trung bình hai node, độ lệch `mark_cm` lấy giá trị lớn hơn của hai vòi, `nozzle` trong obs là `both (s1 + s2)`. `done`, `re-aim` (làm lại AIM + CORRECT cả hai vòi), `spray more` (phun lại, không ngắm lại) và `call human` xử lý như lượt một vòi, vẫn tối đa 3 lần.
+- Dừng khẩn cấp gửi `/stop` tới mọi node nên tắt cả hai bơm và laser.
+- Sa bàn ảo có lửa lớn (`SimWorld.ignite(size="large")`: thẻ to hơn, tín hiệu mạnh và lan xa hơn, nhiều máu hơn) để thử đường này. Trên phần cứng thật, phun cả hai bơm cùng lúc được thử ở tuần 4–5 cùng với nguồn (xem [kế hoạch](ke-hoach-trien-khai-NT532.md) và [trien-khai-phan-cung.md](trien-khai-phan-cung.md)).
+
 ## Chưa quyết
 
 - ESP32-S3 còn dùng làm đường lui hay bỏ hẳn.
 - Vị trí và độ cao đặt node để góc bắn tới bia không quá xiên và không che tầm nhìn camera.
-- Hai vòi có được phun cùng lúc hay không. Bộ quyết định đã có ứng viên `both (s1 + s2)`, nhưng orchestrator chưa phun hai vòi cùng lúc: gặp `both` thì dùng vòi gần bia hơn (theo `dist3`), vòi kia vẫn là dự phòng khi bị chặn, và ghi cảnh báo `safety`.

@@ -89,7 +89,7 @@ def test_match_no_warning(rig_factory):
 
 
 def test_mismatch_warns_and_narrower_wins(rig_factory):
-    r = rig_factory(limits=(-30.0, 60.0, -35.0, 45.0), hb_timeout_ms=600, max_fire_ms=1000)
+    r = rig_factory(limits=(-30.0, 80.0, -35.0, 45.0), hb_timeout_ms=600, max_fire_ms=1000)
     s = site()
     ev = EventLog()
     check_node_info(s, r.link, ev)
@@ -98,7 +98,7 @@ def test_mismatch_warns_and_narrower_wins(rig_factory):
     t = warns[0]["text"]
     assert "pan" in t and "heartbeat" in t and "fire_ms" in t
     lim = aiming.limits(s, "s1")
-    assert lim.pan == (-30.0, 50.0)  # hẹp hơn mỗi phía: -30 của node, 50 của site
+    assert lim.pan == (-30.0, 70.0)  # hẹp hơn mỗi phía: -30 của node, 70 của site
     assert lim.tilt == (-35.0, 45.0)
     assert not lim.ok(-40.0, 0.0)
 

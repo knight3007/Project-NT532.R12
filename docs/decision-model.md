@@ -18,7 +18,7 @@ Các chặn an toàn cứng (mất heartbeat, pose cũ, mục tiêu ngoài bản
 | `nozzle` | choice | `s1`, `s2`, thêm `both (s1 + s2)` khi quan sát cho thấy cả hai vòi khỏe (cùng ngưỡng heartbeat/pose với luật) và có một bia thấy mà cả hai với tới | `decide`, khi lửa thật, bia thật đang thấy và có vòi khỏe với tới được |
 | `after_verify` | choice | `done (fire out)`, `re-aim (spray missed)`, `spray more (hit, still burning)`, `call human (give up or fault)` | giai đoạn `verify`, sau mỗi lần phun |
 
-Ứng viên của `target` và `nozzle` thay đổi theo từng bản ghi (bia nào camera thấy; `both` chỉ khi quan sát cho phép). Trạm chạy thật chưa phun hai vòi cùng lúc: đáp án `both` được đổi thành vòi gần bia hơn, kèm cảnh báo (xem [thay-doi-hai-voi.md](thay-doi-hai-voi.md)). Kịch bản chỉ sinh bản ghi `verify` khi nhãn `action` là `spray`.
+Ứng viên của `target` và `nozzle` thay đổi theo từng bản ghi (bia nào camera thấy; `both` chỉ khi quan sát cho phép). Trạm thực thi đúng đáp án: `both` là AIM + CORRECT lần lượt từng vòi rồi bật hai bơm cùng lúc, lần verify coi như một lần phun; vòi bị chặn thì bỏ vòi đó và phun bằng vòi còn lại (xem [thay-doi-hai-voi.md](thay-doi-hai-voi.md)). Kịch bản chỉ sinh bản ghi `verify` khi nhãn `action` là `spray`.
 
 ## Cách sinh dữ liệu
 

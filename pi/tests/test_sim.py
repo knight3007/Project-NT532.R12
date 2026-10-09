@@ -88,6 +88,45 @@ def test_laser_aim_and_find_spot(vision, scene, cap):
         assert spot is not None and np.linalg.norm(spot - scene.spot(name)) < 0.01
 
 
+def test_large_fire_is_bigger_stronger_and_reaches_far_node():
+    from nt532.sim.scene import CARD_SIZE
+    from nt532.sim.world import SimWorld
+
+    w = SimWorld(seed=3)
+    hp = {}
+    for size in ("small", "large"):
+        hp[size] = [w.ignite(0.30, 0.30, size=size).hp for _ in range(30)]
+        w.clear()
+    assert 0.8 <= min(hp["small"]) and max(hp["small"]) <= 2.6
+    assert 1.6 <= min(hp["large"]) and 2.6 < max(hp["large"]) <= 5.2  # nhiều nước hơn để tắt
+    with pytest.raises(ValueError):
+        w.ignite(size="huge")
+
+    def far_temp(size):  # s2 ở X 0,90, lửa ở X 0,30: xa 0,6 m
+        w.clear()
+        s = w.ignite(0.30, 0.30, size=size)
+        s.level = 1.0
+        return s, float(np.mean([w.reading("s2")["temp"] for _ in range(30)]))
+
+    small, t_small = far_temp("small")
+    assert small.size == "small" and small.to_json()["size"] == "small"
+    assert w.scene.cards[small.card].size == CARD_SIZE
+    large, t_large = far_temp("large")
+    assert large.to_json()["size"] == "large" and large.decay > small.decay
+    assert w.scene.cards[large.card].size > 1.5 * CARD_SIZE
+    assert t_large - 27.0 > 2.5 * (t_small - 27.0)  # node xa thấy rõ hơn hẳn
+
+    from nt532.sim.world import OracleDetector
+
+    det = OracleDetector(w, seed=2)
+    box = [d.w for _ in range(20) for d in det(w.read())]  # thẻ lớn: hộp YOLO giả lớn hơn
+    assert box
+    w.clear()
+    w.ignite(0.30, 0.30)
+    box_small = [d.w for _ in range(20) for d in det(w.read())]
+    assert box_small and np.mean(box) > 1.5 * np.mean(box_small)
+
+
 def test_aim_convention():
     pivot = np.array([0.5, 0.55, 0.3])
     assert aim_angles(pivot, [0.5, 0.8, 0.3]) == (0.0, 0.0)
