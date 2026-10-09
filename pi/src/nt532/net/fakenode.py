@@ -23,7 +23,7 @@ from collections import deque
 from collections.abc import Callable
 from pathlib import Path
 
-from aiocoap import CHANGED, POST, Context, Message, Unreliable, resource
+from aiocoap import CHANGED, CONTENT, POST, Context, Message, Unreliable, resource
 from aiocoap.numbers.codes import BAD_REQUEST, SERVICE_UNAVAILABLE
 
 from ..config import REPO_ROOT
@@ -31,6 +31,7 @@ from ..config import REPO_ROOT
 TEST_DIR = REPO_ROOT / "firmware/sensor-h2/test"
 CORE_DIR = REPO_ROOT / "firmware/sensor-h2/main/core"
 PROTO_MAX = 96  # như proto.h
+PROTO_INFO_MAX = 160  # như proto.h
 TICK_S = 0.010  # như act_task.c
 CMD_Q_LEN = 16  # như act_task.c
 OUT_Q_LEN = 16  # như coap_node.c
@@ -79,6 +80,7 @@ class CoreLib:
             "shim_alert": (s, [p, s, cp, u32, cp, f32, f32]),
             "shim_status": (s, [p, s, u32, cp, f32, f32, cp, cp]),
             "shim_alarm_msg": (s, [p, s, cp, u32]),
+            "shim_info": (s, [p, s, cp, cp, ip(f32), u32, u32, i32]),
         }
         for name, (res, args) in sig.items():
             fn = getattr(so, name)
@@ -122,6 +124,12 @@ class CoreLib:
 
     def status(self, id_: int, st: str, pan: float, tilt: float, err: str | None, n: str) -> bytes:
         return self._gen(self.so.shim_status, id_, st.encode(), pan, tilt, err and err.encode(), n.encode())
+
+    def info(self, n: str, fw: str, lim: tuple, hb_ms: int, fire_ms: int, srp: bool) -> bytes:
+        buf = C.create_string_buffer(PROTO_INFO_MAX)
+        arr = (C.c_float * 4)(*lim)
+        k = self.so.shim_info(buf, PROTO_INFO_MAX, n.encode(), fw.encode(), arr, hb_ms, fire_ms, srp)
+        return buf.raw[:k]
 
     def alarm_msg(self, n: str, s: int) -> bytes:
         return self._gen(self.so.shim_alarm_msg, n.encode(), s)
@@ -283,8 +291,9 @@ class FakeNode:
                  limits: tuple[float, float, float, float] = (-50.0, 50.0, -35.0, 45.0),
                  hb_timeout_ms: int = 1500, max_fire_ms: int = 5000, transports: list[str] | None = None,
                  alarm_peers: list[str] | None = None, on_event: Callable[[str, str], None] | None = None,
-                 seed: int | None = None) -> None:
+                 seed: int | None = None, fw: str = "fake-1.0", srp: bool = True) -> None:
         self.name, self.bind, self.pi = name, bind, pi
+        self.fw, self.srp = fw, srp
         self.hw = hardware or RecordHardware()
         self.sensors = sensors or ConstSensors()
         self.telemetry_s, self.sample_s = telemetry_s, sample_s
@@ -366,6 +375,7 @@ class FakeNode:
         root = resource.Site()
         for path in ("aim", "fire", "stop", "hb", "alarm"):
             root.add_resource([path], _Cmd(self, path))
+        root.add_resource(["info"], _Info(self))
         try:
             self._ctx = await Context.create_server_context(root, bind=self.bind, transports=self.transports)
         except OSError as e:
@@ -375,6 +385,10 @@ class FakeNode:
         self._ready.set()
 
     # --- server (coap_node.c) ------------------------------------------------------------------
+
+    def info_payload(self) -> bytes:
+        """Nội dung `GET /info`, sinh bằng proto_info của firmware."""
+        return self._core.info(self.name, self.fw, self.limits, self.hb_timeout_ms, self.max_fire_ms, self.srp)
 
     async def handle(self, path: str, payload: bytes):
         """Handler của một request; trả mã CoAP như coap_node.c."""
@@ -509,6 +523,19 @@ class FakeNode:
             self._emit("tx", f"/{kind} không tới đích: {type(err).__name__}")
         elif not fut.result().code.is_successful():
             self._emit("tx", f"/{kind} bị trả {fut.result().code}")
+
+
+class _Info(resource.Resource):
+    def __init__(self, node: "FakeNode") -> None:
+        super().__init__()
+        self.node = node
+
+    async def render_get(self, request):
+        n = self.node
+        n.rx_count["info"] = n.rx_count.get("info", 0) + 1
+        if not n.online:
+            await n._closed.wait()  # đứt mạng: nằm im như các request khác
+        return Message(code=CONTENT, payload=n.info_payload())
 
 
 class _Cmd(resource.Resource):

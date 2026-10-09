@@ -150,7 +150,7 @@ Nối servo, laser, bơm theo bước 0, vẫn **chưa có nước** tới khi l
 - [ ] **Laser:** `/fire dev=laser` bật/tắt đúng; mặc định tắt khi cấp nguồn, khi mất `/hb`, khi `/stop`.
 - [ ] **Thử tầm phun và chốt đầu vòi** (có nước, hướng khay hứng): tia tới bảng ở khoảng cách thật. Yếu hoặc tỏa rộng: đầu vòi nhỏ hơn, đưa trụ gần bảng, bơm mạnh hơn (kế hoạch mục 9).
 - [ ] Phun thử không làm H2 reset, MQ-2 không nhảy bất thường (xem 10).
-- [ ] **`actuator.water_tilt_deg`** (đang `0.0`, "đo ở tuần 3"): ở khoảng cách làm việc, so điểm laser và điểm nước chạm; tilt cần cộng = góc ứng với độ rơi. Bảng bù theo khoảng cách ghi `calibration/water.yaml`; trạm hiện chỉ đọc một số `water_tilt_deg`. Làm riêng cho từng vòi nếu khác nhau (hiện chỉ có một giá trị chung).
+- [ ] **Góc bù tia nước, riêng từng vòi** (`actuator.nodes.s1/s2.water_tilt_deg`, mặc định lấy `actuator.water_tilt_deg` chung = `0.0`): tia nước rơi theo quỹ đạo nên điểm chạm thấp hơn điểm laser. Cách đo cho mỗi vòi: (1) đặt bia ở khoảng cách ngang d (đo từ tâm quay tới bia, mét); (2) `aim_point.py` ngắm bia, bắn laser, đánh dấu điểm laser; (3) bơm đúng thời gian như lúc chữa cháy, đo độ cao điểm nước chạm thấp hơn điểm laser Δz (m); (4) góc bù = atan(Δz / d) độ (dương, Pi cộng vào tilt); lặp 3 lần lấy trung bình. Nếu góc đổi rõ theo d thì đo ở 3 khoảng cách trở lên (ví dụ 0,5 / 1,0 / 1,5 m) và ghi `water_tilt_table: [[0.5, 2.0], [1.0, 4.5], [1.5, 8.0]]`; Pi nội suy theo khoảng cách ngang tâm quay -> bia (`aiming.water_tilt(site, node, distance_m)`), ngoài đầu bảng thì giữ giá trị đầu. Bảng thô lưu ở `calibration/water.yaml`.
 - [ ] **Cổng tuần 2 (5 cm):** cần camera và commissioning xong (mục 7) để Pi biết pose node và đo được vết. Gõ tọa độ một điểm trên bảng, `aim_point.py` tính góc từ tâm quay (pose tag + `pivot_offset`), kiểm giới hạn, gửi `/aim`, bắn laser và đo vết bằng camera:
 
   ```bash
@@ -281,7 +281,7 @@ Ghi số thật, kể cả khi không đạt. Thêm `--headless` khi chạy trê
 | `targeting.tolerance_m` | 0,03 (đề xuất) | 8 (chốt cuối tuần 3) | Cả nhóm |
 | `actuator.nodes.s1/s2.pan_limits`, `tilt_limits` | `null` | 6 | Hiếu |
 | `actuator.pivot_offset` | `[0.0, 0.0, 0.08]` (Hiếu đo) | 6 | Hiếu |
-| `actuator.water_tilt_deg` | 0,0 (đo ở tuần 3) | 6 | Hiếu |
+| `actuator.nodes.<n>.water_tilt_deg` / `water_tilt_table` (chung: `actuator.water_tilt_deg`) | 0,0 (đo ở tuần 3) | 6 | Hiếu |
 | `sensors.temp_alarm_c`, `sensors.gas_alarm` | 45, 600 (đo thực ở tuần 2) | 5 | Hậu, Hiếu |
 | `network.nodes.s1`, `s2` | `null` | 3 | Hậu |
 | `network.transports` | `null` (mặc định udp6) | chỉ đổi nếu Pi không có IPv6 | Hậu |
@@ -291,5 +291,5 @@ Cũng cần khớp trong **NVS/Kconfig của node** (không nằm trong site.yam
 ## Chênh lệch giữa tài liệu, cấu hình và code (cần sửa sau)
 
 - `firmware/sensor-h2/README.md` ("Thử tay từ Pi") ghi gói `libcoap-bin`; tên gói thực tế trên Bookworm chưa xác minh, `setup_pi.sh` thử `libcoap3-bin`, `libcoap2-bin`, `libcoap-bin`.
-- Giới hạn góc khai hai nơi (site.yaml `actuator.nodes` và NVS/Kconfig của node), phải đồng bộ tay. Mặc định hai bên hiện trùng (pan -50..50, tilt -35..45).
+- Giới hạn góc khai hai nơi (site.yaml `actuator.nodes` và NVS/Kconfig của node). Node tự báo qua `GET /info`; lúc khởi động Pi so với site.yaml, lệch thì cảnh báo trên dashboard và dùng phần hẹp hơn, nên sai lệch không còn gây lệnh bị từ chối âm thầm, nhưng vẫn nên sửa cho trùng. Mặc định hai bên hiện trùng (pan -50..50, tilt -35..45).
 - `firmware/README.md` mô tả RCP "USB-UART"; ví dụ `ot_rcp` mặc định dùng UART0 460800 baud, còn đường USB-Serial-JTAG là một nhánh cấu hình khác (rcp/README.md).

@@ -77,11 +77,15 @@ targeting:
 actuator:
   # Giới hạn để tia nước và laser không ra khỏi bảng; đo riêng cho từng node ở tuần 2.
   nodes:
-    s1: {pan_limits: null, tilt_limits: null}
-    s2: {pan_limits: null, tilt_limits: null}
+    # water_tilt_deg: góc bù tilt riêng của vòi này (bỏ thì dùng water_tilt_deg chung bên dưới).
+    # water_tilt_table: [[khoảng cách ngang tâm quay -> bia (m), độ], ...] nếu độ rơi của tia phụ thuộc xa gần;
+    # có bảng thì nội suy theo khoảng cách. Cách đo ở docs/trien-khai-phan-cung.md.
+    # Node tự báo giới hạn qua GET /info; hẹp hơn số ở đây thì Pi dùng số hẹp hơn và cảnh báo.
+    s1: {pan_limits: null, tilt_limits: null, water_tilt_deg: null, water_tilt_table: null}
+    s2: {pan_limits: null, tilt_limits: null, water_tilt_deg: null, water_tilt_table: null}
   # Tâm quay pan–tilt tính từ tâm tag đế, trong hệ tag (X phải, Y về mép trên tag, Z lên). Hiếu đo.
   pivot_offset: [0.0, 0.0, 0.08]
-  water_tilt_deg: 0.0          # góc cộng thêm vào tilt khi phun nước (quỹ đạo rơi); đo ở tuần 3
+  water_tilt_deg: 0.0          # giá trị chung khi vòi không có water_tilt_deg riêng (quỹ đạo rơi); đo ở tuần 3
   heartbeat_ms: 500
   aim_ttl_ms: 1500
   fire_ms: 2000

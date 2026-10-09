@@ -17,6 +17,7 @@ extern "C" {
 #endif
 
 #define PROTO_MAX 96  // bộ đệm đủ cho mọi bản tin; hợp đồng nhắm dưới ~60 byte
+#define PROTO_INFO_MAX 160  // riêng cho /info (GET một lần, không đi qua hàng đợi ra)
 
 typedef struct { uint32_t id; float pan, tilt; uint32_t ttl; } proto_aim_t;
 typedef struct { uint32_t id; act_dev_t dev; uint32_t ms; } proto_fire_t;
@@ -39,6 +40,10 @@ size_t proto_status(char *buf, size_t cap, uint32_t id, const char *st, float pa
                     const char *n);
 // /alarm: {"n","s"}
 size_t proto_alarm(char *buf, size_t cap, const char *n, uint32_t s);
+// /info (GET, một lần khi Pi khởi động): {"n","fw","pan":[lo,hi],"tilt":[lo,hi],"hb","fire","srp":0|1}.
+// Dài hơn 60 byte (khoảng 95), nên bộ đệm riêng PROTO_INFO_MAX; hb là hb_timeout_ms, fire là max_fire_ms.
+size_t proto_info(char *buf, size_t cap, const char *n, const char *fw, float pan_lo, float pan_hi, float tilt_lo,
+                  float tilt_hi, uint32_t hb_ms, uint32_t fire_ms, bool srp);
 
 #ifdef __cplusplus
 }

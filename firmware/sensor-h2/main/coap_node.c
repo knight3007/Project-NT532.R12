@@ -11,7 +11,9 @@
 #include "freertos/queue.h"
 #include "freertos/task.h"
 #include "hal_esp.h"
+#include "esp_app_desc.h"
 #include "net_ot.h"
+#include "node_cfg.h"
 #include "proto.h"
 #include "sdkconfig.h"
 #include "sensors.h"
@@ -154,10 +156,38 @@ static void h_alarm(coap_resource_t *r, coap_session_t *s, const coap_pdu_t *req
     coap_pdu_set_code(resp, COAP_RESPONSE_CODE_CHANGED);
 }
 
+// GET /info: Pi hỏi một lần khi khởi động để so giới hạn góc và nhịp heartbeat với site.yaml.
+static void h_info(coap_resource_t *r, coap_session_t *s, const coap_pdu_t *req, const coap_string_t *q,
+                   coap_pdu_t *resp)
+{
+    const node_cfg_t *c = node_cfg();
+    char buf[PROTO_INFO_MAX];
+#ifdef CONFIG_NT532_SRP
+    const bool srp = true;
+#else
+    const bool srp = false;
+#endif
+    size_t n = proto_info(buf, sizeof buf, s_node, esp_app_get_description()->version, c->pan_min, c->pan_max,
+                          c->tilt_min, c->tilt_max, c->hb_timeout_ms, c->max_fire_ms, srp);
+    if (n == 0) {
+        coap_pdu_set_code(resp, COAP_RESPONSE_CODE_INTERNAL_ERROR);
+        return;
+    }
+    coap_pdu_set_code(resp, COAP_RESPONSE_CODE_CONTENT);
+    coap_add_data(resp, n, (const uint8_t *)buf);  // libcoap sao dữ liệu vào PDU
+}
+
 static void add_post(coap_context_t *ctx, const char *path, coap_method_handler_t h)
 {
     coap_resource_t *res = coap_resource_init(coap_make_str_const(path), 0);
     coap_register_handler(res, COAP_REQUEST_POST, h);
+    coap_add_resource(ctx, res);
+}
+
+static void add_get(coap_context_t *ctx, const char *path, coap_method_handler_t h)
+{
+    coap_resource_t *res = coap_resource_init(coap_make_str_const(path), 0);
+    coap_register_handler(res, COAP_REQUEST_GET, h);
     coap_add_resource(ctx, res);
 }
 
@@ -256,6 +286,7 @@ static bool server_up(void)
     add_post(s_ctx, "stop", h_stop);
     add_post(s_ctx, "hb", h_hb);
     add_post(s_ctx, "alarm", h_alarm);
+    add_get(s_ctx, "info", h_info);
     coap_register_response_handler(s_ctx, on_response);
     coap_register_nack_handler(s_ctx, on_nack);
     // CHƯA KIỂM: lwIP có nhận ff03::1 trên netif OpenThread sau khi join bằng setsockopt hay không

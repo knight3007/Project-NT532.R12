@@ -508,3 +508,36 @@ size_t proto_alarm(char *buf, size_t cap, const char *n, uint32_t s)
     put(&o, "}");
     return finish(&o);
 }
+
+size_t proto_info(char *buf, size_t cap, const char *n, const char *fw, float pan_lo, float pan_hi, float tilt_lo,
+                  float tilt_hi, uint32_t hb_ms, uint32_t fire_ms, bool srp)
+{
+    out_t o;
+    if (!begin(&o, buf, cap)) {
+        return 0;
+    }
+    key(&o, "n", true);
+    put_qstr(&o, n);
+    key(&o, "fw", false);
+    put_qstr(&o, fw);
+    key(&o, "pan", false);
+    put(&o, "[");
+    put_f(&o, pan_lo);
+    put(&o, ",");
+    put_f(&o, pan_hi);
+    put(&o, "]");
+    key(&o, "tilt", false);
+    put(&o, "[");
+    put_f(&o, tilt_lo);
+    put(&o, ",");
+    put_f(&o, tilt_hi);
+    put(&o, "]");
+    key(&o, "hb", false);
+    put_u32(&o, hb_ms);
+    key(&o, "fire", false);
+    put_u32(&o, fire_ms);
+    key(&o, "srp", false);
+    put(&o, srp ? "1" : "0");
+    put(&o, "}");
+    return finish(&o);
+}

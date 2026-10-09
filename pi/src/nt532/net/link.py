@@ -10,7 +10,7 @@ import threading
 import time
 from collections.abc import Callable
 
-from .protocol import Aim, Fire, Status, Stop
+from .protocol import Aim, Fire, Info, Status, Stop
 
 FINAL = ("reached", "done", "rejected", "fault")
 
@@ -55,6 +55,15 @@ class NodeLink:
     def heartbeat(self, node: str) -> None:
         """`/hb` (không xác nhận, payload rỗng)."""
         self._send(node, "hb", None)
+
+    def info(self, node: str, timeout: float = 2.0) -> Info | None:
+        """`GET /info` của node; None nếu link không hỗ trợ (sa bàn ảo trong bộ nhớ). Lỗi mạng ném LinkError."""
+        if node not in self.nodes:
+            raise LinkError(f"không biết node {node!r}")
+        return self._get_info(node, timeout)
+
+    def _get_info(self, node: str, timeout: float) -> Info | None:
+        return None
 
     def _post(self, node: str, path: str, msg) -> None:
         if node not in self.nodes:

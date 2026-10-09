@@ -153,6 +153,35 @@ class Status:
         return s
 
 
+@dataclass(frozen=True)
+class Info:
+    """`GET /info`: node tự mô tả. fw phiên bản firmware, pan/tilt giới hạn góc (độ), hb thời gian không
+    nghe heartbeat thì tắt bơm và laser (ms), fire thời gian bật tối đa mỗi lệnh (ms), srp có đăng ký SRP."""
+
+    n: str
+    fw: str
+    pan: tuple[float, float]
+    tilt: tuple[float, float]
+    hb: int
+    fire: int
+    srp: bool
+
+    @staticmethod
+    def _range(o: dict, key: str) -> tuple[float, float]:
+        v = o.get(key)
+        ok = isinstance(v, list) and len(v) == 2 and all(
+            isinstance(x, (int, float)) and not isinstance(x, bool) for x in v)
+        if not ok or v[0] > v[1]:
+            raise PayloadError(f"key {key!r} phải là [thấp, cao], nhận {v!r}")
+        return float(v[0]), float(v[1])
+
+    @classmethod
+    def parse(cls, raw: bytes | str) -> "Info":
+        o = _load(raw)
+        return cls(_get(o, "n", str), _get(o, "fw", str), cls._range(o, "pan"), cls._range(o, "tilt"),
+                   _get(o, "hb", int), _get(o, "fire", int), bool(_get(o, "srp", int)))
+
+
 class Deduper:
     """Chống lặp theo khóa (ví dụ (n, s) của `/a`), nhớ tối đa `size` khóa trong `window_s` giây.
 

@@ -146,6 +146,7 @@ static void emit(int verbose, const char *tag, const char *s)
 
 static void p_gen(int verbose)
 {
+    char b2[PROTO_INFO_MAX];
     char b[PROTO_MAX];
     size_t n;
 
@@ -188,6 +189,16 @@ static void p_gen(int verbose)
     proto_alarm_t al;
     CHECK(proto_parse_alarm(b, n, &al) && al.s == 124);
     CHECK_STR(al.n, "s1");
+
+    n = proto_info(b2, sizeof b2, "s1", "v1.2-3-gabc1234", -50, 50, -35, 45, 1500, 5000, true);
+    CHECK_STR(b2, "{\"n\":\"s1\",\"fw\":\"v1.2-3-gabc1234\",\"pan\":[-50,50],\"tilt\":[-35,45],\"hb\":1500,\"fire\":5000,\"srp\":1}");
+    CHECK_EQ(n, strlen(b2));
+    emit(verbose, "I", b2);
+    n = proto_info(b2, sizeof b2, "s2", "1.0", -47.5f, 50, -35, 40.25f, 1500, 3000, false);
+    CHECK_STR(b2, "{\"n\":\"s2\",\"fw\":\"1.0\",\"pan\":[-47.5,50],\"tilt\":[-35,40.25],\"hb\":1500,\"fire\":3000,\"srp\":0}");
+    CHECK_EQ(proto_info(b2, sizeof b2, "s1", "x\"y", 0, 1, 0, 1, 1, 1, false), 0);
+    CHECK_EQ(proto_info(b2, 20, "s1", "1.0", 0, 1, 0, 1, 1, 1, false), 0);  // không vừa
+    CHECK_EQ(proto_info(b2, sizeof b2, "s1", "1.0", (float)NAN, 1, 0, 1, 1, 1, false), 0);
 
     // không hữu hạn -> lỗi (0)
     CHECK_EQ(proto_alert(b, sizeof b, "s1", 1, "alert", (float)NAN, 1), 0);

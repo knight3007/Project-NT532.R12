@@ -172,3 +172,8 @@ size_t shim_status(char *buf, size_t cap, uint32_t id, const char *st, float pan
     return proto_status(buf, cap, id, st, pan, tilt, err, n);
 }
 size_t shim_alarm_msg(char *buf, size_t cap, const char *n, uint32_t s) { return proto_alarm(buf, cap, n, s); }
+size_t shim_info(char *buf, size_t cap, const char *n, const char *fw, const float *lim, uint32_t hb_ms,
+                 uint32_t fire_ms, int srp)
+{
+    return proto_info(buf, cap, n, fw, lim[0], lim[1], lim[2], lim[3], hb_ms, fire_ms, srp != 0);
+}

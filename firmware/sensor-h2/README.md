@@ -8,6 +8,7 @@ Mỗi ESP32-H2 Super Mini vừa đọc cảm biến vừa điều khiển một 
 
 - Mỗi giây đọc MQ-2 (ADC) và SHT31 (I2C). Vượt ngưỡng 3 mẫu liên tiếp thì còi bật, gửi `/a` (`alert`) cho Pi và `/alarm` multicast `ff03::1`; xuống dưới ngưỡng 5 mẫu thì tắt còi, gửi `/a` (`clear`). Mỗi `NT532_TELEMETRY_S` giây (mặc định 1) gửi `/t`: bộ quyết định dùng 5 mẫu cuối mỗi node, giống bộ kịch bản lấy mẫu 1 Hz.
 - Nhận `/aim`, `/fire`, `/stop`, `/hb` từ Pi, điều khiển servo, bơm, laser, gửi `/status` về Pi. `/hb` luôn được trả `2.04` (NON) vì Pi đo tuổi heartbeat bằng câu trả lời đó.
+- `GET /info` trả JSON tự mô tả (`{"n","fw","pan":[lo,hi],"tilt":[lo,hi],"hb","fire","srp"}`, khoảng 95 byte nên dùng bộ đệm `PROTO_INFO_MAX` 160 riêng). Pi gọi một lần khi khởi động để so giới hạn góc và nhịp heartbeat với site.yaml. `fw` lấy từ `esp_app_get_description()->version` (`esp_app_desc.h`, component `esp_app_format`); đặt `PROJECT_VER` trong CMakeLists gốc hoặc dùng git describe mặc định của IDF.
 - Nhận `/alarm` từ node kia thì nháy còi `NT532_REMOTE_ALARM_S` giây, không cần Pi.
 - Số đọc gas `g` là **giá trị ADC thô 12 bit (0..4095) trên chân sau cầu phân áp**, không đổi ra ppm. Ngưỡng 600 trong `config/site.yaml` cùng đơn vị này; chỉnh lại sau khi đo thực.
 
@@ -110,6 +111,7 @@ Cài `libcoap-bin` trên Pi (`coap-client`). Thay `ADDR` bằng địa chỉ nod
 ADDR="fd11:22:33:0:aaaa:bbbb:cccc:dddd"
 coap-client -m post -e '{"id":1,"pan":10,"tilt":0,"ttl":1500}' "coap://[$ADDR]/aim"
 coap-client -m post -N -e '' "coap://[$ADDR]/hb"                     # NON, phải thấy 2.04 trả về
+coap-client -m get "coap://[$ADDR]/info"                              # JSON tự mô tả: n, fw, pan, tilt, hb, fire, srp
 coap-client -m post -e '{"id":1,"dev":"laser","ms":1000}' "coap://[$ADDR]/fire"   # chỉ nhận sau khi aim cùng id "reached"
 coap-client -m post -e '{"id":2}' "coap://[$ADDR]/stop"
 ```

@@ -12,11 +12,11 @@ import ipaddress
 import threading
 from collections.abc import Callable
 
-from aiocoap import CHANGED, POST, Context, Message, Unreliable, resource
+from aiocoap import CHANGED, GET, POST, Context, Message, Unreliable, resource
 from aiocoap.numbers.codes import BAD_REQUEST
 
 from .link import LinkError, NodeLink
-from .protocol import Alert, Deduper, PayloadError, Status, Telemetry, dumps
+from .protocol import Alert, Deduper, Info, PayloadError, Status, Telemetry, dumps
 
 HB_REPLY_S = 1.0  # chờ trả lời /hb tối đa; trễ hơn thì coi như mất nhịp đó
 
@@ -131,6 +131,22 @@ class CoapLink(NodeLink):
         except Exception as e:  # noqa: BLE001 - mọi lỗi mạng đều thành LinkError cho orchestrator
             raise LinkError(f"gửi /{path} tới {node} lỗi: {type(e).__name__}: {e}") from None
         self.on_rx(node)
+
+    def _get_info(self, node: str, timeout: float) -> Info:
+        req = Message(code=GET, uri=f"coap://{self._host(node)}/info")
+        fut = asyncio.run_coroutine_threadsafe(self._request(req, timeout), self._loop)
+        try:
+            resp = fut.result(timeout + 1)
+        except Exception as e:  # noqa: BLE001 - mọi lỗi mạng đều thành LinkError
+            raise LinkError(f"GET /info từ {node} lỗi: {type(e).__name__}: {e}") from None
+        if not resp.code.is_successful():
+            raise LinkError(f"GET /info từ {node} trả {resp.code}")
+        try:
+            info = Info.parse(resp.payload)
+        except PayloadError as e:
+            raise LinkError(f"/info của {node} sai dạng: {e}") from None
+        self.on_rx(node)
+        return info
 
     def _hb_reply(self, node: str, fut) -> None:
         if not fut.cancelled() and fut.exception() is None:

@@ -14,8 +14,9 @@ from functools import partial
 from pathlib import Path
 
 from .config import REPO_ROOT, load_site
-from .net.link import HeartbeatSender, NodeLink
+from .net.link import HeartbeatSender, LinkError, NodeLink
 from .net.protocol import Deduper
+from .orchestrator import aiming
 from .orchestrator.decide import JevDecider, make_decider
 from .orchestrator.events import EventLog
 from .orchestrator.frames import FrameHub
@@ -210,6 +211,30 @@ def _coap_nodes(world, events):
     return link, fakes
 
 
+def check_node_info(site: dict, link: NodeLink, events: EventLog, timeout: float = 2.0) -> None:
+    """Hỏi `GET /info` từng node, so với site.yaml và ghi cảnh báo nếu lệch. Giới hạn góc của node hẹp hơn
+    site.yaml thì thu site về phần chung (node vẫn sẽ từ chối phần ngoài, Pi không nên thử). Node không
+    trả lời chỉ là cảnh báo: vẫn chạy với site.yaml."""
+    for n in link.nodes:
+        try:
+            info = link.info(n, timeout)
+        except LinkError as e:
+            events.emit("config", f"node {n}: không lấy được /info ({e}), dùng giới hạn trong site.yaml",
+                        level="warn")
+            continue
+        if info is None:
+            continue
+        diff = aiming.check_info(site, n, info)
+        narrowed = aiming.narrow_limits(site, n, info)
+        if diff:
+            tail = f"; Pi dùng phần chung: pan {list(aiming.limits(site, n).pan)}, tilt " \
+                   f"{list(aiming.limits(site, n).tilt)}" if narrowed else ""
+            events.emit("config", f"node {n} (fw {info.fw}) lệch site.yaml: " + "; ".join(diff) + tail,
+                        level="warn")
+        else:
+            events.emit("config", f"node {n}: fw {info.fw}, /info khớp site.yaml")
+
+
 def resolve_nodes(net: dict, events: EventLog) -> dict[str, str]:
     """Địa chỉ node: tìm qua SRP (network.discover: srp, mặc định) rồi bù bằng network.nodes; `static` chỉ dùng
     network.nodes. Mỗi node ghi một sự kiện cho biết địa chỉ đến từ đâu."""
@@ -273,6 +298,7 @@ def build_real(decider: str = "rules", jev_run: str = "jev1", tau: float = 0.8,
                decider_timeout=decider_timeout)
     link.on_telemetry = st.sensors.add
     link.on_alert = st.orch.on_alert
+    check_node_info(site, link, events)
     if vision.blockers():
         events.emit("vision", "; ".join(vision.blockers()), level="warn")
     return st

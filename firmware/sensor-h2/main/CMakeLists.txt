@@ -15,7 +15,7 @@ idf_component_register(
         "."
         "core"
     PRIV_REQUIRES
-        nvs_flash esp_event esp_netif esp_timer vfs openthread
+        esp_app_format nvs_flash esp_event esp_netif esp_timer vfs openthread
         esp_driver_gpio esp_driver_ledc esp_driver_i2c esp_adc
         espressif__coap
 )

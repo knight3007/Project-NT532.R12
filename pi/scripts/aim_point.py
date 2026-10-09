@@ -9,7 +9,7 @@
 (pan, tilt) từ tâm quay của node (pose tag + actuator.pivot_offset), kiểm giới hạn góc (ngoài
 giới hạn thì báo và bỏ qua, không gửi /aim), /aim, chờ reached, bật laser laser_ms, đo vết bằng
 ảnh tắt/bật laser rồi so với điểm đích. Qua nếu lệch không quá --gate-cm (mặc định 5 cm).
---no-laser chỉ quay node, không đo. --water cộng actuator.water_tilt_deg vào tilt như lúc phun
+--no-laser chỉ quay node, không đo. --water cộng góc bù tilt của vòi (water_tilt_table/water_tilt_deg) vào tilt như lúc phun
 (vết laser sẽ nằm cao hơn đích đúng góc đó). Luôn gửi /stop khi thoát. Không chạy orchestrator.
 Ghi thêm vào runs/measure/aim_<thời điểm>.csv (đổi bằng --out).
 """
@@ -62,7 +62,7 @@ def measure_point(st, node: str, x: float, z: float, args) -> dict:
     pivot = st.vision.nodes[node].to_world(aiming.pivot_offset(site))
     pan, tilt = aiming.angles(pivot, (x, site["board"]["plane_y"], z))
     if args.water:
-        tilt += aiming.water_tilt(site)
+        tilt += aiming.water_tilt(site, node, aiming.horizontal_distance(pivot, (x, site["board"]["plane_y"], z)))
     row["pan"], row["tilt"] = round(pan, 2), round(tilt, 2)
     if not aiming.limits(site, node).ok(pan, tilt):
         row["note"] = "ngoài giới hạn góc, bỏ qua"
