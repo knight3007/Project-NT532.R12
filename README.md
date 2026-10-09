@@ -74,6 +74,8 @@ Chạy cả trạm kèm dashboard trên sa bàn ảo: `uv run python scripts/run
 
 Orchestrator dùng phần thị giác qua lớp `Vision`, mô tả ở [docs/vision-api.md](docs/vision-api.md). Cách đưa lên Pi và chạy các bài đo ở [docs/trien-khai-pi.md](docs/trien-khai-pi.md). Dùng điện thoại làm camera (RTMP qua mediamtx, đo độ trễ) ở [docs/camera-dien-thoai.md](docs/camera-dien-thoai.md).
 
+Thứ tự dựng phần cứng khi triển khai (checklist từng bước, sự cố thường gặp): [docs/trien-khai-phan-cung.md](docs/trien-khai-phan-cung.md).
+
 Dataset và nguồn tải ghi ở [docs/datasets.md](docs/datasets.md).
 
 ## Firmware

@@ -57,7 +57,7 @@ menu "NT532 node"
             default 180
         config NT532_TELEMETRY_S
             int "Chu kỳ gửi /t (giây)"
-            default 5
+            default 1
             range 1 60
         config NT532_REMOTE_ALARM_S
             int "Thời gian nháy còi khi nhận /alarm từ node kia (giây)"

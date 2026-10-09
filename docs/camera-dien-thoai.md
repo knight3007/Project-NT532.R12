@@ -81,7 +81,7 @@ camera:
 Thông số nội tại của webcam không dùng lại cho điện thoại. Hiệu chuẩn lại trên stream, giữ đúng độ phân giải và ống kính (không đổi sang ống góc rộng hay zoom giữa chừng):
 
 ```bash
-uv run python scripts/calibrate_camera.py --source rtsp://127.0.0.1:8554/cam
+uv run python scripts/calibrate_camera.py --capture   # đọc camera.stream.url trong site.yaml
 ```
 
 ## 6. Đo độ trễ

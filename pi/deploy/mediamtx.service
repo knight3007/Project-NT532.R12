@@ -1,0 +1,15 @@
+# Cài: sudo cp mediamtx.service /etc/systemd/system/ && sudo systemctl enable --now mediamtx
+# (hoặc chạy pi/deploy/setup_pi.sh --install-services, nó tự sửa User và đường dẫn cho khớp).
+[Unit]
+Description=mediamtx (camera điện thoại: RTMP vào, RTSP ra)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=pi
+ExecStart=/home/pi/mediamtx/mediamtx /home/pi/nt532/pi/deploy/mediamtx.yml
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

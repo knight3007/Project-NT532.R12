@@ -6,7 +6,7 @@ Mỗi ESP32-H2 Super Mini vừa đọc cảm biến vừa điều khiển một 
 
 ## Node làm gì
 
-- Mỗi giây đọc MQ-2 (ADC) và SHT31 (I2C). Vượt ngưỡng 3 mẫu liên tiếp thì còi bật, gửi `/a` (`alert`) cho Pi và `/alarm` multicast `ff03::1`; xuống dưới ngưỡng 5 mẫu thì tắt còi, gửi `/a` (`clear`). Mỗi `NT532_TELEMETRY_S` giây (mặc định 5) gửi `/t`.
+- Mỗi giây đọc MQ-2 (ADC) và SHT31 (I2C). Vượt ngưỡng 3 mẫu liên tiếp thì còi bật, gửi `/a` (`alert`) cho Pi và `/alarm` multicast `ff03::1`; xuống dưới ngưỡng 5 mẫu thì tắt còi, gửi `/a` (`clear`). Mỗi `NT532_TELEMETRY_S` giây (mặc định 1) gửi `/t`: bộ quyết định dùng 5 mẫu cuối mỗi node, giống bộ kịch bản lấy mẫu 1 Hz.
 - Nhận `/aim`, `/fire`, `/stop`, `/hb` từ Pi, điều khiển servo, bơm, laser, gửi `/status` về Pi. `/hb` luôn được trả `2.04` (NON) vì Pi đo tuổi heartbeat bằng câu trả lời đó.
 - Nhận `/alarm` từ node kia thì nháy còi `NT532_REMOTE_ALARM_S` giây, không cần Pi.
 - Số đọc gas `g` là **giá trị ADC thô 12 bit (0..4095) trên chân sau cầu phân áp**, không đổi ra ppm. Ngưỡng 600 trong `config/site.yaml` cùng đơn vị này; chỉnh lại sau khi đo thực.

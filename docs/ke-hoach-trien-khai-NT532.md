@@ -1,3 +1,6 @@
+> Một phần kế hoạch này (một vòi trên ESP32-S3 qua Wi-Fi) đã bị thay bởi [thay-doi-hai-voi.md](thay-doi-hai-voi.md): hai vòi trên hai node H2 qua Thread.
+> Thứ tự dựng phần cứng nằm ở [trien-khai-phan-cung.md](trien-khai-phan-cung.md).
+
 # Kế hoạch triển khai chi tiết NT532
 
 Oct 2, 2026 · @hunn

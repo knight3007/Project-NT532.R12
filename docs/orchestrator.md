@@ -97,7 +97,7 @@ Trên sa bàn ảo, luật để lộ đúng hai điểm yếu đã đo ở `doc
 
 ## Việc còn mở, cần chốt với Hậu và Hiếu
 
-- **Telemetry cho mô hình:** `obs` dùng 5 mẫu cuối mỗi node (giống bộ kịch bản, 1 Hz). Kế hoạch để `/t` mỗi 5–10 s thì 5 mẫu trải 25–50 s. Đề xuất: node gửi `/t` 1 Hz khi gần ngưỡng hoặc đang báo động.
+- **Telemetry cho mô hình:** `obs` dùng 5 mẫu cuối mỗi node (giống bộ kịch bản, 1 Hz), nên firmware gửi `/t` mỗi 1 s (`NT532_TELEMETRY_S`, khoảng 55 byte/s mỗi node trên Thread). Gửi thưa hơn thì 5 mẫu trải dài hơn lúc train.
 - **Heartbeat:** `hb_ms` là thời gian từ lần cuối Pi nghe thấy node (bất kỳ bản tin nào, ACK của lệnh CON, hoặc trả lời `/hb`). `/hb` gửi NON để không bị gửi lại, nhưng node phải trả 2.04 cho mỗi `/hb`: `CoapLink` chờ trả lời đó tối đa 1 s và coi là node còn sống. Không trả lời thì `hb_ms` chỉ được làm mới bởi `/t` (5–10 s) và vòi luôn bị chặn vì quá 1,5 s.
 - **`/status` không có tên node:** Pi suy ra từ địa chỉ nguồn (`network.nodes`). Thêm key `n` (đã hỗ trợ, tùy chọn) thì chắc hơn.
 - **Laser:** dùng `/fire` với `dev=laser` và `ms`, cùng điều kiện "aim cùng id đã reached" như bơm.

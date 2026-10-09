@@ -1,0 +1,25 @@
+# Trạm NT532 trên Pi: orchestrator + CoAP server :5683 + dashboard :8080.
+# Cài: sudo cp nt532-station.service /etc/systemd/system/ && sudo systemctl enable --now nt532-station
+# (hoặc pi/deploy/setup_pi.sh --install-services). Xem log: journalctl -u nt532-station -f
+# Nhật ký sự kiện còn ghi vào runs/station/*.jsonl.
+[Unit]
+Description=Trạm NT532 (run_station.py)
+After=network-online.target mediamtx.service otbr-agent.service
+Wants=network-online.target mediamtx.service
+# otbr-agent chỉ "Wants" mềm: không có OTBR (thử trên bàn) thì trạm vẫn lên được.
+Wants=otbr-agent.service
+
+[Service]
+User=pi
+WorkingDirectory=/home/pi/nt532/pi
+# --no-sync: không để uv gỡ ncnn/torch đã cài tay (xem docs/trien-khai-pi.md mục 2).
+# Nguồn camera theo camera.stream.url trong config/site.yaml; thêm --source ... nếu cần ghi đè.
+ExecStart=/home/pi/.local/bin/uv run --no-sync python scripts/run_station.py --decider rules
+# Ctrl+C/SIGTERM làm run_station gửi /stop tới mọi node trước khi thoát; chờ đủ lâu cho việc đó.
+KillSignal=SIGINT
+TimeoutStopSec=15
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
