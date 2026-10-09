@@ -4,8 +4,8 @@ Dùng để thử Pi qua UDP thật khi chưa có H2: payload do bộ parse/tạ
 state machine chấp hành và logic báo động cũng là mã C của firmware (biên dịch thành libcore.so,
 gọi qua ctypes và lớp mỏng firmware/sensor-h2/test/core_shim.c). Phần Python chỉ làm việc của lớp
 ESP-IDF: coap_node.c (tài nguyên, mã trả lời, gửi /status /a /t /alarm), act_task.c (hàng đợi lệnh
-một luồng, tick 10 ms, /stop lên đầu hàng và tắt phần cứng ngay trong handler) và sensors.c
-(mẫu 1 Hz, báo động, /t mỗi N mẫu).
+một luồng chỉ thức khi có lệnh hoặc tới hạn act_next_ms, /hb chỉ ghi mốc, /stop lên đầu hàng và tắt
+phần cứng ngay trong handler) và sensors.c (mẫu 1 Hz, báo động, /t mỗi N mẫu).
 
 `Hardware` là nơi chấp hành chạy ra: `RecordHardware` chỉ ghi lại, `SimWorldHardware` điều khiển
 SimWorld. Nguồn cảm biến là đối tượng có `read() -> (nhiệt, gas, ẩm | None)`.
@@ -32,7 +32,7 @@ TEST_DIR = REPO_ROOT / "firmware/sensor-h2/test"
 CORE_DIR = REPO_ROOT / "firmware/sensor-h2/main/core"
 PROTO_MAX = 96  # như proto.h
 PROTO_INFO_MAX = 160  # như proto.h
-TICK_S = 0.010  # như act_task.c
+ACT_IDLE = 0xFFFFFFFF  # như actuator.h: act_next_ms không có hạn nào
 CMD_Q_LEN = 16  # như act_task.c
 OUT_Q_LEN = 16  # như coap_node.c
 DEV_NAMES = ("pump", "laser")
@@ -69,6 +69,7 @@ class CoreLib:
             "shim_act_stop": (None, [p, u32, u32]),
             "shim_act_hb": (None, [p, u32]),
             "shim_act_tick": (None, [p, u32]),
+            "shim_act_next_ms": (u32, [p, u32]),
             "shim_act_all_off": (None, [p]),
             "shim_alarm_new": (p, [f32, f32, u32]),
             "shim_alarm_free": (None, [p]),
@@ -256,6 +257,7 @@ class _CmdQueue:
     def __init__(self) -> None:
         self._q: deque = deque()
         self._cv = threading.Condition()
+        self._closed = False
 
     def put(self, cmd, front: bool = False) -> bool:
         with self._cv:
@@ -265,11 +267,18 @@ class _CmdQueue:
             self._cv.notify()
             return True
 
-    def get(self, timeout: float):
+    def get(self, timeout: float | None):
+        """Chờ tối đa `timeout` giây (None: tới khi có lệnh hoặc `close`)."""
         with self._cv:
-            if not self._q:
+            if not self._q and not self._closed:
                 self._cv.wait(timeout)
             return self._q.popleft() if self._q else None
+
+    def close(self) -> None:
+        """Đánh thức luồng đang chờ; từ đó `get` không chờ nữa (dừng node)."""
+        with self._cv:
+            self._closed = True
+            self._cv.notify_all()
 
 
 def free_port() -> int:
@@ -320,6 +329,7 @@ class FakeNode:
         self._rng = random.Random(seed)
         self._core = CoreLib.get()
         self._cmds = _CmdQueue()
+        self._hb = (0, 0)  # (số /hb đã nhận, mốc ms của cái cuối): act_task_hb, luồng chấp hành đọc khi thức
         self._halt = threading.Event()
         self._t0 = time.monotonic()
         self._seq = 0
@@ -360,6 +370,7 @@ class FakeNode:
         if self._halt.is_set():
             return
         self._halt.set()
+        self._cmds.close()  # luồng chấp hành có thể đang ngủ không hạn
         if self._ctx is not None:
             self._loop.call_soon_threadsafe(self._closed.set)
             asyncio.run_coroutine_threadsafe(self._shutdown(), self._loop).result(5)
@@ -409,8 +420,8 @@ class FakeNode:
         if d > 0:
             await asyncio.sleep(d)
         core = self._core
-        if path == "hb":  # luôn 2.04, kể cả khi hàng đợi đầy
-            self._cmds.put(("hb",))
+        if path == "hb":  # luôn 2.04; chỉ ghi mốc, không qua hàng đợi lệnh (act_task_hb)
+            self._hb = (self._hb[0] + 1, _ms())
             return Message(code=CHANGED)
         if path == "alarm":
             a = core.parse_alarm(payload)
@@ -453,20 +464,32 @@ class FakeNode:
         self._tx("status", self._core.status(id_, st, pan, tilt, err, self.name))
 
     def _act_loop(self) -> None:
+        """Như act_task.c: đọc mốc /hb mới nhất, tick, rồi ngủ tới lệnh kế tiếp hoặc hạn act_next_ms."""
         so, a = self._core.so, self._act
+        seen = 0
+
+        def sync_hb() -> None:
+            nonlocal seen
+            n, at = self._hb
+            if n != seen:
+                seen = n
+                so.shim_act_hb(a, at)
+
         while not self._halt.is_set():
-            c = self._cmds.get(TICK_S)
+            sync_hb()
+            now = _ms()
+            so.shim_act_tick(a, now)
+            wait = so.shim_act_next_ms(a, now)
+            c = self._cmds.get(None if wait == ACT_IDLE else wait / 1000)
             if c is not None:
+                sync_hb()
                 kind, now = c[0], _ms()
                 if kind == "aim":
                     so.shim_act_aim(a, now, *c[1:])
                 elif kind == "fire":
                     so.shim_act_fire(a, now, *c[1:])
-                elif kind == "stop":
-                    so.shim_act_stop(a, now, c[1])
                 else:
-                    so.shim_act_hb(a, now)
-            so.shim_act_tick(a, _ms())
+                    so.shim_act_stop(a, now, c[1])
 
     # --- luồng cảm biến (sensors.c) ------------------------------------------------------------
 

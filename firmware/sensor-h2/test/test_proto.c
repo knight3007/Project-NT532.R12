@@ -25,6 +25,10 @@ static void p_aim(void)
     CHECK(aim("{\"id\":4294967295,\"pan\":0,\"tilt\":0,\"ttl\":4294967295}", &a));
     CHECK(a.id == UINT32_MAX && a.ttl == UINT32_MAX);
     CHECK(aim("{\"id\":1,\"id\":2,\"pan\":0,\"tilt\":0,\"ttl\":5}", &a) && a.id == 2);  // lần cuối thắng
+    CHECK(aim("{\"id\":\"x\",\"pan\":0,\"tilt\":0,\"ttl\":5,\"id\":3}", &a) && a.id == 3);  // kể cả kiểu
+    CHECK(!aim("{\"id\":3,\"pan\":0,\"tilt\":0,\"ttl\":5,\"id\":\"x\"}", &a));
+    CHECK(aim("{\"i\":\"a\",\"idx\":1,\"Id\":2,\"id\":4,\"pan\":0,\"tilt\":0,\"ttl\":5,\"tt\":0}", &a) && a.id == 4);
+    CHECK(!aim("{\"id\":1,\"pan\":0,\"tilt\":0,\"ttl\":5,\"x\":1e999}", &a));  // số vô hạn ở key lạ vẫn loại
     // không có NUL kết thúc: chỉ dùng len
     const char raw[] = "{\"id\":7,\"pan\":1,\"tilt\":2,\"ttl\":3}9999";
     CHECK(proto_parse_aim(raw, sizeof raw - 1 - 4, &a) && a.id == 7);

@@ -84,6 +84,7 @@ void shim_act_fire(void *p, uint32_t now, uint32_t id, int dev, uint32_t ms)
 void shim_act_stop(void *p, uint32_t now, uint32_t id) { act_stop(&((shim_act_t *)p)->act, now, id); }
 void shim_act_hb(void *p, uint32_t now) { act_hb(&((shim_act_t *)p)->act, now); }
 void shim_act_tick(void *p, uint32_t now) { act_tick(&((shim_act_t *)p)->act, now); }
+uint32_t shim_act_next_ms(void *p, uint32_t now) { return act_next_ms(&((shim_act_t *)p)->act, now); }
 void shim_act_all_off(void *p) { act_all_off(&((shim_act_t *)p)->act); }
 
 // --- alarm

@@ -1,4 +1,4 @@
-// Task cảm biến (đọc mỗi giây, báo động, telemetry) và task chỉ thị còi/LED.
+// Task cảm biến (đọc mỗi giây, báo động, telemetry) và task chỉ thị còi/LED (ngủ khi không báo động).
 #pragma once
 
 #include "node_cfg.h"

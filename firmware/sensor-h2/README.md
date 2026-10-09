@@ -20,12 +20,23 @@ Mỗi ESP32-H2 Super Mini vừa đọc cảm biến vừa điều khiển một 
 | `main/app_main.c` | Thứ tự khởi động: GPIO an toàn, NVS, cấu hình, HAL, netif, các task |
 | `main/node_cfg.[ch]` | Cấu hình: mặc định Kconfig, ghi đè từ NVS |
 | `main/hal_esp.[ch]` | Bơm, laser, còi, servo (LEDC 50 Hz, 14 bit), MQ-2 (ADC oneshot), SHT31 (I2C master mới) |
-| `main/act_task.[ch]` | Task chấp hành: sở hữu `act_t`, hàng đợi lệnh, `act_tick` mỗi 10 ms |
-| `main/sensors.[ch]` | Task cảm biến, báo động, telemetry; task còi/LED |
+| `main/act_task.[ch]` | Task chấp hành: sở hữu `act_t`, hàng đợi lệnh; chỉ thức khi có lệnh hoặc tới hạn `act_next_ms` |
+| `main/sensors.[ch]` | Task cảm biến (1 Hz), báo động, telemetry; task còi/LED ngủ trên thông báo, chỉ thức theo nhịp nháy |
 | `main/net_ot.[ch]` | OpenThread FTD, dataset từ Kconfig, netif lwIP, log vai trò và địa chỉ |
-| `main/coap_node.[ch]` | Task CoAP (libcoap): server, hàng đợi gửi ra, gửi `/status`, `/a`, `/t`, `/alarm` |
+| `main/coap_node.[ch]` | Task CoAP (libcoap): server, hàng đợi gửi ra (đánh thức bằng eventfd), gửi `/status`, `/a`, `/t`, `/alarm` |
 
-Luồng dữ liệu: handler CoAP chỉ parse rồi đẩy lệnh vào hàng đợi của task chấp hành; task đó gọi `act_*` và đẩy `/status` vào hàng đợi ra; chỉ task CoAP được gọi libcoap (libcoap không an toàn đa luồng).
+Luồng dữ liệu: handler CoAP chỉ parse rồi đẩy lệnh vào hàng đợi của task chấp hành (riêng `/hb` chỉ ghi mốc thời gian, không vào hàng đợi); task đó gọi `act_*` và đẩy `/status` vào hàng đợi ra; chỉ task CoAP được gọi libcoap (libcoap không an toàn đa luồng).
+
+Không task nào tự thức theo chu kỳ khi không có việc (trừ task cảm biến, vì báo động cần một mẫu mỗi giây):
+
+| Task | Bản cũ | Bây giờ |
+| --- | --- | --- |
+| chấp hành (`act`) | thức mỗi 10 ms, và mỗi `/hb` (2 lần/s) qua hàng đợi | chỉ khi có `/aim` `/fire` `/stop`, hoặc tới hạn: tới nơi, hết `ttl`, hết thời gian bật, hết nhịp khi đang bật. Lúc nghỉ: 0 lần/s |
+| CoAP | `coap_io_process` hỏi vòng 10 ms để rút hàng đợi ra | ngủ trong `select` tới khi có gói vào, tới hạn gửi lại CON, hoặc task khác đẩy bản tin ra (eventfd); chặn trên 1 s chỉ để phòng eventfd hỏng |
+| còi/LED (`indic`) | thức mỗi 200 ms | ngủ trên thông báo; chỉ thức 5 lần/s khi đang nháy vì `/alarm` của node kia |
+| cảnh báo mất nhịp | `act_tick` tắt lại bơm/laser và in 2 dòng log mỗi 10 ms (200 dòng/s) khi Pi ngừng gửi `/hb` | tắt và báo `fault`/`hb` đúng một lần mỗi lần mất nhịp |
+
+Hạn của `act_next_ms` dùng đúng điều kiện của `act_tick`, nên task không bao giờ thức để làm việc rỗng; `test_actuator.c` (`t_next_equiv`) chạy 300 000 ms lệnh ngẫu nhiên và kiểm tra cách lái theo hạn ra đúng cùng `/status`, cùng mili giây, cùng trạng thái bơm/laser như tick mỗi 1 ms. Bộ parse JSON duyệt payload một lượt và ghi thẳng vào các key cần đọc (không còn mảng 16 cặp 512 byte trên stack). Cả firmware biên dịch `-Os` (`sdkconfig.defaults`).
 
 ## Build và nạp
 
@@ -164,7 +175,8 @@ Mức chạy thật (vẫn CHƯA KIỂM):
 10. LEDC 50 Hz với 14 bit xin được bộ chia hợp lệ (nếu `ledc_timer_config` lỗi, hạ xuống 13 bit); đo xung bằng máy hiện sóng hoặc quan sát servo: `NT532_SERVO_PULSE_MIN_US/MAX_US`, offset, chiều.
 11. GPIO13 và 14 trên H2 cũng là chân xtal 32 kHz; chỉ có tác dụng nếu bật nguồn xung đó, mặc định không. Đối chiếu sơ đồ chân thực của board.
 12. Libcoap gửi lại gói CON bằng tham số mặc định (ACK_TIMEOUT 2 s, 4 lần); xem `/a` và `/status` có tới Pi đủ nhanh trên multi-hop, chỉnh `coap_session_set_ack_timeout` nếu cần.
-13. Stack các task (coap 8 KB, ot_main 10 KB, act 4 KB, sensors 4 KB) đủ, xem `uxTaskGetStackHighWaterMark` khi chạy lâu.
+13. Stack các task (coap 8 KB, ot_main 10 KB, act 4 KB, sensors 4 KB, indic 2 KB) đủ, xem `uxTaskGetStackHighWaterMark` khi chạy lâu.
 14. `crc8` SHT31 (đa thức 0x31, khởi tạo 0xFF) khớp với sample trong datasheet (0xBE 0xEF -> 0x92).
 15. Kiểm thử an toàn trước khi nối bơm: rút Thread/ngắt Pi lúc đang `/fire`, bơm phải tắt trong khoảng 1,5 s; `/stop` rồi `/aim` id nhỏ hơn phải bị `rejected`.
 16. SRP (CHƯA KIỂM): CI build qua với `net_ot.c` mới; `srp server state` trên OTBR là `running`; node in `SRP: ... Registered`; `ot-ctl srp server service` thấy `<id>._nt532._udp` với đúng địa chỉ; đổi OMR prefix hoặc khởi động lại otbr-agent thì node tự đăng ký lại; ba service/host của hai node không đụng tên.
+17. eventfd đánh thức task CoAP: `/status` tới Pi ngay sau khi task chấp hành tạo ra (log `act` và log Pi cách nhau vài ms). Nếu `/status` trễ tới khoảng 0,5–1 s (chờ gói `/hb` kế tiếp hoặc chặn trên 1 s) thì `select` của libcoap không nhận eventfd: xem log "không tạo được eventfd" và `max_fds` trong `app_main.c`.

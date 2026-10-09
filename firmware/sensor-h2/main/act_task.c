@@ -1,5 +1,6 @@
 #include "act_task.h"
 
+#include <stdatomic.h>
 #include <string.h>
 
 #include "coap_node.h"
@@ -13,11 +14,12 @@
 
 static const char *TAG = "act";
 
-#define TICK_MS 10
-
 static act_t s_act;
 static QueueHandle_t s_q;
 static char s_node[8];
+// /hb không đi qua hàng đợi: task CoAP ghi mốc, task này đọc lúc nó thức (có lệnh hoặc tới hạn).
+static _Atomic uint32_t s_hb_ms;
+static _Atomic uint32_t s_hb_count;
 
 uint32_t act_now_ms(void)
 {
@@ -63,21 +65,42 @@ static void handle(const act_cmd_t *c, uint32_t now)
     case CMD_STOP:
         act_stop(&s_act, now, c->id);
         break;
-    case CMD_HB:
-        act_hb(&s_act, now);
-        break;
     }
 }
 
+static void sync_hb(void)
+{
+    static uint32_t seen;
+    uint32_t n = atomic_load(&s_hb_count);
+    if (n != seen) {
+        seen = n;
+        act_hb(&s_act, atomic_load(&s_hb_ms));
+    }
+}
+
+// Làm tròn lên: thức sớm vì tick đầu chỉ có một phần thì vòng sau chờ nốt, không quay vòng rỗng.
+static TickType_t wait_ticks(uint32_t ms)
+{
+    if (ms == ACT_IDLE) {
+        return portMAX_DELAY;
+    }
+    uint64_t t = ((uint64_t)ms * configTICK_RATE_HZ + 999u) / 1000u;
+    return t >= portMAX_DELAY ? portMAX_DELAY - 1 : (TickType_t)t;
+}
+
+// Ngủ trên hàng đợi tới lệnh kế tiếp hoặc tới hạn act_next_ms; lúc nghỉ không thức lần nào.
 static void act_task(void *arg)
 {
     (void)arg;
     act_cmd_t c;
     for (;;) {
-        if (xQueueReceive(s_q, &c, pdMS_TO_TICKS(TICK_MS)) == pdTRUE) {
+        sync_hb();
+        uint32_t now = act_now_ms();
+        act_tick(&s_act, now);
+        if (xQueueReceive(s_q, &c, wait_ticks(act_next_ms(&s_act, now))) == pdTRUE) {
+            sync_hb();
             handle(&c, act_now_ms());
         }
-        act_tick(&s_act, act_now_ms());
     }
 }
 
@@ -90,6 +113,12 @@ bool act_task_post(const act_cmd_t *cmd)
         return xQueueSendToFront(s_q, cmd, 0) == pdTRUE;
     }
     return xQueueSend(s_q, cmd, 0) == pdTRUE;
+}
+
+void act_task_hb(void)
+{
+    atomic_store(&s_hb_ms, act_now_ms());
+    atomic_fetch_add(&s_hb_count, 1u);  // sau mốc: task này thấy số mới thì mốc đã có
 }
 
 void act_task_start(const node_cfg_t *cfg)

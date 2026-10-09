@@ -528,6 +528,170 @@ static void t_ring(void)
     last(&r, 0, 3, "rejected", "stopped");
 }
 
+static void t_hb_once(void)
+{
+    // mất nhịp khi không bắn: tắt một lần, các tick sau không gọi lại io (trước đây 2 lệnh tắt mỗi tick)
+    rig_t r;
+    rig_init(&r);
+    act_hb(&r.a, 0);
+    act_tick(&r.a, 1501);
+    int offs = r.f.off_calls[0] + r.f.off_calls[1];
+    CHECK_EQ(offs, 4);  // init + một lần mất nhịp
+    for (uint32_t t = 1502; t < 5000; t += 10) act_tick(&r.a, t);
+    CHECK_EQ(r.f.off_calls[0] + r.f.off_calls[1], offs);
+    CHECK_EQ(r.f.n, 0);
+    // nhịp mới rồi mất lần nữa: lại tắt đúng một lần
+    act_hb(&r.a, 6000);
+    act_tick(&r.a, 7000);
+    CHECK_EQ(r.f.off_calls[0] + r.f.off_calls[1], offs);
+    act_tick(&r.a, 7501);
+    act_tick(&r.a, 7600);
+    CHECK_EQ(r.f.off_calls[0] + r.f.off_calls[1], offs + 2);
+}
+
+static void t_next(void)
+{
+    rig_t r;
+    rig_init(&r);
+    CHECK_EQ(act_next_ms(&r.a, 0), ACT_IDLE);
+    act_hb(&r.a, 0);
+    CHECK_EQ(act_next_ms(&r.a, 0), ACT_IDLE);  // có nhịp nhưng không bắn: watchdog không cần hạn
+    // aim: hạn là lúc tới nơi (30 độ / 150 + 150 = 350 ms)
+    act_aim(&r.a, 1000, 1, 30, 0, 2000);
+    CHECK_EQ(act_next_ms(&r.a, 1000), 350);
+    CHECK_EQ(act_next_ms(&r.a, 1300), 50);
+    CHECK_EQ(act_next_ms(&r.a, 1350), 0);
+    act_tick(&r.a, 1350);
+    last(&r, 0, 1, "reached", NULL);
+    CHECK_EQ(act_next_ms(&r.a, 1350), ACT_IDLE);
+    // ttl ngắn hơn đường quay: hạn là lúc hết ttl
+    act_aim(&r.a, 2000, 2, -30, 0, 100);
+    CHECK_EQ(act_next_ms(&r.a, 2000), 100);
+    act_tick(&r.a, 2100);
+    last(&r, 0, 2, "fault", "ttl");
+    CHECK_EQ(act_next_ms(&r.a, 2100), ACT_IDLE);
+    // bắn: hạn sớm nhất giữa hết ms và hết nhịp
+    rig_init(&r);
+    uint32_t t = aim_reach(&r, 0, 3, 0, 0);  // hb tại t
+    act_fire(&r.a, t, 3, ACT_DEV_PUMP, 3000);
+    CHECK_EQ(act_next_ms(&r.a, t), 1501);
+    act_hb(&r.a, t + 1000);
+    CHECK_EQ(act_next_ms(&r.a, t + 1000), 1501);
+    act_hb(&r.a, t + 2000);
+    CHECK_EQ(act_next_ms(&r.a, t + 2000), 1000);
+    act_tick(&r.a, t + 3000);
+    last(&r, 0, 3, "done", NULL);
+    CHECK_EQ(act_next_ms(&r.a, t + 3000), ACT_IDLE);
+    // nhịp ghi muộn hơn now một chút vẫn cho hạn dương
+    rig_init(&r);
+    t = aim_reach(&r, 0, 4, 0, 0);
+    act_fire(&r.a, t, 4, ACT_DEV_LASER, 3000);
+    act_hb(&r.a, t + 20);
+    CHECK_EQ(act_next_ms(&r.a, t + 10), 1511);
+    // mất nhịp: tick tại hạn tắt, rồi hết hạn
+    rig_init(&r);
+    t = aim_reach(&r, 0, 5, 0, 0);
+    act_fire(&r.a, t, 5, ACT_DEV_PUMP, 3000);
+    uint32_t w = act_next_ms(&r.a, t);
+    act_tick(&r.a, t + w - 1);
+    CHECK(r.f.dev[0]);
+    act_tick(&r.a, t + w);
+    CHECK(!r.f.dev[0]);
+    last(&r, 0, 5, "fault", "hb");
+    CHECK_EQ(act_next_ms(&r.a, t + w), ACT_IDLE);
+}
+
+static uint32_t lcg(uint32_t *s)
+{
+    *s = *s * 1664525u + 1013904223u;
+    return *s >> 8;
+}
+
+static bool same_out(const rig_t *x, const rig_t *y)
+{
+    if (x->f.n != y->f.n || x->f.dev[0] != y->f.dev[0] || x->f.dev[1] != y->f.dev[1]) return false;
+    for (int i = 0; i < x->f.n; i++) {
+        const rec_t *p = &x->f.s[i], *q = &y->f.s[i];
+        if (p->id != q->id || strcmp(p->st, q->st) || strcmp(p->err, q->err) || p->pan != q->pan ||
+            p->tilt != q->tilt) return false;
+    }
+    return true;
+}
+
+// Lái chỉ theo act_next_ms (như act_task.c) phải ra đúng cùng /status, cùng mili giây, cùng trạng thái
+// bơm/laser như tick mỗi 1 ms, qua lệnh ngẫu nhiên, mất nhịp, lệnh trùng và đồng hồ quay vòng.
+static void t_next_equiv(void)
+{
+    static rig_t A, B;
+    rig_init(&A);
+    rig_init(&B);
+    A.f.n = B.f.n = 0;
+    uint32_t seed = 532, id = 0, hb_pause = 0, due = 0, b_ticks = 0;
+    int n_hb = 0, n_ttl = 0, n_done = 0;  // độ phủ: các nhánh hẹn giờ thật sự xảy ra
+    bool has_due = false, ok = true;
+    const uint32_t t0 = UINT32_MAX - 150000u, steps = 300000u;
+    for (uint32_t i = 0; i < steps && ok; i++) {
+        uint32_t now = t0 + i;
+        if (i % 500u == 0u) {
+            if (hb_pause == 0u && lcg(&seed) % 8u == 0u) hb_pause = 1000u + lcg(&seed) % 3000u;
+            if (hb_pause == 0u) {
+                act_hb(&A.a, now);
+                act_hb(&B.a, now);
+            }
+        }
+        if (hb_pause > 0u) hb_pause--;
+        uint32_t r = lcg(&seed) % 10000u;
+        bool cmd = true;
+        if (r < 20u) {
+            float pan = (float)(lcg(&seed) % 121u) - 60.0f, tilt = (float)(lcg(&seed) % 91u) - 40.0f;
+            uint32_t ttl = 50u + lcg(&seed) % 2000u;
+            id++;
+            act_aim(&A.a, now, id, pan, tilt, ttl);
+            act_aim(&B.a, now, id, pan, tilt, ttl);
+        } else if (r < 50u) {
+            uint32_t fid = lcg(&seed) % 4u == 0u ? id - lcg(&seed) % 3u : A.a.aim_id;
+            act_dev_t dev = lcg(&seed) % 2u ? ACT_DEV_LASER : ACT_DEV_PUMP;
+            uint32_t ms = lcg(&seed) % 6000u;
+            act_fire(&A.a, now, fid, dev, ms);
+            act_fire(&B.a, now, fid, dev, ms);
+        } else if (r < 55u) {
+            uint32_t aid = id - lcg(&seed) % 3u;  // gửi lại aim cũ
+            act_aim(&A.a, now, aid, 0, 0, 500);
+            act_aim(&B.a, now, aid, 0, 0, 500);
+        } else if (r == 55u) {
+            id++;
+            act_stop(&A.a, now, id);
+            act_stop(&B.a, now, id);
+        } else {
+            cmd = false;
+        }
+        act_tick(&A.a, now);
+        if (cmd || (has_due && now == due)) {
+            act_tick(&B.a, now);
+            b_ticks++;
+            uint32_t w = act_next_ms(&B.a, now);
+            CHECK(w > 0u);
+            if (w == 0u) ok = false;
+            has_due = w != ACT_IDLE;
+            due = now + w;
+        }
+        if (!same_out(&A, &B)) {
+            fprintf(stderr, "t_next_equiv: lệch tại bước %u\n", (unsigned)i);
+            ok = false;
+        }
+        for (int k = 0; k < A.f.n; k++) {
+            const rec_t *s = &A.f.s[k];
+            n_hb += strcmp(s->err, "hb") == 0;
+            n_ttl += strcmp(s->err, "ttl") == 0;
+            n_done += !cmd && strcmp(s->st, "done") == 0;  // hết ms của /fire, không phải /stop
+        }
+        A.f.n = B.f.n = 0;
+    }
+    CHECK(ok);
+    CHECK(b_ticks < steps / 20u);  // ít hơn hẳn 1 tick mỗi ms
+    CHECK(n_hb > 0 && n_ttl > 0 && n_done > 0);
+}
+
 void test_actuator(void)
 {
     t_init();
@@ -544,4 +708,7 @@ void test_actuator(void)
     t_wrap();
     t_alloff();
     t_ring();
+    t_hb_once();
+    t_next();
+    t_next_equiv();
 }

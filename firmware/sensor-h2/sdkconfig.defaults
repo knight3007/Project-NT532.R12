@@ -37,3 +37,7 @@ CONFIG_COAP_SERVER_SUPPORT=y
 CONFIG_COAP_MBEDTLS_PSK=n
 CONFIG_COAP_MBEDTLS_PKI=n
 CONFIG_COAP_TCP_SUPPORT=n
+
+# Biên dịch -Os cho cả firmware (mặc định của IDF là -Og để gỡ lỗi): mã nhỏ hơn, chạy từ flash qua cache
+# nên ít trượt cache hơn; tải CPU của node rất thấp nên không cần -O2.
+CONFIG_COMPILER_OPTIMIZATION_SIZE=y

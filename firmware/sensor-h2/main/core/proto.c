@@ -8,24 +8,21 @@
 
 // ---------------------------------------------------------------- parse
 
-typedef enum { V_NUM, V_STR, V_OTHER } vtype_t;
+typedef enum { V_NONE = 0, V_NUM, V_STR, V_OTHER } vtype_t;
 
+// Một key cần đọc. parse_obj duyệt payload một lượt và ghi thẳng vào đây giá trị của lần xuất hiện
+// cuối (như json.loads của Python), không lưu mảng các cặp rồi tìm lại.
 typedef struct {
     const char *key;
-    size_t key_len;
-    vtype_t type;
+    vtype_t type;  // V_NONE: không có trong object
     double num;
     const char *str;
     size_t str_len;
-} pair_t;
+} field_t;
 
 #define MAX_PAIRS 16
 #define NUM_MAX 40  // số dài hơn thế không phải thứ Pi gửi
-
-typedef struct {
-    pair_t p[MAX_PAIRS];
-    size_t n;
-} obj_t;
+#define NFIELDS(f) (sizeof(f) / sizeof((f)[0]))
 
 static bool is_ws(char c)
 {
@@ -134,13 +131,24 @@ static bool match_lit(const char **s, const char *end, const char *lit)
     return true;
 }
 
-static bool parse_obj(const char *buf, size_t len, obj_t *o)
+// key trỏ vào bộ đệm, không có '\0' (parse_string đã loại ký tự điều khiển, kể cả '\0').
+static field_t *find_field(field_t *f, size_t nf, const char *key, size_t kl)
+{
+    for (size_t i = 0; i < nf; i++) {
+        if (strncmp(f[i].key, key, kl) == 0 && f[i].key[kl] == '\0') {
+            return &f[i];
+        }
+    }
+    return NULL;
+}
+
+// Một lượt qua object phẳng. Giá trị của key lạ vẫn được kiểm cú pháp (số vẫn phải hữu hạn) rồi bỏ.
+static bool parse_obj(const char *buf, size_t len, field_t *f, size_t nf)
 {
     if (buf == NULL) {
         return false;
     }
     const char *s = buf, *end = buf + len;
-    o->n = 0;
     skip_ws(&s, end);
     if (s >= end || *s != '{') {
         return false;
@@ -150,13 +158,14 @@ static bool parse_obj(const char *buf, size_t len, obj_t *o)
     if (s < end && *s == '}') {
         s++;
     } else {
-        for (;;) {
-            if (o->n >= MAX_PAIRS) {
+        for (size_t n = 0;; n++) {
+            if (n >= MAX_PAIRS) {
                 return false;
             }
-            pair_t *p = &o->p[o->n];
+            const char *key;
+            size_t kl;
             skip_ws(&s, end);
-            if (!parse_string(&s, end, &p->key, &p->key_len)) {
+            if (!parse_string(&s, end, &key, &kl)) {
                 return false;
             }
             skip_ws(&s, end);
@@ -168,23 +177,27 @@ static bool parse_obj(const char *buf, size_t len, obj_t *o)
             if (s >= end) {
                 return false;
             }
+            field_t skip;
+            field_t *v = find_field(f, nf, key, kl);
+            if (v == NULL) {
+                v = &skip;
+            }
             if (*s == '"') {
-                p->type = V_STR;
-                if (!parse_string(&s, end, &p->str, &p->str_len)) {
+                v->type = V_STR;
+                if (!parse_string(&s, end, &v->str, &v->str_len)) {
                     return false;
                 }
             } else if (*s == '-' || is_digit(*s)) {
-                p->type = V_NUM;
-                if (!parse_number(&s, end, &p->num)) {
+                v->type = V_NUM;
+                if (!parse_number(&s, end, &v->num)) {
                     return false;
                 }
             } else if (match_lit(&s, end, "true") || match_lit(&s, end, "false") ||
                        match_lit(&s, end, "null")) {
-                p->type = V_OTHER;
+                v->type = V_OTHER;
             } else {
                 return false;  // object/array lồng nhau hoặc rác
             }
-            o->n++;
             skip_ws(&s, end);
             if (s >= end) {
                 return false;
@@ -204,26 +217,12 @@ static bool parse_obj(const char *buf, size_t len, obj_t *o)
     return s == end;
 }
 
-// Key trùng: lấy lần cuối như json.loads của Python.
-static const pair_t *find_key(const obj_t *o, const char *key)
+static bool get_u32(const field_t *f, uint32_t *out)
 {
-    size_t kl = strlen(key);
-    const pair_t *found = NULL;
-    for (size_t i = 0; i < o->n; i++) {
-        if (o->p[i].key_len == kl && memcmp(o->p[i].key, key, kl) == 0) {
-            found = &o->p[i];
-        }
-    }
-    return found;
-}
-
-static bool get_u32(const obj_t *o, const char *key, uint32_t *out)
-{
-    const pair_t *p = find_key(o, key);
-    if (p == NULL || p->type != V_NUM) {
+    if (f->type != V_NUM) {
         return false;
     }
-    double v = p->num;
+    double v = f->num;
     if (v != floor(v) || v < 0.0 || v > 4294967295.0) {
         return false;
     }
@@ -231,37 +230,35 @@ static bool get_u32(const obj_t *o, const char *key, uint32_t *out)
     return true;
 }
 
-static bool get_f32(const obj_t *o, const char *key, float *out)
+static bool get_f32(const field_t *f, float *out)
 {
-    const pair_t *p = find_key(o, key);
-    if (p == NULL || p->type != V_NUM) {
+    if (f->type != V_NUM) {
         return false;
     }
-    float f = (float)p->num;
-    if (!isfinite(f)) {
+    float x = (float)f->num;
+    if (!isfinite(x)) {
         return false;
     }
-    *out = f;
+    *out = x;
     return true;
 }
 
-static bool get_str(const obj_t *o, const char *key, const char **s, size_t *n)
+static bool get_str(const field_t *f, const char **s, size_t *n)
 {
-    const pair_t *p = find_key(o, key);
-    if (p == NULL || p->type != V_STR) {
+    if (f->type != V_STR) {
         return false;
     }
-    *s = p->str;
-    *n = p->str_len;
+    *s = f->str;
+    *n = f->str_len;
     return true;
 }
 
 bool proto_parse_aim(const char *buf, size_t len, proto_aim_t *out)
 {
-    obj_t o;
+    field_t f[] = {{.key = "id"}, {.key = "pan"}, {.key = "tilt"}, {.key = "ttl"}};
     proto_aim_t r;
-    if (!parse_obj(buf, len, &o) || !get_u32(&o, "id", &r.id) || !get_f32(&o, "pan", &r.pan) ||
-        !get_f32(&o, "tilt", &r.tilt) || !get_u32(&o, "ttl", &r.ttl)) {
+    if (!parse_obj(buf, len, f, NFIELDS(f)) || !get_u32(&f[0], &r.id) || !get_f32(&f[1], &r.pan) ||
+        !get_f32(&f[2], &r.tilt) || !get_u32(&f[3], &r.ttl)) {
         return false;
     }
     *out = r;
@@ -270,12 +267,12 @@ bool proto_parse_aim(const char *buf, size_t len, proto_aim_t *out)
 
 bool proto_parse_fire(const char *buf, size_t len, proto_fire_t *out)
 {
-    obj_t o;
+    field_t f[] = {{.key = "id"}, {.key = "dev"}, {.key = "ms"}};
     proto_fire_t r;
     const char *d;
     size_t dn;
-    if (!parse_obj(buf, len, &o) || !get_u32(&o, "id", &r.id) || !get_str(&o, "dev", &d, &dn) ||
-        !get_u32(&o, "ms", &r.ms)) {
+    if (!parse_obj(buf, len, f, NFIELDS(f)) || !get_u32(&f[0], &r.id) || !get_str(&f[1], &d, &dn) ||
+        !get_u32(&f[2], &r.ms)) {
         return false;
     }
     if (dn == 4 && memcmp(d, "pump", 4) == 0) {
@@ -291,9 +288,9 @@ bool proto_parse_fire(const char *buf, size_t len, proto_fire_t *out)
 
 bool proto_parse_stop(const char *buf, size_t len, proto_stop_t *out)
 {
-    obj_t o;
+    field_t f[] = {{.key = "id"}};
     proto_stop_t r;
-    if (!parse_obj(buf, len, &o) || !get_u32(&o, "id", &r.id)) {
+    if (!parse_obj(buf, len, f, NFIELDS(f)) || !get_u32(&f[0], &r.id)) {
         return false;
     }
     *out = r;
@@ -302,11 +299,11 @@ bool proto_parse_stop(const char *buf, size_t len, proto_stop_t *out)
 
 bool proto_parse_alarm(const char *buf, size_t len, proto_alarm_t *out)
 {
-    obj_t o;
+    field_t f[] = {{.key = "n"}, {.key = "s"}};
     proto_alarm_t r;
     const char *n;
     size_t nl;
-    if (!parse_obj(buf, len, &o) || !get_str(&o, "n", &n, &nl) || !get_u32(&o, "s", &r.s)) {
+    if (!parse_obj(buf, len, f, NFIELDS(f)) || !get_str(&f[0], &n, &nl) || !get_u32(&f[1], &r.s)) {
         return false;
     }
     if (nl >= sizeof r.n) {

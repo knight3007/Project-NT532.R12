@@ -33,8 +33,8 @@ void app_main(void)
 
     ESP_ERROR_CHECK(esp_event_loop_create_default());
     ESP_ERROR_CHECK(esp_netif_init());
-    // eventfd dùng bởi: netif, hàng đợi tác vụ OT, driver radio (như ví dụ ot_cli)
-    esp_vfs_eventfd_config_t eventfd_config = {.max_fds = 3};
+    // eventfd dùng bởi: netif, hàng đợi tác vụ OT, driver radio (như ví dụ ot_cli) và đánh thức task CoAP
+    esp_vfs_eventfd_config_t eventfd_config = {.max_fds = 4};
     ESP_ERROR_CHECK(esp_vfs_eventfd_register(&eventfd_config));
 
     coap_node_init(&cfg);  // hàng đợi ra có trước để các task khác đẩy được

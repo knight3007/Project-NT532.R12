@@ -2,11 +2,14 @@
 
 #include <arpa/inet.h>
 #include <string.h>
+#include <sys/select.h>
 #include <sys/socket.h>
+#include <unistd.h>
 
 #include "act_task.h"
 #include "coap3/coap.h"
 #include "esp_log.h"
+#include "esp_vfs_eventfd.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "freertos/task.h"
@@ -23,6 +26,10 @@ static const char *TAG = "coap";
 #define OUT_Q_LEN 16
 #define MCAST_ADDR "ff03::1"
 #define MCAST_HOPS 8
+// Chặn trên của một lần ngủ khi có eventfd, chỉ để phòng eventfd không đánh thức được (CHƯA KIỂM trên
+// mạch). Bình thường task thức vì gói tới, vì hạn gửi lại CON của libcoap, hoặc vì có bản tin ra.
+#define IDLE_GUARD_MS 1000
+#define POLL_MS 10  // không tạo được eventfd: hỏi vòng như bản cũ
 
 typedef struct {
     uint8_t kind;
@@ -31,6 +38,7 @@ typedef struct {
 } out_msg_t;
 
 static QueueHandle_t s_out_q;
+static int s_wake = -1;  // eventfd: coap_node_send ghi vào để select của task CoAP trả về ngay
 static char s_node[8];
 static coap_context_t *s_ctx;
 static coap_session_t *s_pi, *s_mc;
@@ -48,6 +56,10 @@ bool coap_node_send(coap_out_kind_t kind, const char *json, size_t len)
         ESP_LOGW(TAG, "hàng đợi ra đầy, bỏ bản tin loại %d", (int)kind);
         return false;
     }
+    if (s_wake >= 0) {
+        const uint64_t one = 1;
+        (void)write(s_wake, &one, sizeof one);
+    }
     return true;
 }
 
@@ -56,6 +68,10 @@ void coap_node_init(const node_cfg_t *cfg)
     strncpy(s_node, cfg->node_id, sizeof(s_node) - 1);
     s_out_q = xQueueCreate(OUT_Q_LEN, sizeof(out_msg_t));
     configASSERT(s_out_q);
+    s_wake = eventfd(0, 0);  // app_main đã đăng ký eventfd, max_fds tính cả cái này
+    if (s_wake < 0) {
+        ESP_LOGW(TAG, "không tạo được eventfd, task CoAP sẽ hỏi vòng mỗi %d ms", POLL_MS);
+    }
 }
 
 // --- server: handler chạy trong coap_io_process, chỉ parse rồi đẩy lệnh ----------------------------
@@ -134,8 +150,7 @@ static void h_hb(coap_resource_t *r, coap_session_t *s, const coap_pdu_t *req, c
                  coap_pdu_t *resp)
 {
     // Pi đo tuổi heartbeat bằng chính câu trả lời này: luôn trả 2.04. Libcoap trả NON cho request NON.
-    act_cmd_t c = {.type = CMD_HB};
-    act_task_post(&c);
+    act_task_hb();
     coap_pdu_set_code(resp, COAP_RESPONSE_CODE_CHANGED);
 }
 
@@ -308,7 +323,19 @@ static void coap_task(void *arg)
     }
     out_msg_t m;
     for (;;) {
-        coap_io_process(s_ctx, 10);
+        if (s_wake >= 0) {
+            // Ngủ tới khi có gói vào, tới hạn gửi lại của libcoap, hoặc task khác đẩy bản tin ra.
+            fd_set rfds;
+            FD_ZERO(&rfds);
+            FD_SET(s_wake, &rfds);
+            int r = coap_io_process_with_fds(s_ctx, IDLE_GUARD_MS, s_wake + 1, &rfds, NULL, NULL);
+            if (r >= 0 && FD_ISSET(s_wake, &rfds)) {
+                uint64_t v;
+                (void)read(s_wake, &v, sizeof v);  // về 0 trước khi rút hàng đợi nên không lỡ lần đánh thức
+            }
+        } else {
+            coap_io_process(s_ctx, POLL_MS);
+        }
         while (xQueueReceive(s_out_q, &m, 0) == pdTRUE) {
             send_msg(&m);
         }

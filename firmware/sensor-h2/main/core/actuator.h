@@ -48,11 +48,23 @@ typedef struct {
 } act_io_t;
 
 #define ACT_RECENT 8  // số lệnh gần nhất nhớ trạng thái để trả lời lệnh trùng id
+#define ACT_IDLE UINT32_MAX  // act_next_ms: không có hạn nào, chỉ cần thức khi có lệnh
+
+// Trạng thái và lỗi lưu dạng mã; chỉ đổi ra chuỗi của hợp đồng lúc gửi /status.
+typedef enum { ACT_ST_NONE = 0, ACT_ST_ACCEPTED, ACT_ST_REACHED, ACT_ST_DONE, ACT_ST_REJECTED, ACT_ST_FAULT } act_st_t;
+typedef enum {
+    ACT_ERR_NONE = 0,
+    ACT_ERR_LIMITS,
+    ACT_ERR_STOPPED,
+    ACT_ERR_HB,
+    ACT_ERR_TTL,
+    ACT_ERR_NOT_REACHED,
+} act_err_t;
 
 typedef struct {
     uint32_t id;
-    const char *st;   // trỏ tới chuỗi hằng
-    const char *err;  // NULL hoặc chuỗi hằng
+    uint8_t st;   // act_st_t; ACT_ST_NONE: ô trống
+    uint8_t err;  // act_err_t
 } act_recent_t;
 
 typedef struct {
@@ -62,6 +74,7 @@ typedef struct {
     uint32_t last_stop_id;
     uint32_t hb_last_ms;
     bool hb_seen;               // chưa có nhịp nào thì không bật được bơm/laser
+    bool hb_lost;               // đã xử lý lần mất nhịp này (tắt một lần, không lặp mỗi tick)
     // aim đang chạy hoặc đã tới
     uint32_t aim_id;
     bool aim_active, aim_reached;
@@ -83,8 +96,13 @@ void act_aim(act_t *a, uint32_t now_ms, uint32_t id, float pan, float tilt, uint
 void act_fire(act_t *a, uint32_t now_ms, uint32_t id, act_dev_t dev, uint32_t ms);
 void act_stop(act_t *a, uint32_t now_ms, uint32_t id);
 void act_hb(act_t *a, uint32_t now_ms);
-// Gọi đều (mỗi 10–20 ms): báo "reached", hết ttl, hết thời gian bật, watchdog heartbeat.
+// Báo "reached", hết ttl, hết thời gian bật, watchdog heartbeat. Gọi sau mỗi lệnh và khi tới hạn
+// act_next_ms; gọi thêm lúc khác vô hại.
 void act_tick(act_t *a, uint32_t now_ms);
+// Số ms từ now_ms tới lần act_tick cần chạy tiếp, ACT_IDLE nếu không có hạn nào. Gọi ngay sau
+// act_tick(now_ms) thì kết quả luôn > 0, nên lớp gọi ngủ được tới hạn mà không quay vòng rỗng.
+// Watchdog heartbeat chỉ có hạn khi đang bật thiết bị: lúc nghỉ mất nhịp thì không có gì để tắt.
+uint32_t act_next_ms(const act_t *a, uint32_t now_ms);
 
 // Tắt tất cả ngay (lỗi mạng, khởi động). Không gửi /status.
 void act_all_off(act_t *a);
