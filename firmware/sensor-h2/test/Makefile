@@ -17,4 +17,8 @@ test_run: Makefile $(SRCS) check.h $(wildcard $(CORE)/*.h)
 	$(CC) $(CFLAGS) $(SAN) $(SRCS) -o $@ -lm
 
 clean:
-	rm -f test_run
+	rm -f test_run libcore.so
+
+# Lõi C dạng thư viện dùng chung cho node giả của Pi (pi/src/nt532/net/fakenode.py), không sanitizer
+libcore.so: Makefile core_shim.c $(wildcard $(CORE)/*.c) $(wildcard $(CORE)/*.h)
+	$(CC) $(CFLAGS) -shared -fPIC core_shim.c $(CORE)/actuator.c $(CORE)/alarm.c $(CORE)/proto.c -o $@ -lm

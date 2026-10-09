@@ -1,6 +1,7 @@
 """Chạy trạm điều phối kèm dashboard web.
 
     uv run python scripts/run_station.py --source sim                     # sa bàn ảo, luật
+    uv run python scripts/run_station.py --source sim --link coap         # node giả (lõi C firmware) qua UDP
     uv run python scripts/run_station.py --source sim --decider hybrid    # cần runs/decider/jev/jev1
     uv run python scripts/run_station.py --source sim --detector yolo     # YOLO thật (models/fire-n.pt)
     uv run python scripts/run_station.py --decider rules                  # phần cứng: webcam + CoAP
@@ -27,6 +28,9 @@ def main() -> None:
     p.add_argument("--tau", type=float, default=0.8, help="ngưỡng tin cậy của chế độ lai")
     p.add_argument("--detector", choices=["oracle", "yolo"], default="oracle",
                    help="chỉ cho sa bàn ảo: oracle đọc thẻ thật trong scene, yolo dùng trọng số")
+    p.add_argument("--link", choices=["mem", "coap"], default="mem",
+                   help="chỉ cho sa bàn ảo: mem là node ảo trong bộ nhớ, coap là node giả chạy lõi C của "
+                        "firmware qua CoAP/UDP localhost")
     p.add_argument("--host", default="0.0.0.0")
     p.add_argument("--port", type=int, default=8080)
     p.add_argument("--seed", type=int, default=0)
@@ -34,7 +38,8 @@ def main() -> None:
 
     log = REPO_ROOT / "runs/station" / f"{datetime.now().astimezone():%Y%m%d-%H%M%S}.jsonl"
     if args.source == "sim":
-        st = build_sim(args.decider, args.jev_run, args.tau, args.detector, args.seed, log_path=log)
+        st = build_sim(args.decider, args.jev_run, args.tau, args.detector, args.seed, log_path=log,
+                       link=args.link)
     else:
         st = build_real(args.decider, args.jev_run, args.tau, args.source, log_path=log)
     st.start()

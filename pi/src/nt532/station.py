@@ -36,6 +36,7 @@ class Station:
     heartbeat: HeartbeatSender
     world: object | None = None  # SimWorld khi chạy sa bàn ảo
     detector_name: str = ""
+    fake_nodes: dict | None = None  # {tên: FakeNode} khi build_sim(link="coap")
 
     def start(self) -> "Station":
         if self.world is not None:
@@ -51,6 +52,8 @@ class Station:
         self.hub.stop()
         if self.world is not None:
             self.world.stop()
+        for fn in (self.fake_nodes or {}).values():
+            fn.stop()
         close = getattr(self.link, "close", None)
         if close:
             close()
@@ -90,18 +93,25 @@ def _yolo(site: dict, device: str | None = None):
     return partial(detect, weights=weights, conf=cfg["detect_conf"], imgsz=cfg["imgsz"], device=device)
 
 
-def _wire(site, vision, hub, link, decider, events, settings, world=None, detector_name=""):
+def _wire(site, vision, hub, link, decider, events, settings, world=None, detector_name="",
+          fake_nodes=None):
     sensors = SensorHistory()
     orch = Orchestrator(site, vision, hub, link, decider, sensors, events, settings)
     hb = HeartbeatSender(link.heartbeat, link.nodes, site["actuator"]["heartbeat_ms"])
     warm_up(decider, events)
-    return Station(site, vision, hub, link, sensors, events, orch, hb, world, detector_name)
+    return Station(site, vision, hub, link, sensors, events, orch, hb, world, detector_name, fake_nodes)
 
 
 def build_sim(decider: str = "rules", jev_run: str = "jev1", tau: float = 0.8,
               detector: str = "oracle", seed: int = 0, fps: float = 10.0,
-              log_path: str | Path | None = None, settings: Settings | None = None) -> Station:
+              log_path: str | Path | None = None, settings: Settings | None = None,
+              link: str = "mem") -> Station:
+    """`link="mem"`: node ảo trong bộ nhớ (SimLink). `"coap"`: mỗi node là một FakeNode chạy lõi C của
+    firmware, lệnh và telemetry đi qua UDP localhost bằng CoapLink thật."""
     from .sim.world import OracleDetector, SimLink, SimWorld
+
+    if link not in ("mem", "coap"):
+        raise ValueError(f"link phải là mem hoặc coap, nhận {link!r}")
 
     events = EventLog(path=log_path)
     world = SimWorld(seed=seed)
@@ -117,9 +127,18 @@ def build_sim(decider: str = "rules", jev_run: str = "jev1", tau: float = 0.8,
     state = vision.commission(hub.frames(site["vision"]["commission_frames"]))
     events.emit("vision", f"commissioning sa bàn ảo: chiếu lại {state.reprojection_px:.2f} px, "
                           f"node {sorted(state.nodes)}")
-    link = SimLink(world)
+    fakes = None
+    if link == "coap":
+        link, fakes = _coap_nodes(world, events)
+    else:
+        link = SimLink(world)
     st = _wire(site, vision, hub, link, make_decider(decider, jev_run, tau), events, settings,
-               world, detector)
+               world, detector, fakes)
+    if fakes:
+        # telemetry và cảnh báo do node giả gửi qua UDP; world không tự đẩy nữa (tránh nạp hai lần)
+        link.on_telemetry, link.on_alert = st.sensors.add, st.orch.on_alert
+        events.emit("config", f"trạm ảo qua CoAP: node giả {sorted(fakes)} trên 127.0.0.1")
+        return st
     dedup = Deduper()
 
     def on_tel(tel):
@@ -133,6 +152,37 @@ def build_sim(decider: str = "rules", jev_run: str = "jev1", tau: float = 0.8,
     world.on_telemetry, world.on_alert = on_tel, on_alert
     events.emit("config", f"trạm ảo sẵn sàng: detector {detector}, bộ quyết định {st.orch.decider.name}")
     return st
+
+
+def _coap_nodes(world, events):
+    """CoapLink thật tới một FakeNode cho mỗi node của sa bàn; mọi thứ trên 127.0.0.1."""
+    from .net.coap import CoapLink
+    from .net.fakenode import FakeNode, SimWorldHardware, SimWorldSensors, free_port
+
+    transports = ["simplesocketserver"]
+    pi_port = free_port()
+    ports = {n: free_port() for n in world.nodes}
+    link = CoapLink({n: f"127.0.0.1:{p}" for n, p in ports.items()}, ("127.0.0.1", pi_port),
+                    transports=transports).start()
+    temp, gas = world.limits["temp"], world.limits["gas"]
+    fakes = {}
+    for n, port in ports.items():
+        peers = [f"coap://127.0.0.1:{p}" for m, p in ports.items() if m != n]
+        fakes[n] = FakeNode(
+            n, ("127.0.0.1", port), f"coap://127.0.0.1:{pi_port}", SimWorldHardware(world, n),
+            SimWorldSensors(world, n), telemetry_s=world.telemetry_period, temp_c=temp, gas=gas,
+            transports=transports, alarm_peers=peers,
+            on_event=lambda kind, text, n=n: kind in ("status", "alarm", "drop") and
+            events.emit("node", f"{n} {kind} {text}"))
+    try:
+        for fn in fakes.values():
+            fn.start()
+    except Exception:
+        for fn in fakes.values():
+            fn.stop()
+        link.close()
+        raise
+    return link, fakes
 
 
 def build_real(decider: str = "rules", jev_run: str = "jev1", tau: float = 0.8,
