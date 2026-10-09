@@ -51,6 +51,7 @@ Các script trong `pi/scripts/`:
 | `commission.py` | Commissioning hoặc kiểm tra xê dịch, không cần màn hình (cho Pi) |
 | `measure.py` | Các bài đo: click điểm, định vị bia, pose tag, vết laser; ghi CSV vào `runs/measure/` |
 | `report_errors.py` | Thống kê sai số từ CSV của `measure.py` và vẽ hình |
+| `make_report.py` | Gom số đo trong `runs/` thành một báo cáo HTML (sai số, độ trễ, kết cục, bộ quyết định, tải Pi) vào `runs/report/<thời điểm>/` |
 | `live_detect.py` | Xem trực tiếp model phát hiện lửa trên webcam, video hoặc ảnh |
 | `capture_frames.py` | Chụp khung hình vào thư mục, bằng phím hoặc tự động |
 | `autolabel.py` | Tạo nhãn nháp YOLO cho ảnh thẻ bia tự chụp, để sửa tay rồi train |

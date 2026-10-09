@@ -154,7 +154,7 @@ Các trường hợp chặn ngắm: không thấy tag đế vòi, pose quá cũ,
 
 ## 5. Lịch theo tuần
 
-MVP hoàn chỉnh vào cuối tuần 4; tuần 5 để đo và làm phần mở rộng, tuần 6 để báo cáo, tuần 7 dự phòng. Ngày tháng giả định tuần 1 bắt đầu thứ Hai 05/10/2026; nếu lệch thì dời cả dãy.
+MVP hoàn chỉnh vào cuối tuần 4; tuần 5 để đo và làm phần mở rộng, tuần 6 để báo cáo, tuần 7 dự phòng. Ngày tháng giả định tuần 1 bắt đầu thứ Hai 05/10/2026; nếu lệch thì dời cả dãy. Lịch dưới đây theo thiết kế hiện hành ([thay-doi-hai-voi.md](thay-doi-hai-voi.md)): hai node H2 mang vòi, nối Thread; camera là điện thoại phát RTMP. Cập nhật 09/10/2026, cuối tuần 1. Dấu **[xong]** là phần phần mềm đã có và chạy được trên node giả hoặc sa bàn ảo; chưa có nghĩa là đã thử trên phần cứng. Từng bước dựng nằm ở [trien-khai-phan-cung.md](trien-khai-phan-cung.md).
 
 &#91;embedded content: lộ trình · 5 giai đoạn, mỗi giai đoạn một cổng kiểm tra\]
 
@@ -162,52 +162,55 @@ Mỗi hình thoi là cổng kiểm tra cuối giai đoạn; không qua cổng th
 
 ### Tuần 0 (02–04/10): chốt phạm vi và đặt hàng
 
-- **Cả nhóm:** xin giảng viên xác nhận phạm vi (phun nước thật lên bia mô phỏng, node chấp hành chạy Wi-Fi). Chốt danh sách mua và đặt hàng. Thống nhất quy ước ở mục 3 và hợp đồng CoAP ở mục 4.
+- **Cả nhóm:** chốt phạm vi (phun nước thật lên bia mô phỏng) và danh sách mua. Ngày 02/10 nhóm đổi sang hai node H2 mỗi node một vòi, chạy Thread. Thống nhất quy ước ở mục 3 và hợp đồng CoAP ở mục 4.
 - **Hậu:** cài ESP-IDF, nạp firmware RCP vào H2 DevKit, cài OTBR trên Pi.
 - **Hùng:** cài Python, OpenCV và YOLO trên Pi; in bảng hiệu chuẩn camera và các tag.
-- **Hiếu:** vẽ đế vòi phun và trụ, sơ đồ dây và nguồn cho S3 và bơm.
+- **Hiếu:** vẽ đế vòi phun và trụ, sơ đồ dây và nguồn cho hai cụm (servo 5 V, bơm 12 V, chung GND).
 
-Cổng kiểm tra: giảng viên đồng ý phạm vi và đơn hàng đã đặt.
+Cổng kiểm tra: phạm vi được chốt và đơn hàng đã đặt.
 
-### Tuần 1 (05–11/10): khung giao tiếp
+### Tuần 1 (05–11/10): khung giao tiếp và phần mềm Pi
 
-- **Hậu:** hai H2 mini vào mạng Thread, gửi `/t` và `/a` với dữ liệu giả. CoAP server trên Pi ghi log và chống lặp.
-- **Hùng:** hiệu chuẩn nội tại webcam, lưu ma trận camera, hệ số méo và sai số chiếu lại. Phát hiện AprilTag và in ra pose. Bắt đầu chụp ảnh bia.
-- **Hiếu:** firmware S3 có Wi-Fi và CoAP (`/aim`, `/stop`, `/hb`, `/status`) với servo giả lập bằng log. Tách ba module: mạng, CoAP, chấp hành.
+- **Hậu:** **[xong]** CoAP server trên Pi ghi log và chống lặp; payload `/t`, `/a`, `/aim`, `/fire`, `/stop`, `/hb`, `/status`. **[xong]** node giả chạy lõi C của firmware qua CoAP/UDP thật (`scripts/fake_node.py`); node H2 đăng ký dịch vụ qua SRP và Pi tự tìm địa chỉ node (`scripts/find_nodes.py`). **[xong]** CI: test Pi, test lõi C có ASan, build firmware H2 bằng ESP-IDF. Còn lại: hai H2 mini vào mạng Thread.
+- **Hùng:** **[xong]** thị giác: phát hiện tag và pose, `localize` lên mặt bảng, tìm vết laser bằng hiệu ảnh, nhận stream RTMP của điện thoại, sa bàn ảo; YOLO lửa đã train; công cụ đo `measure.py`, `report_errors.py`. **[xong]** trạm `run_station.py` với orchestrator đủ pha ALERT tới VERIFY, hai vòi, dashboard và nút dừng khẩn cấp; công cụ ngắm điểm `aim_point.py` (lưới 3×3, cổng 5 cm). **[xong]** bộ quyết định: baseline luật, bộ kịch bản (`make_scenarios.py`, `fit_sensor_model.py` khớp từ số đo thật), Jev, bộ quyết định chạy ở máy khác (`serve_decider.py`), xuất lượt thật (`export_episodes.py`). Còn lại: hiệu chuẩn nội tại webcam hoặc điện thoại thật, chụp ảnh bia trên sa bàn.
+- **Hiếu:** firmware H2: ba module mạng, CoAP, chấp hành; LEDC cho servo, giới hạn góc, watchdog `/hb`, bơm và laser mặc định tắt; servo giả lập bằng log. Lên sơ đồ dây hai cụm; mua nốt linh kiện cụm thứ hai.
+- **Mới thêm:** cầu MQTT cho Home Assistant (`pi/src/nt532/integrations/`, [home-assistant.md](home-assistant.md)) đang làm; không nằm trên đường găng của cổng nào.
 
-Cổng kiểm tra: cảnh báo giả từ sensor tới Pi, Pi gửi lệnh ngắm giả tới S3, S3 trả trạng thái, tất cả có trong log của Pi.
+Cổng kiểm tra: cảnh báo giả từ node (thật hoặc giả) tới Pi, Pi gửi lệnh ngắm giả tới node, node trả trạng thái, tất cả có trong `runs/station/*.jsonl`. Phần chạy được trên node giả đã qua; còn chờ Thread với H2 thật sang tuần 2.
 
 ### Tuần 2 (12–18/10): phần cứng thật và lát cắt dọc đầu tiên
 
-- **Hậu:** gắn MQ-2 và cảm biến nhiệt, đo rồi đặt ngưỡng, cài logic 3 mẫu liên tiếp. Thêm `/alarm` multicast và còi.
-- **Hùng:** cùng Hiếu dựng sa bàn. Đo pose camera từ 4 tag tham chiếu. Viết hàm `localize(pixel)` giao tia nhìn với bảng bia và kiểm tra bằng 5 điểm đo thước.
-- **Hiếu:** lắp pan–tilt, vòi và laser tâm ngắm lên trụ. Làm mạch MOSFET cho bơm, thử tầm phun và chọn đầu vòi. Điều khiển servo bằng LEDC, giới hạn góc, watchdog heartbeat, bơm và laser mặc định tắt. Lập bảng quy đổi góc sang độ rộng xung.
+Làm theo runbook mục 0 tới 7 của [trien-khai-phan-cung.md](trien-khai-phan-cung.md); phía Pi thử trước bằng node giả, rồi mới tới node thật.
 
-Cổng kiểm tra: gõ tay tọa độ một điểm trên bảng, Pi tính góc, S3 quay, vết laser nằm trong 5 cm quanh điểm đó.
+- **Hậu:** RCP và OTBR trên Pi, hai H2 vào Thread, thử `coap-client` tay với `/hb`, `/aim`, `/fire` rồi chạy `find_nodes.py`. Gắn MQ-2 và cảm biến nhiệt, đo rồi đặt ngưỡng, cài logic 3 mẫu liên tiếp, `/alarm` multicast và còi. Ghi `tel` của cảnh báo thật để chạy lại `fit_sensor_model.py` (thay số đo giả bằng số thật).
+- **Hùng:** dựng sa bàn cùng Hiếu; camera điện thoại phát RTMP, đo `stream_latency.py` rồi điền `camera.stream.latency_s`; hiệu chuẩn nội tại, commissioning từ 4 tag tham chiếu, kiểm tra `localize` bằng 5 điểm thước (`measure.py click`).
+- **Hiếu:** lắp pan–tilt, vòi, laser lên trụ của cả hai node; mạch MOSFET bơm, tách nguồn và tụ lọc để servo không làm nhiễu ADC MQ-2; thử tầm phun, chọn đầu vòi. Bảng quy đổi góc sang độ rộng xung, offset cơ khí, làm riêng cho từng vòi.
+
+Cổng kiểm tra: `aim_point.py --grid` cho từng vòi, vết laser nằm trong 5 cm quanh điểm đích (phần mềm của cổng này đã có). Bơm chưa có nước cho tới khi laser đúng.
 
 ### Tuần 3 (19–25/10): nhận diện và ngắm
 
-- **Hậu:** state machine đầy đủ theo mục 4. Hàm tính pan/tilt từ tọa độ mục tiêu và pose đế vòi. Ghép cảnh báo với mục tiêu theo khoảng cách tới sensor.
-- **Hùng:** gán nhãn 200–300 ảnh bia chụp trên đúng sa bàn, train YOLO bản nano, đo thời gian suy luận trên Pi. Ước lượng pose tag của đế vòi và sensor. Tìm vết laser bằng hiệu của ảnh bật và ảnh tắt.
-- **Hiếu:** đo offset từ tag tới tâm quay và tới đầu laser. Hiệu chỉnh điểm 0 và hệ số servo bằng 9 điểm trên bảng. Phun thử ở 9 điểm để lập bảng bù tilt cho tia nước. Cùng Hậu chỉnh công thức góc.
+- **Hậu:** state machine đã có **[xong]**; chạy với node thật, chỉnh công thức góc cùng Hiếu. Kiểm tra ghép cảnh báo với bia theo khoảng cách tới sensor và vòi tự đổi khi vòi kia bị chặn. Chạy `export_episodes.py` trên các lượt thật để có tập đánh giá thật cho bộ quyết định.
+- **Hùng:** gán nhãn 200–300 ảnh bia chụp trên đúng sa bàn (`capture_frames.py`, `autolabel.py`), train lại YOLO bản nano, đo thời gian suy luận trên Pi (`bench_detect.py`). Ước lượng pose tag 8 cm của hai node. Chạy bộ quyết định ở laptop, Pi nối `--decider remote` và có luật dự phòng.
+- **Hiếu:** hiệu chỉnh điểm 0 và hệ số servo bằng 9 điểm cho từng vòi. Phun thử ở 9 điểm (`aim_point.py --water`) để lập bảng bù tilt cho tia nước.
 
 Cổng kiểm tra: kích cảm biến thật, YOLO thấy bia, laser tâm ngắm chỉ vào bia và tia nước chạm bảng (chưa cần vòng kín). Chốt con số dung sai.
 
 ### Tuần 4 (26/10–01/11): vòng kín, độ bền và Thread
 
-- **Hậu:** ép multi-hop bằng `macfilter` hoặc giảm công suất phát. Rút Pi để kiểm tra `/alarm`. Thêm SRP và DNS-SD. Đo PDR và độ trễ theo số hop.
-- **Hùng:** cùng Hậu làm bước CORRECT. Chạy lại commissioning khi dời node, đánh dấu pose cũ là hết hạn. Dùng tag tham chiếu để phát hiện camera bị lệch.
-- **Hiếu:** tiêm lỗi: mất Wi-Fi, mất heartbeat, lệnh trễ, lệnh trùng, góc ngoài giới hạn, `/stop` giữa chừng. Cố định cơ khí, đi dây gọn, che nước cho mạch.
+- **Hậu:** ép multi-hop bằng `macfilter` hoặc giảm công suất phát, cho cả hai vòi (lệnh ngắm cũng đi hai hop, đo lại `ttl`). Rút Pi để kiểm tra `/alarm`. Kiểm tra SRP và DNS-SD khi reset node. Đo PDR và độ trễ theo số hop. Nối Home Assistant qua MQTT trên Pi thật.
+- **Hùng:** bước CORRECT và commissioning lại khi dời node đã có **[xong]**; chỉnh `correct_done_m` theo vết laser thật. Kiểm tra camera bị lệch bằng tag tham chiếu. Chạy `log_pi_load.py` song song với các lượt end-to-end.
+- **Hiếu:** tiêm lỗi: mất Thread, mất heartbeat, lệnh trễ, lệnh trùng, góc ngoài giới hạn, `/stop` giữa chừng, cho cả hai node. Cố định cơ khí, đi dây gọn, che nước cho mạch và cảm biến vì vòi nằm ngay trên node.
 
 Cổng kiểm tra (MVP): 10 lượt liên tiếp từ cảm biến tới phun nước, ít nhất 8 lượt tia nước trúng thẻ bia. Mọi lỗi tiêm vào đều kết thúc với bơm và laser tắt.
 
 ### Tuần 5 (02–08/11): đo và mở rộng
 
-- **Hậu:** chạy đủ số lượt cho các bài thử mạng và end-to-end, xuất bảng số liệu. Nếu đã có con H2 thứ tư thì làm bài tự phục hồi.
-- **Hùng:** đo sai số pose tag, sai số tọa độ mục tiêu và sai số điểm chạm theo từng vị trí bia. Vẽ biểu đồ.
-- **Hiếu:** đo ngắm một lần, ngắm có hiệu chỉnh và tỷ lệ trúng của tia nước ở 9 vị trí. Xử lý rò nước và bắn tóe.
+- **Hậu:** chạy đủ số lượt cho các bài thử mạng và end-to-end (20 lượt có bia, 10 không bia), xuất bảng số liệu bằng `scripts/make_report.py`. Nếu đã có con H2 thứ tư thì làm bài tự phục hồi.
+- **Hùng:** đo sai số pose tag, sai số tọa độ mục tiêu và sai số điểm chạm theo từng vị trí bia. Biểu đồ lấy từ `report_errors.py` và `make_report.py`. Chấm lại Jev và luật trên lượt thật (`eval_rules.py --data`, `eval_jev.py`).
+- **Hiếu:** đo ngắm một lần, ngắm có hiệu chỉnh và tỷ lệ trúng của tia nước ở 9 vị trí, cho từng vòi. Xử lý rò nước và bắn tóe.
 
-Cổng kiểm tra: đủ số liệu cho mọi thử nghiệm ở mục 7.
+Cổng kiểm tra: đủ số liệu cho mọi thử nghiệm ở mục 7 và báo cáo HTML dựng được từ `runs/`.
 
 ### Tuần 6 (09–15/11): báo cáo và demo
 
@@ -217,7 +220,7 @@ Cổng kiểm tra: demo chạy trọn hai lần liên tiếp mà không phải s
 
 ### Tuần 7 (16–22/11): dự phòng
 
-- Chỉ sửa lỗi, không thêm tính năng. Nếu còn thời gian thì chuyển node chấp hành sang H2 chạy Thread và đo so sánh với bản Wi-Fi.
+- Chỉ sửa lỗi, không thêm tính năng. Nếu còn thời gian thì thử hai vòi phun cùng lúc, hoặc dùng lại ESP32-S3 làm đường lui nếu một node H2 hỏng (hai việc còn chưa quyết, xem thay-doi-hai-voi.md).
 
 ## 6. Phân công
 
