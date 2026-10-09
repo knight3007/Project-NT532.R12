@@ -121,6 +121,9 @@ class Orchestrator:
         self._run_ids = 0
         self._last_end: dict[str, float] = {}  # node -> lúc lượt gần nhất của node đó kết thúc
         self._realerts: dict[str, int] = {}  # node -> số lần tự xử lý lại liên tiếp
+        # Cảnh báo và dấu "lượt trước đã xong" có từ lúc này trở về trước thì bỏ (dừng khẩn cấp, forget).
+        # Chỉ ghi một số thực từ luồng khác; hai dict trên chỉ luồng orchestrator đọc và sửa.
+        self._cutoff = float("-inf")
         self._thread: threading.Thread | None = None
         self._halt = threading.Event()
 
@@ -137,9 +140,17 @@ class Orchestrator:
         self._queue.put((self.clock(), alert))
 
     def emergency_stop(self, reason: str = "nút dừng khẩn cấp") -> None:
+        """Dừng lượt đang chạy và quên mọi việc còn treo từ trước lúc dừng: cảnh báo trong hàng đợi và
+        lượt "xử lý lại" (nếu không, cảm biến còn nóng làm `_realert` tự mở lượt mới vài giây sau).
+        Cảnh báo mới từ node sau lúc này vẫn được xử lý như thường."""
+        self._cutoff = self.clock()
         self._abort.set()
         self.link.stop()
         self.events.emit("fault", f"DỪNG: {reason}", level="error")
+
+    def forget_followups(self) -> None:
+        """Quên cảnh báo đang chờ và các lượt "xử lý lại" còn treo, không dừng gì (giữa các cảnh demo)."""
+        self._cutoff = self.clock()
 
     def recommission(self) -> None:
         """Commissioning lại từ ảnh hiện tại (sau khi dời node hoặc camera)."""
@@ -187,6 +198,9 @@ class Orchestrator:
             if not self.enabled:
                 self.events.emit("alert", f"bỏ qua cảnh báo {alert.n}: orchestrator đang tắt")
                 continue
+            if t_rx <= self._cutoff:
+                self.events.emit("alert", f"bỏ cảnh báo {alert.n} có trước lệnh dừng", level="warn")
+                continue
             if self.clock() - t_rx > self.cfg.alert_max_age_s:
                 self.events.emit("alert", f"bỏ cảnh báo cũ từ {alert.n}", level="warn")
                 continue
@@ -200,6 +214,10 @@ class Orchestrator:
             return
         lim = alarm_limits(self.site)
         for node, t_end in list(self._last_end.items()):
+            if t_end <= self._cutoff:  # lượt xong trước lệnh dừng: không tự làm lại
+                del self._last_end[node]
+                self._realerts.pop(node, None)
+                continue
             if self.clock() - t_end < self.cfg.realert_s:
                 continue
             last = self.sensors.samples(node, 3)

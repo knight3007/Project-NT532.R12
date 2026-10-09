@@ -471,6 +471,41 @@ def test_emergency_stop_turns_everything_off(station):
     assert not any(station.world.pumping.values())
 
 
+def test_emergency_stop_cancels_pending_realert():
+    # Lượt cũ đã xong mà cảm biến còn nóng: trước đây `_realert` tự mở lượt mới vài giây sau nút dừng
+    from nt532.orchestrator.fusion import alarm_limits
+    from nt532.orchestrator.machine import Settings
+    from nt532.station import build_sim
+
+    st = build_sim(settings=Settings(frame_gap_s=0.05, verify_wait_s=1.0), fps=12)
+    st.start(orchestrate=False)
+    try:
+        orch, lim = st.orch, alarm_limits(st.site)
+
+        def hot():
+            last = orch.sensors.samples("s1", 3)
+            return len(last) == 3 and all(s.temp > lim["temp"] or s.gas > lim["gas"] for s in last)
+
+        st.world.ignite(0.32, 0.30)
+        assert wait_for(hot, 30)
+        n0 = orch._queue.qsize()
+        orch._last_end["s1"] = orch.clock() - 100
+        orch._realert()
+        assert orch._queue.qsize() == n0 + 1  # đối chứng: chưa dừng thì tự xử lý lại
+        orch._last_end["s1"] = orch.clock() - 100
+        orch._realerts.clear()
+        orch.emergency_stop("thử")
+        orch._realert()
+        assert orch._queue.qsize() == n0 + 1 and "s1" not in orch._last_end
+        orch.start()  # mọi cảnh báo đang chờ đều có trước lệnh dừng: bỏ hết, không mở lượt nào
+        assert wait_for(lambda: orch._queue.qsize() == 0, 5)
+        time.sleep(1.5)
+        assert not orch.runs and orch.phase.value == "IDLE"
+        assert any("có trước lệnh dừng" in e["text"] for e in st.events.since(0, 10_000))
+    finally:
+        st.stop()
+
+
 def test_fire_arriving_after_stop_is_rejected():
     # Gói /fire gửi trước /stop nhưng tới sau (luồng hoặc UDP đảo thứ tự): laser không được bật lại
     from nt532.sim.world import SimLink, SimWorld

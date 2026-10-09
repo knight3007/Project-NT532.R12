@@ -58,7 +58,7 @@ uv run python scripts/run_station.py --decider rules                 # phần c�
    - `call human`: sang HUMAN. Tối đa 3 lần phun.
 8. Mọi kết thúc (kể cả lỗi) đều gửi `/stop` tới mọi node. Lỗi mạng hoặc lỗi lạ thì sang FAULT.
    Id lệnh tăng dần trên mọi node, nên node nhớ id `/stop` lớn nhất đã nhận và từ chối (`rejected`, `err: stopped`) mọi `/aim`, `/fire` có id nhỏ hơn: gói gửi trước `/stop` mà tới sau (UDP đảo thứ tự, gửi lại) không được bật lại laser hay bơm. Firmware node phải giữ quy tắc này; `SimLink` cài đúng như vậy.
-9. **Báo lại:** node chỉ gửi `/a` lúc chuyển sang báo động. Nếu lượt trước kết luận xong mà 3 mẫu mới nhất vẫn vượt ngưỡng sau 20 s, orchestrator tự xử lý lại. Tối đa 2 lần liên tiếp, sau đó ghi lỗi "cần người kiểm tra".
+9. **Báo lại:** node chỉ gửi `/a` lúc chuyển sang báo động. Nếu lượt trước kết luận xong mà 3 mẫu mới nhất vẫn vượt ngưỡng sau 20 s, orchestrator tự xử lý lại. Tối đa 2 lần liên tiếp, sau đó ghi lỗi "cần người kiểm tra". Dừng khẩn cấp xóa mọi việc còn treo từ trước lúc dừng (cảnh báo trong hàng đợi, lượt xử lý lại), nên trạm không tự phun lại dù cảm biến còn nóng; chỉ cảnh báo mới từ node sau lúc dừng mới mở lượt mới.
 
 ## Bộ quyết định
 

@@ -52,6 +52,7 @@ Các script trong `pi/scripts/`:
 | `measure.py` | Các bài đo: click điểm, định vị bia, pose tag, vết laser; ghi CSV vào `runs/measure/` |
 | `report_errors.py` | Thống kê sai số từ CSV của `measure.py` và vẽ hình |
 | `make_report.py` | Gom số đo trong `runs/` thành một báo cáo HTML (sai số, độ trễ, kết cục, bộ quyết định, tải Pi) vào `runs/report/<thời điểm>/` |
+| `demo_station.py` | Demo đầu cuối trên sa bàn ảo: tám cảnh (cháy nhỏ, cháy lớn, đèn, hơi nước, nhiễu, mất node, dừng khẩn cấp), chấm quyết định và an toàn, ghi `runs/demo/<thời điểm>/summary.json`, `--report` dựng báo cáo ([docs/demo.md](docs/demo.md)) |
 | `live_detect.py` | Xem trực tiếp model phát hiện lửa trên webcam, video hoặc ảnh |
 | `capture_frames.py` | Chụp khung hình vào thư mục, bằng phím hoặc tự động |
 | `autolabel.py` | Tạo nhãn nháp YOLO cho ảnh thẻ bia tự chụp, để sửa tay rồi train |
@@ -72,6 +73,8 @@ Các script trong `pi/scripts/`:
 Chưa có sa bàn thì dùng sa bàn ảo trong `pi/src/nt532/sim/`: thêm `--source sim` vào bất kỳ script nào có `--source` (camera ảo, 4 tag tham chiếu mặc định, hai node, thẻ bia và laser theo pan/tilt).
 
 Chạy cả trạm kèm dashboard trên sa bàn ảo: `uv run python scripts/run_station.py --source sim` rồi mở http://localhost:8080/. Kiến trúc, luồng xử lý và các việc còn mở ở [docs/orchestrator.md](docs/orchestrator.md).
+
+Demo tám cảnh cố định trên sa bàn ảo (trình diễn tuần 6 và lấy số liệu cho báo cáo): `uv run python scripts/demo_station.py --step`, mô tả và cách chấm ở [docs/demo.md](docs/demo.md).
 
 Orchestrator dùng phần thị giác qua lớp `Vision`, mô tả ở [docs/vision-api.md](docs/vision-api.md). Cách đưa lên Pi và chạy các bài đo ở [docs/trien-khai-pi.md](docs/trien-khai-pi.md). Dùng điện thoại làm camera (RTMP qua mediamtx, đo độ trễ) ở [docs/camera-dien-thoai.md](docs/camera-dien-thoai.md).
 

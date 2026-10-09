@@ -215,6 +215,7 @@ Cổng kiểm tra: đủ số liệu cho mọi thử nghiệm ở mục 7 và b�
 ### Tuần 6 (09–15/11): báo cáo và demo
 
 - **Cả nhóm:** báo cáo, README dựng lại hệ thống, sơ đồ dây, file hiệu chuẩn, dataset và model, video demo. Đóng băng code từ giữa tuần.
+- **Hùng:** kịch bản demo trên sa bàn ảo đã có **[xong]** (`scripts/demo_station.py`, [demo.md](demo.md)): tám cảnh có chấm quyết định và an toàn, dùng để trình diễn và lấy số liệu; lặp lại các cảnh này trên sa bàn thật.
 
 Cổng kiểm tra: demo chạy trọn hai lần liên tiếp mà không phải sửa tay.
 

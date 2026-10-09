@@ -98,7 +98,7 @@ def collect(runs_dir: Path, since: float = 0.0) -> dict:
     """Đọc mọi nguồn có trong runs_dir; nguồn thiếu thì để rỗng. Phân loại CSV theo tên cột."""
     runs_dir = Path(runs_dir)
     d = {"root": runs_dir, "target": [], "tag": [], "aim": [], "stream": [], "load": [],
-         "station": [], "rules_eval": [], "jev_eval": []}
+         "station": [], "demo": [], "rules_eval": [], "jev_eval": []}
     csvs = sorted([*runs_dir.glob("measure/*.csv"), *runs_dir.glob("pi_load*.csv")])
     for p in csvs:
         rows = read_csv(p, since)
@@ -122,6 +122,10 @@ def collect(runs_dir: Path, since: float = 0.0) -> dict:
         evs = read_jsonl(p, since)
         if evs:
             d["station"].append((p, evs))
+    for p in sorted(runs_dir.glob("demo/*/summary.json")):
+        data = read_json(p, 0.0)  # mốc since tính theo giờ bắt đầu ghi trong summary, không theo mtime
+        if data is not None and (num(data.get("start")) or p.stat().st_mtime) >= since:
+            d["demo"].append((p, data))
     for name in ("rules_eval.json", "rules_eval_data.json"):
         if (data := read_json(runs_dir / "decider" / name, since)) is not None:
             d["rules_eval"].append((runs_dir / "decider" / name, data))
@@ -393,6 +397,52 @@ def sec_outcomes(d: dict, runs: list[dict]) -> Section | None:
     return Section("outcomes", "Kết cục các lượt chạy", names(d["station"]), f"{n} lượt", body)
 
 
+def _demo_word(ok: bool | None, yes: str, no: str) -> str:
+    return "không chấm" if ok is None else yes if ok else no
+
+
+def sec_demo(d: dict) -> Section | None:
+    items = d["demo"]
+    rows, notes = [], []
+    meta = []
+    for p, data in items:
+        run_name = p.parent.name
+        scenes = [s for s in data.get("scenes") or [] if isinstance(s, dict)]
+        meta.append(f"{run_name}: bộ quyết định {data.get('decider', '?')}, detector {data.get('detector', '?')}, "
+                    f"seed {data.get('seed', '?')}{', chạy nhanh' if data.get('fast') else ''}"
+                    f"{', dừng giữa chừng' if data.get('interrupted') else ''}")
+        for sc in scenes:
+            v = sc.get("verdict") or {}
+            sprayed = sc.get("sprayed") or []
+            out = sc.get("fire_out")
+            rows.append([run_name, sc.get("title") or sc.get("name", "?"),
+                         ", ".join(str(o) for o in sc.get("outcomes") or []) or "–",
+                         ("+".join(sprayed) + (" (cùng lúc)" if sc.get("dual_pump") else "")) if sprayed
+                         else "không phun",
+                         f(num(sc.get("latency_s")), 1), "–" if out is None else "có" if out else "chưa",
+                         _demo_word(v.get("decision_ok"), "ĐẠT", "KHÔNG ĐẠT"),
+                         _demo_word(v.get("safety_ok"), "AN TOÀN", "VI PHẠM AN TOÀN")])
+            line = f"<li><b>{escape(str(sc.get('title') or sc.get('name', '?')))}</b>: {escape(str(sc.get('expect', '')))}"
+            if v.get("notes"):
+                line += "<br><i>" + escape("; ".join(str(x) for x in v["notes"])) + "</i>"
+            notes.append(line + "</li>")
+    if not rows:
+        return None
+    n_dec = sum(r[6] == "ĐẠT" for r in rows)
+    n_graded = sum(r[6] != "không chấm" for r in rows)
+    n_safe = sum(r[7] == "AN TOÀN" for r in rows)
+    body = ("<p>" + escape("; ".join(meta)) + ".</p>"
+            + table(["lần chạy", "cảnh", "kết cục các lượt", "vòi phun", "trễ báo động→bơm (s)", "lửa tắt",
+                     "quyết định", "an toàn"], rows)
+            + f"<p>Quyết định đạt <b>{n_dec}/{n_graded}</b> cảnh; an toàn <b>{n_safe}/{len(rows)}</b> cảnh.</p>"
+            + "<h3>Mong đợi từng cảnh</h3><ul>" + "".join(notes) + "</ul>")
+    src = ", ".join(f"<code>{escape(p.parent.name)}/{escape(p.name)}</code>" for p, _ in items)
+    return Section("demo", "Kịch bản demo trên sa bàn ảo", src, f"{len(rows)} cảnh", body,
+                   "Quyết định sai (vd. luật phun nhầm đèn nóng) là thông tin đánh giá bộ quyết định; vi phạm "
+                   "an toàn (bơm hay laser còn bật, node bị cấm vẫn phun) là lỗi nghiêm trọng. "
+                   "Độ trễ ở chế độ chạy nhanh nhỏ hơn thật vì chu kỳ khung và chờ VERIFY ngắn hơn.")
+
+
 def _acc_table(cols: list[tuple[str, dict]]) -> str:
     head = [""] + [c for c, _ in cols]
     rows = [["số bản ghi"] + [r.get("n_records", "–") for _, r in cols]]
@@ -540,8 +590,8 @@ def build_report(data: dict, gate_cm: float = GATE_CM) -> str:
     runs = build_runs(data["station"])
     makers = [lambda: sec_localization(data), lambda: sec_tag(data), lambda: sec_aim(data),
               lambda: sec_convergence(data, runs), lambda: sec_latency(data, runs),
-              lambda: sec_outcomes(data, runs), lambda: sec_decision(data), lambda: sec_load(data),
-              lambda: sec_stream(data), lambda: sec_telemetry(data)]
+              lambda: sec_outcomes(data, runs), lambda: sec_demo(data), lambda: sec_decision(data),
+              lambda: sec_load(data), lambda: sec_stream(data), lambda: sec_telemetry(data)]
     secs = [s for m in makers if (s := m()) is not None]
     nav = "".join(f'<a href="#{s.sid}">{escape(s.title)}</a>' for s in secs)
     body = "".join(s.html() for s in secs) or '<p class="empty">Chưa có số đo nào trong thư mục runs.</p>'

@@ -166,3 +166,58 @@ def test_since_parsing():
         pass
     else:
         raise AssertionError
+
+
+DEMO_START = 1_791_532_700.0
+
+
+def demo_summary():
+    ok = {"decision_ok": True, "safety_ok": True, "notes": []}
+    bad = {"decision_ok": False, "safety_ok": True, "notes": ["quyết định: phun nhầm bằng s1 khi không có cháy thật"]}
+    return {
+        "start": DEMO_START, "end": DEMO_START + 90, "decider": "rules", "detector": "oracle", "seed": 0,
+        "fast": True, "interrupted": False,
+        "scenes": [
+            {"name": "fire_s1", "title": "Đám cháy nhỏ gần vòi s1", "expect": "Phun bằng s1 và lửa tắt.",
+             "runs": [{"id": 1, "node": "s1", "outcome": "extinguished", "nozzle": "s1"}],
+             "outcomes": ["extinguished"], "sprayed": ["s1"], "dual_pump": False, "latency_s": 11.4,
+             "fire_out": True, "verdict": ok},
+            {"name": "lamp", "title": "Đèn nóng giả làm lửa", "expect": "Không được phun.",
+             "runs": [{"id": 2, "node": "s1", "outcome": "extinguished", "nozzle": "s1"}],
+             "outcomes": ["extinguished"], "sprayed": ["s1"], "dual_pump": False, "latency_s": 9.8,
+             "fire_out": None, "verdict": bad},
+            {"name": "estop", "title": "Nút dừng khẩn cấp giữa lượt phun", "expect": "Lượt stopped.",
+             "runs": [], "outcomes": ["stopped"], "sprayed": [], "dual_pump": False, "latency_s": None,
+             "fire_out": False, "verdict": {"decision_ok": True, "safety_ok": False,
+                                            "notes": ["an toàn: sau nút dừng khẩn cấp vẫn còn bật 2.0 s"]}},
+        ],
+    }
+
+
+def test_demo_section_lists_scenes_and_verdicts(tmp_path):
+    out = tmp_path / "demo" / "20261009-130000"
+    out.mkdir(parents=True)
+    (out / "summary.json").write_text(json.dumps(demo_summary()), encoding="utf-8")
+    data = collect(tmp_path)
+    assert len(data["demo"]) == 1
+    html = build_report(data)
+    assert 'id="demo"' in html and "Kịch bản demo trên sa bàn ảo" in html
+    assert "20261009-130000/summary.json" in html and "N = 3 cảnh" in html
+    for text in ("Đám cháy nhỏ gần vòi s1", "Đèn nóng giả làm lửa", "Phun bằng s1 và lửa tắt.", "extinguished",
+                 "11.4", "ĐẠT", "KHÔNG ĐẠT", "AN TOÀN", "VI PHẠM AN TOÀN", "phun nhầm bằng s1"):
+        assert text in html, text
+    assert "Quyết định đạt <b>2/3</b>" in html and "an toàn <b>2/3</b>" in html
+
+
+def test_demo_section_skipped_without_summary_and_respects_since(tmp_path):
+    assert 'id="demo"' not in build_report(collect(tmp_path))
+    out = tmp_path / "demo" / "20261009-130000"
+    out.mkdir(parents=True)
+    (out / "summary.json").write_text(json.dumps(demo_summary()), encoding="utf-8")
+    assert len(collect(tmp_path, DEMO_START - 1)["demo"]) == 1
+    late = collect(tmp_path, DEMO_START + 1)
+    assert late["demo"] == [] and 'id="demo"' not in build_report(late)
+    (out / "summary.json").write_text("{hỏng", encoding="utf-8")
+    assert collect(tmp_path)["demo"] == []
+    (out / "summary.json").write_text(json.dumps({"start": DEMO_START, "scenes": []}), encoding="utf-8")
+    assert 'id="demo"' not in build_report(collect(tmp_path))
