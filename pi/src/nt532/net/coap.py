@@ -18,6 +18,8 @@ from aiocoap.numbers.codes import BAD_REQUEST
 from .link import LinkError, NodeLink
 from .protocol import Alert, Deduper, PayloadError, Status, Telemetry, dumps
 
+HB_REPLY_S = 1.0  # chờ trả lời /hb tối đa; trễ hơn thì coi như mất nhịp đó
+
 
 class _Post(resource.Resource):
     def __init__(self, handle: Callable[[bytes, str], None]) -> None:
@@ -117,8 +119,12 @@ class CoapLink(NodeLink):
         payload = b"" if msg is None else dumps(msg)
         req = Message(code=POST, payload=payload, uri=f"coap://{self._host(node)}/{path}",
                       **({} if confirmable else {"transport_tuning": Unreliable}))
-        fut = asyncio.run_coroutine_threadsafe(self._request(req, confirmable), self._loop)
+        fut = asyncio.run_coroutine_threadsafe(self._request(req, self.timeout if confirmable else HB_REPLY_S),
+                                               self._loop)
         if not confirmable:
+            # /hb là NON (không gửi lại), nhưng node vẫn trả 2.04 NON: có trả lời là node còn sống.
+            # Không có bước này thì trên mạng thật hb_age_ms chỉ được làm mới bởi /t (5–10 s) và vòi bị chặn.
+            fut.add_done_callback(lambda f: self._hb_reply(node, f))
             return
         try:
             fut.result(self.timeout + 1)
@@ -126,14 +132,15 @@ class CoapLink(NodeLink):
             raise LinkError(f"gửi /{path} tới {node} lỗi: {type(e).__name__}: {e}") from None
         self.on_rx(node)
 
-    async def _request(self, req: Message, wait: bool):
+    def _hb_reply(self, node: str, fut) -> None:
+        if not fut.cancelled() and fut.exception() is None:
+            self.on_rx(node)
+
+    async def _request(self, req: Message, timeout: float):
         if self._ctx is None:
             raise LinkError("CoAP chưa khởi động")
-        r = self._ctx.request(req)
-        if wait:
-            # không dùng cơ chế gửi lại mặc định (có thể kéo hàng chục giây): chờ có hạn
-            return await asyncio.wait_for(r.response, self.timeout)
-        return None
+        # không dùng cơ chế gửi lại mặc định (có thể kéo hàng chục giây): chờ có hạn
+        return await asyncio.wait_for(self._ctx.request(req).response, timeout)
 
     def _host(self, node: str) -> str:
         """'fd00::1' -> '[fd00::1]'; '[fd00::1]:5683', '10.0.0.5:5683', 'node.local' giữ nguyên."""

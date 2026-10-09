@@ -160,3 +160,51 @@ def test_coap_gateway_receives_and_sends():
         link.close()
         asyncio.run_coroutine_threadsafe(holder["ctx"].shutdown(), loop).result(5)
         loop.call_soon_threadsafe(loop.stop)
+
+
+def test_hb_reply_refreshes_heartbeat_age():
+    """Node chỉ trả lời /hb (không gửi gì khác): tuổi heartbeat vẫn phải được làm mới."""
+    aiocoap = pytest.importorskip("aiocoap")
+    from aiocoap import resource
+
+    from nt532.net.coap import CoapLink
+
+    pi_port, node_port = _free_port(), _free_port()
+    link = CoapLink({"s1": f"127.0.0.1:{node_port}"}, bind=("127.0.0.1", pi_port), timeout_s=2,
+                     transports=TRANSPORTS).start()
+    loop = asyncio.new_event_loop()
+    ready = threading.Event()
+    holder = {}
+    beats = []
+
+    class HbRes(resource.Resource):
+        async def render_post(self, request):
+            beats.append(request.mtype)
+            return aiocoap.Message(code=aiocoap.CHANGED)
+
+    async def node():
+        site = resource.Site()
+        site.add_resource(["hb"], HbRes())
+        holder["ctx"] = await aiocoap.Context.create_server_context(site, bind=("127.0.0.1", node_port),
+                                                              transports=TRANSPORTS)
+        ready.set()
+
+    def run():
+        asyncio.set_event_loop(loop)
+        loop.run_until_complete(node())
+        loop.run_forever()
+
+    threading.Thread(target=run, daemon=True).start()
+    assert ready.wait(5)
+    try:
+        assert link.hb_age_ms("s1") == float("inf")
+        link.heartbeat("s1")
+        deadline = time.monotonic() + 3
+        while link.hb_age_ms("s1") == float("inf") and time.monotonic() < deadline:
+            time.sleep(0.02)
+        assert link.hb_age_ms("s1") < 1000
+        assert beats == [aiocoap.NON]  # vẫn là NON: không gửi lại
+    finally:
+        link.close()
+        asyncio.run_coroutine_threadsafe(holder["ctx"].shutdown(), loop).result(5)
+        loop.call_soon_threadsafe(loop.stop)

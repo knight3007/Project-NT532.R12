@@ -1,1 +1,1 @@
-"""CoAP server cho sensor (/t, /a, /status) và CoAP client tới S3 (/aim, /fire, /stop, /hb)."""
+"""CoAP server cho node (/t, /a, /status) và CoAP client tới node H2 qua Thread (/aim, /fire, /stop, /hb)."""
