@@ -30,6 +30,18 @@ jobs:
       - run: timeout 300 uv run --no-sync python scripts/commission.py --source sim
       - run: uv run --no-sync ruff check src tests scripts
       - run: uv run --no-sync pytest -q --ignore=tests/test_decider.py --ignore=tests/test_jev.py
+      # Cầu nối MQTT/Home Assistant với mosquitto thật (cho phép ẩn danh chỉ trong CI)
+      - name: Mosquitto
+        run: |
+          printf 'listener 1883\nallow_anonymous true\n' > "$RUNNER_TEMP/mosquitto.conf"
+          docker run -d --name mosquitto -p 1883:1883 \
+            -v "$RUNNER_TEMP/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro" eclipse-mosquitto:2
+          for i in $(seq 20); do (echo > /dev/tcp/127.0.0.1/1883) 2>/dev/null && exit 0; sleep 1; done
+          docker logs mosquitto; exit 1
+      - run: uv sync --python 3.13 --extra mqtt
+      - run: uv run --no-sync pytest -q tests/test_mqtt.py -rs
+        env:
+          NT532_MQTT_BROKER: localhost:1883
 
   decider:
     name: Bộ quyết định (torch CPU)

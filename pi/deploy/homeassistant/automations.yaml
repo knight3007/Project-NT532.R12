@@ -1,0 +1,36 @@
+# Ví dụ tự động hóa: thêm vào automations.yaml của HA. Đổi notify.notify thành dịch vụ thông báo của bạn
+# (vd notify.mobile_app_dien_thoai).
+- alias: NT532 báo động
+  trigger:
+    - platform: state
+      entity_id:
+        - binary_sensor.nt532_s1_alarm
+        - binary_sensor.nt532_s2_alarm
+      to: "on"
+  action:
+    - service: notify.notify
+      data:
+        title: Trạm NT532 báo động
+        message: "{{ trigger.to_state.name }}. {{ states('sensor.nt532_last_alert') }}"
+
+- alias: NT532 cần người hoặc có lỗi
+  trigger:
+    - platform: state
+      entity_id: sensor.nt532_outcome
+      to: ["human", "fault", "alarm_only"]
+  action:
+    - service: notify.notify
+      data:
+        title: Trạm NT532 cần người xử lý
+        message: "Kết quả lượt vừa rồi: {{ trigger.to_state.state }}"
+
+- alias: NT532 mất kết nối trạm
+  trigger:
+    - platform: state
+      entity_id: sensor.nt532_phase
+      to: unavailable
+      for: "00:01:00"
+  action:
+    - service: notify.notify
+      data:
+        message: Trạm NT532 không còn gửi dữ liệu (offline hơn 1 phút).

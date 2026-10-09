@@ -4,18 +4,21 @@
 #   bash pi/deploy/setup_pi.sh                    # apt, uv, uv sync, mediamtx
 #   bash pi/deploy/setup_pi.sh --yolo             # thêm --extra yolo và ncnn
 #   bash pi/deploy/setup_pi.sh --install-services # chép và bật nt532-station + mediamtx (systemd)
+#   bash pi/deploy/setup_pi.sh --mosquitto        # thêm gói mqtt (paho) và cài broker mosquitto cho Home Assistant
 #
 # Chạy bằng user thường (không sudo); script tự gọi sudo khi cần. Không cài OTBR: xem firmware/rcp/README.md.
 set -euo pipefail
 
 YOLO=0
 SERVICES=0
+MOSQUITTO=0
 MEDIAMTX_DIR="${MEDIAMTX_DIR:-$HOME/mediamtx}"
 for a in "$@"; do
   case "$a" in
     --yolo) YOLO=1 ;;
     --install-services) SERVICES=1 ;;
-    -h|--help) sed -n '2,8p' "$0"; exit 0 ;;
+    --mosquitto) MOSQUITTO=1 ;;
+    -h|--help) sed -n '2,9p' "$0"; exit 0 ;;
     *) echo "Tham số lạ: $a (xem --help)" >&2; exit 2 ;;
   esac
 done
@@ -66,11 +69,18 @@ uv --version
 log "uv sync"
 cd "$PI_DIR"
 if [ "$YOLO" -eq 1 ]; then
-  uv sync --extra yolo
+  uv sync --extra yolo $( [ "$MOSQUITTO" -eq 1 ] && echo --extra mqtt )
   # ncnn không nằm trong pyproject.toml, nên sau đó mọi lệnh phải chạy bằng `uv run --no-sync`.
   uv pip install ncnn
 else
-  uv sync
+  if [ "$MOSQUITTO" -eq 1 ]; then uv sync --extra mqtt; else uv sync; fi
+fi
+
+# --- 3b. mosquitto (tùy chọn, xem docs/home-assistant.md) --------------------------
+if [ "$MOSQUITTO" -eq 1 ]; then
+  log "Cài mosquitto"
+  sudo apt-get install -y --no-install-recommends mosquitto mosquitto-clients
+  echo "Tạo user và bật cấu hình: xem pi/deploy/homeassistant/mosquitto.conf và docs/home-assistant.md"
 fi
 
 # --- 4. mediamtx (bản mới nhất, linux_arm64) ---------------------------------

@@ -107,3 +107,14 @@ network:
   nodes:
     s1: null                   # ví dụ "fd11:22::1" (địa chỉ mesh-local của H2) hoặc "s1.local"
     s2: null
+
+mqtt:
+  # Cầu nối Home Assistant (bật bằng run_station.py --mqtt). Xem docs/home-assistant.md.
+  # Mật khẩu không để trong tệp này: đọc từ biến môi trường password_env.
+  enabled: false
+  host: localhost
+  port: 1883
+  username: null
+  password_env: NT532_MQTT_PASSWORD
+  station_id: nt532
+  discovery_prefix: homeassistant

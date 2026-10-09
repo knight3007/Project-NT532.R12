@@ -13,6 +13,8 @@ dependencies = [
 
 [project.optional-dependencies]
 yolo = ["ultralytics>=8.3", "torch>=2.6", "torchvision>=0.21"]
+# Cầu nối MQTT tới Home Assistant (nt532.integrations.mqtt)
+mqtt = ["paho-mqtt>=2.1"]
 # Thử mô hình quyết định dựa trên EmbeddingGemma 2 (ảnh + văn bản vào cùng không gian 768 chiều)
 decider = ["sentence-transformers>=6.1", "transformers>=5.19", "torch>=2.6", "torchvision>=0.21", "peft>=0.13"]
 

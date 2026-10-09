@@ -1,0 +1,83 @@
+# Dashboard Lovelace (chế độ YAML) cho trạm NT532. Entity id theo station_id mặc định "nt532".
+# Dùng: Cài đặt > Dashboards > Thêm > "Mới từ đầu", mở dashboard, ba chấm > Chỉnh sửa > ba chấm > Trình chỉnh sửa
+# cấu hình thô, dán toàn bộ tệp này. Nếu đổi mqtt.station_id thì thay "nt532_" trong entity id cho khớp.
+title: Trạm NT532
+views:
+  - title: Trạm
+    path: tram
+    icon: mdi:fire-alert
+    cards:
+      - type: entities
+        title: Node s1
+        entities:
+          - binary_sensor.nt532_s1_alarm
+          - binary_sensor.nt532_s1_hb_ok
+          - binary_sensor.nt532_s1_pump
+          - binary_sensor.nt532_s1_laser
+          - sensor.nt532_s1_temp
+          - sensor.nt532_s1_gas
+          - sensor.nt532_s1_hum
+      - type: entities
+        title: Node s2
+        entities:
+          - binary_sensor.nt532_s2_alarm
+          - binary_sensor.nt532_s2_hb_ok
+          - binary_sensor.nt532_s2_pump
+          - binary_sensor.nt532_s2_laser
+          - sensor.nt532_s2_temp
+          - sensor.nt532_s2_gas
+          - sensor.nt532_s2_hum
+      - type: entities
+        title: Trạm
+        entities:
+          - sensor.nt532_phase
+          - sensor.nt532_target
+          - sensor.nt532_decider
+          - select.nt532_decider_select
+          - sensor.nt532_outcome
+          - sensor.nt532_latency
+          - sensor.nt532_last_alert
+          - type: button
+            name: Dừng khẩn cấp
+            icon: mdi:stop-circle
+            action_name: DỪNG
+            tap_action:
+              action: call-service
+              service: button.press
+              target:
+                entity_id: button.nt532_emergency_stop
+              confirmation:
+                text: Dừng khẩn cấp toàn trạm (tắt bơm, laser)?
+      - type: history-graph
+        title: Nhiệt độ 24 giờ
+        hours_to_show: 24
+        entities:
+          - sensor.nt532_s1_temp
+          - sensor.nt532_s2_temp
+      - type: history-graph
+        title: Khí gas 24 giờ
+        hours_to_show: 24
+        entities:
+          - sensor.nt532_s1_gas
+          - sensor.nt532_s2_gas
+      - type: statistics-graph
+        title: Số lượt mỗi ngày
+        chart_type: bar
+        period: day
+        days_to_show: 14
+        stat_types: [change]
+        entities:
+          - sensor.nt532_runs
+          - sensor.nt532_sprays
+      - type: statistics-graph
+        title: Kết quả mỗi ngày
+        chart_type: bar
+        period: day
+        days_to_show: 14
+        stat_types: [change]
+        entities:
+          - sensor.nt532_extinguished
+          - sensor.nt532_alarm_only
+          - sensor.nt532_ignored
+          - sensor.nt532_human
+          - sensor.nt532_faults

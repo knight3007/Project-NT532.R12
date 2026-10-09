@@ -76,6 +76,8 @@ Orchestrator dùng phần thị giác qua lớp `Vision`, mô tả ở [docs/vis
 
 Thứ tự dựng phần cứng khi triển khai (checklist từng bước, sự cố thường gặp): [docs/trien-khai-phan-cung.md](docs/trien-khai-phan-cung.md).
 
+Đưa trạm lên Home Assistant (lịch sử, thống kê, thông báo, nút dừng khẩn cấp) qua MQTT: [docs/home-assistant.md](docs/home-assistant.md).
+
 Dataset và nguồn tải ghi ở [docs/datasets.md](docs/datasets.md).
 
 ## Firmware
