@@ -81,13 +81,15 @@ camera:
 Thông số nội tại của webcam không dùng lại cho điện thoại. Hiệu chuẩn lại trên stream, giữ đúng độ phân giải và ống kính (không đổi sang ống góc rộng hay zoom giữa chừng):
 
 ```bash
-uv run python scripts/calibrate_camera.py --capture   # đọc camera.stream.url trong site.yaml
+uv run --no-sync python scripts/calibrate_camera.py --capture   # đọc camera.stream.url trong site.yaml
 ```
+
+Trên Pi, mọi lệnh `uv run` phải có `--no-sync` (các lệnh dưới đây cũng vậy): `ncnn` cài bằng `uv pip` không nằm trong `pyproject.toml`, `uv run` trơn sẽ đồng bộ lại môi trường và gỡ nó.
 
 ## 6. Đo độ trễ
 
 ```bash
-uv run python scripts/stream_latency.py --node s1
+uv run --no-sync python scripts/stream_latency.py --node s1
 ```
 
 Script bật laser của node `s1` nhiều lần và đo từ lúc gửi lệnh tới khi stream hiện vệt laser. Laser phải rọi vào vùng camera nhìn thấy. Chép giá trị gợi ý vào `camera.stream.latency_s`.
@@ -97,7 +99,7 @@ Việc này quan trọng ở bước CORRECT: orchestrator bật laser 700 ms, c
 ## 7. Kiểm tra nhanh
 
 - Từ laptop cùng mạng: `ffplay rtsp://<IP Pi>:8554/cam` hoặc mở URL đó bằng VLC.
-- Xem tag và pose qua stream: `uv run python scripts/live_tags.py --source rtsp://127.0.0.1:8554/cam`.
+- Xem tag và pose qua stream: `uv run --no-sync python scripts/live_tags.py --source rtsp://127.0.0.1:8554/cam`.
 
 ## 8. Sự cố thường gặp
 

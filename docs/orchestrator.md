@@ -4,7 +4,7 @@ Phần này nối các mảnh đã có thành một trạm chạy được: th�
 
 ```
 uv run python scripts/run_station.py --source sim                    # mở http://localhost:8080/
-uv run python scripts/run_station.py --source sim --decider hybrid   # cần runs/decider/jev/jev1 và --extra decider
+uv run python scripts/run_station.py --source sim --decider hybrid   # mô hình ở VERIFY (--model-stages); cần runs/decider/jev/jev1 và --extra decider
 uv run python scripts/run_station.py --decider rules                 # phần cứng: webcam + CoAP
 ```
 
@@ -65,11 +65,13 @@ uv run python scripts/run_station.py --decider rules                 # phần c�
 | --- | --- |
 | `rules` | Baseline luật của kế hoạch (`nt532.decider.rules`), không cần torch |
 | `jev` | Mô hình Jev ở `runs/decider/jev/<--jev-run>`, cần `uv sync --extra decider` |
-| `hybrid` | Từng câu hỏi: đáp án mô hình nếu độ tin cậy đã hiệu chỉnh ≥ `--tau`, ngược lại luật. Mô hình lỗi thì dùng luật cả lượt và báo trên dashboard |
+| `hybrid` | Từng câu hỏi: đáp án mô hình nếu độ tin cậy đã hiệu chỉnh ≥ `--tau`, ngược lại luật. Chỉ hỏi mô hình ở các giai đoạn trong `--model-stages` (mặc định `verify`; `decide` hoặc `decide,verify`); giai đoạn khác luật trả lời, không gọi mô hình. Mô hình lỗi thì dùng luật cả lượt và báo trên dashboard |
+
+`--model-stages` chia câu hỏi theo giai đoạn: `after_verify` thuộc `verify`; `real_fire`, `action`, `target`, `nozzle` thuộc `decide`. Mặc định chỉ `verify` vì DECIDE cần nhanh (xem độ trễ dưới đây) còn luật yếu nhất đúng ở after_verify (62,8% so với 89,4% của Jev trên tập val). Tên bộ quyết định trên dashboard và `source` của từng đáp án (`rules`/`model`) cho biết giai đoạn nào đã dùng mô hình. `--decider jev` thuần mô hình luôn gọi ở cả hai giai đoạn.
 
 Có thể đổi bộ quyết định ngay trên dashboard. `Decision` ghi cả đoạn STATE đã đưa vào mô hình, nên xem được trên dashboard và trong nhật ký.
 
-Đo ngày 08/10 trên container 4 nhân x86, CPU, fp32, với `heads_only`: nạp mất khoảng 28 s, mỗi lần `decide()` mất khoảng **8,4 s**, vì mỗi lần quyết định phải mã hóa khoảng 9 chuỗi qua backbone 271M. Pi 5 có thể chậm hơn. Trước khi dùng Jev trên Pi cần đo lại; nếu quá chậm thì cân nhắc chạy bộ quyết định trên máy khác qua mạng, lượng tử hóa hoặc ONNX, hoặc chỉ hỏi mô hình ở bước VERIFY (nơi luật yếu nhất).
+Đo ngày 08/10 trên container 4 nhân x86, CPU, fp32, với `heads_only`: nạp mất khoảng 28 s, mỗi lần `decide()` mất khoảng **8,4 s**, vì mỗi lần quyết định phải mã hóa khoảng 9 chuỗi qua backbone 271M. Pi 5 có thể chậm hơn. Trước khi dùng Jev trên Pi cần đo lại; nếu quá chậm thì cân nhắc chạy bộ quyết định trên máy khác qua mạng, lượng tử hóa hoặc ONNX, hoặc chỉ hỏi mô hình ở bước VERIFY (nơi luật yếu nhất): đó là mặc định `--model-stages verify` của chế độ `hybrid`, nên DECIDE không phải chờ mô hình.
 
 ## Dashboard
 

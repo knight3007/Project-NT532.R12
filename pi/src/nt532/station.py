@@ -38,11 +38,14 @@ class Station:
     detector_name: str = ""
     fake_nodes: dict | None = None  # {tên: FakeNode} khi build_sim(link="coap")
 
-    def start(self) -> "Station":
+    def start(self, orchestrate: bool = True) -> "Station":
+        """`orchestrate=False`: chỉ bật sa bàn ảo và heartbeat, orchestrator không chạy nên không tự
+        xử lý cảnh báo (dùng cho các script đo tay như aim_point.py)."""
         if self.world is not None:
             self.world.start()
         self.heartbeat.start()
-        self.orch.start()
+        if orchestrate:
+            self.orch.start()
         return self
 
     def stop(self) -> None:
@@ -58,8 +61,8 @@ class Station:
         if close:
             close()
 
-    def set_decider(self, kind: str, run: str = "jev1", tau: float = 0.8) -> None:
-        self.orch.decider = make_decider(kind, run, tau)
+    def set_decider(self, kind: str, run: str = "jev1", tau: float = 0.8, stages: str = "verify") -> None:
+        self.orch.decider = make_decider(kind, run, tau, stages=stages)
         self.events.emit("config", f"bộ quyết định: {self.orch.decider.name}")
         warm_up(self.orch.decider, self.events)
 
@@ -105,7 +108,7 @@ def _wire(site, vision, hub, link, decider, events, settings, world=None, detect
 def build_sim(decider: str = "rules", jev_run: str = "jev1", tau: float = 0.8,
               detector: str = "oracle", seed: int = 0, fps: float = 10.0,
               log_path: str | Path | None = None, settings: Settings | None = None,
-              link: str = "mem") -> Station:
+              link: str = "mem", model_stages: str = "verify") -> Station:
     """`link="mem"`: node ảo trong bộ nhớ (SimLink). `"coap"`: mỗi node là một FakeNode chạy lõi C của
     firmware, lệnh và telemetry đi qua UDP localhost bằng CoapLink thật."""
     from .sim.world import OracleDetector, SimLink, SimWorld
@@ -132,8 +135,8 @@ def build_sim(decider: str = "rules", jev_run: str = "jev1", tau: float = 0.8,
         link, fakes = _coap_nodes(world, events)
     else:
         link = SimLink(world)
-    st = _wire(site, vision, hub, link, make_decider(decider, jev_run, tau), events, settings,
-               world, detector, fakes)
+    st = _wire(site, vision, hub, link, make_decider(decider, jev_run, tau, stages=model_stages),
+               events, settings, world, detector, fakes)
     if fakes:
         # telemetry và cảnh báo do node giả gửi qua UDP; world không tự đẩy nữa (tránh nạp hai lần)
         link.on_telemetry, link.on_alert = st.sensors.add, st.orch.on_alert
@@ -187,7 +190,8 @@ def _coap_nodes(world, events):
 
 def build_real(decider: str = "rules", jev_run: str = "jev1", tau: float = 0.8,
                source: int | str | None = None, fps: float = 15.0, yolo_device: str | None = None,
-               log_path: str | Path | None = None, settings: Settings | None = None) -> Station:
+               log_path: str | Path | None = None, settings: Settings | None = None,
+               model_stages: str = "verify") -> Station:
     """Webcam + CoAP. Cần calibration/camera.yaml, commissioning và `network.nodes` trong site.yaml."""
     from .net.coap import CoapLink
     from .vision import open_camera
@@ -211,8 +215,8 @@ def build_real(decider: str = "rules", jev_run: str = "jev1", tau: float = 0.8,
         raise ValueError("chưa khai địa chỉ node trong network.nodes của config/site.yaml")
     link = CoapLink(nodes, (net.get("bind", "::"), int(net.get("port", 5683))),
                     transports=net.get("transports")).start()
-    st = _wire(site, vision, hub, link, make_decider(decider, jev_run, tau), events, settings,
-               detector_name="yolo")
+    st = _wire(site, vision, hub, link, make_decider(decider, jev_run, tau, stages=model_stages),
+               events, settings, detector_name="yolo")
     link.on_telemetry = st.sensors.add
     link.on_alert = st.orch.on_alert
     if vision.blockers():

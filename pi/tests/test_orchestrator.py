@@ -107,9 +107,10 @@ def test_sensor_window_pads_and_handles_missing_node():
 
 class FakeModel:
     def __init__(self, conf, fail=False):
-        self.conf, self.fail = conf, fail
+        self.conf, self.fail, self.calls = conf, fail, 0
 
     def answers(self, obs, questions):
+        self.calls += 1
         if self.fail:
             raise RuntimeError("không có trọng số")
         return {q: Answer("MODEL", self.conf, {"MODEL": self.conf}, "model") for q in questions}
@@ -118,10 +119,29 @@ class FakeModel:
 def test_hybrid_uses_model_only_when_confident():
     obs, _ = decide_obs("s1", history("s1"), [], nozzles(), NODE_X, 4, {"temp": 45.0, "gas": 600.0})
     q = questions_for(obs)
-    assert HybridDecider(FakeModel(0.95), tau=0.8).decide(obs, q).get("action") == "MODEL"
-    assert HybridDecider(FakeModel(0.5), tau=0.8).decide(obs, q).get("action") == ACTIONS[2]
-    h = HybridDecider(FakeModel(0.99, fail=True))
+    both = {"decide", "verify"}
+    assert HybridDecider(FakeModel(0.95), tau=0.8, stages=both).decide(obs, q).get("action") == "MODEL"
+    assert HybridDecider(FakeModel(0.5), tau=0.8, stages=both).decide(obs, q).get("action") == ACTIONS[2]
+    h = HybridDecider(FakeModel(0.99, fail=True), stages=both)
     assert h.decide(obs, q).get("action") == ACTIONS[2] and "trọng số" in h.last_error
+
+
+def test_hybrid_stages_skip_model_outside_chosen_stage():
+    tracks = aggregate([[tgt(0.32, 0.25, 0.8)]] * 3, (1280, 720))
+    obs, _ = decide_obs("s1", history("s1"), tracks, nozzles(), NODE_X, 3, {"temp": 45.0, "gas": 600.0})
+    dq = questions_for(obs)
+    vobs = verify_obs(obs, obs["targets"][0]["id"], "s1", 1, "ok", [50.0, 48.0, 46.0], [None] * 3, None, history("s1"))
+    vq = questions_for(vobs)
+    model = FakeModel(0.99)
+    h = HybridDecider(model, stages={"verify"})  # mặc định
+    d = h.decide(obs, dq)
+    assert model.calls == 0 and d.get("action") == ACTIONS[0]
+    assert all(a.source == "rules" for a in d.answers.values())
+    assert h.decide(vobs, vq).get("after_verify") == "MODEL" and model.calls == 1
+    model = FakeModel(0.99)
+    assert HybridDecider(model, stages="decide").decide(vobs, vq).get("after_verify") != "MODEL"
+    assert model.calls == 0
+    assert "verify" in h.name
 
 
 def test_aiming_matches_sim_convention_and_limits():

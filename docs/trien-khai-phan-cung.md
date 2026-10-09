@@ -16,7 +16,7 @@ Kiểm kê cho **hai** cụm (thay-doi-hai-voi.md):
 - [ ] 2 bộ pan–tilt (4 servo MG90S), 2 bơm 12 V, 2 laser dưới 1 mW, 2 MQ-2, 2 SHT31, 2 còi/LED.
 - [ ] 2 nguồn 5 V 2–3 A cho servo, 2 nguồn 12 V cho bơm (hoặc một nguồn đủ dòng cho cả hai), 2 bộ MOSFET + diode.
 - [ ] Điện thoại + giá cố định, Pi 5 + nguồn 5 V 5 A, quạt tản nhiệt, thẻ nhớ.
-- [ ] Đã in tag (36h11) cỡ 8 cm: 4 tham chiếu + tag 21, 22 cho hai node; bảng ChArUco A4 (`docs/print/`, hoặc `uv run python scripts/make_print_sheets.py`); thẻ bia. In 100%, đo lại cạnh bằng thước, ghi vào `tags.reference.size` và `tags.nodes.size` nếu không đúng 0,08 m.
+- [ ] Đã in tag (36h11) cỡ 8 cm: 4 tham chiếu + tag 21, 22 cho hai node; bảng ChArUco A4 (`docs/print/`, hoặc `uv run --no-sync python scripts/make_print_sheets.py`); thẻ bia. In 100%, đo lại cạnh bằng thước, ghi vào `tags.reference.size` và `tags.nodes.size` nếu không đúng 0,08 m.
 
 Điện (mỗi node), làm xong và kiểm bằng đồng hồ vạn năng **trước** khi cắm H2:
 
@@ -45,7 +45,7 @@ bash pi/deploy/setup_pi.sh                 # thêm --yolo nếu dùng YOLO trên
 - [ ] `coap-client --help` chạy được (tên gói `coap-client` do script dò, `CHƯA KIỂM` trên Bookworm).
 - [ ] `~/mediamtx/mediamtx --version` chạy.
 - [ ] Chép model từ laptop: `scp -r models/fire-n.pt models/fire-n_ncnn_model pi@<ip-pi>:~/nt532/models/`; đo tốc độ `bench_detect.py` theo trien-khai-pi.md mục 4 (mục tiêu dưới 100 ms), chốt `vision.weights` và `vision.imgsz` trong `config/site.yaml`.
-- [ ] Chạy thử không phần cứng: `uv run python scripts/run_station.py --source sim` rồi mở `http://<ip-pi>:8080/` thấy dashboard.
+- [ ] Chạy thử không phần cứng: `uv run --no-sync python scripts/run_station.py --source sim` rồi mở `http://<ip-pi>:8080/` thấy dashboard.
 
 Qua khi: dashboard sa bàn ảo chạy trên Pi.
 
@@ -90,9 +90,9 @@ Cổng tuần 1: *cảnh báo giả từ sensor tới Pi, Pi gửi lệnh ngắm
 
 ### 4a. Phía Pi trước, bằng node giả
 
-`pi/scripts/fake_node.py` là "node giả": chạy lõi C của firmware (`firmware/sensor-h2/main/core/`) qua CoAP nên Pi thử được mà không cần H2. Xem `uv run python scripts/fake_node.py --help` để biết tham số (địa chỉ nghe, tên node, cổng).
+`pi/scripts/fake_node.py` là "node giả": chạy lõi C của firmware (`firmware/sensor-h2/main/core/`) qua CoAP nên Pi thử được mà không cần H2. Xem `uv run --no-sync python scripts/fake_node.py --help` để biết tham số (địa chỉ nghe, tên node, cổng).
 
-- [ ] Chạy node giả trên cổng khác 5683 (cổng đó là của trạm). Ví dụ cùng một Pi, `uv run python scripts/fake_node.py --node s1 --bind 127.0.0.1 --port 5701 --pi coap://127.0.0.1:5683 --temp 60` (đổi `--temp`/`--gas` bằng cách gõ `t <độ C>`, `g <gas>`, `off`/`on` để cắt/nối mạng; xem `--help`). Lần đầu cần `gcc` để biên dịch lõi C.
+- [ ] Chạy node giả trên cổng khác 5683 (cổng đó là của trạm). Ví dụ cùng một Pi, `uv run --no-sync python scripts/fake_node.py --node s1 --bind 127.0.0.1 --port 5701 --pi coap://127.0.0.1:5683 --temp 60` (đổi `--temp`/`--gas` bằng cách gõ `t <độ C>`, `g <gas>`, `off`/`on` để cắt/nối mạng; xem `--help`). Lần đầu cần `gcc` để biên dịch lõi C.
 - [ ] Đặt tạm `network.nodes.s1: "127.0.0.1:5701"` (dạng `host:port`, mapping `/status` theo địa chỉ nguồn có đúng với dạng này hay không `CHƯA KIỂM`), chạy trạm (mục 8) và thử `coap-client` ở 4b vào node giả.
 - [ ] **Qua:** Pi gửi được `/aim`, `/fire`, `/stop`, `/hb`, nhận `/status` (và `/t`, `/a` nếu node giả phát) trong `runs/station/*.jsonl` và dashboard. Hết bước này mà hỏng thì lỗi ở Pi/mạng, không phải firmware thật.
 - Khôi phục `network.nodes` về địa chỉ H2 thật sau khi xong.
@@ -151,17 +151,16 @@ Nối servo, laser, bơm theo bước 0, vẫn **chưa có nước** tới khi l
 - [ ] **Thử tầm phun và chốt đầu vòi** (có nước, hướng khay hứng): tia tới bảng ở khoảng cách thật. Yếu hoặc tỏa rộng: đầu vòi nhỏ hơn, đưa trụ gần bảng, bơm mạnh hơn (kế hoạch mục 9).
 - [ ] Phun thử không làm H2 reset, MQ-2 không nhảy bất thường (xem 10).
 - [ ] **`actuator.water_tilt_deg`** (đang `0.0`, "đo ở tuần 3"): ở khoảng cách làm việc, so điểm laser và điểm nước chạm; tilt cần cộng = góc ứng với độ rơi. Bảng bù theo khoảng cách ghi `calibration/water.yaml`; trạm hiện chỉ đọc một số `water_tilt_deg`. Làm riêng cho từng vòi nếu khác nhau (hiện chỉ có một giá trị chung).
-- [ ] **Cổng tuần 2 (5 cm):** đặt tạm tọa độ pivot bằng thước, tính góc cho một điểm trên bảng rồi bắn laser:
+- [ ] **Cổng tuần 2 (5 cm):** cần camera và commissioning xong (mục 7) để Pi biết pose node và đo được vết. Gõ tọa độ một điểm trên bảng, `aim_point.py` tính góc từ tâm quay (pose tag + `pivot_offset`), kiểm giới hạn, gửi `/aim`, bắn laser và đo vết bằng camera:
 
   ```bash
   cd ~/nt532/pi
-  uv run --no-sync python -c "from nt532.orchestrator.aiming import angles; print(angles((0.30,0.55,0.38),(0.60,0.80,0.30)))"   # (pivot x,y,z), (target x,y,z) theo thước
-  # ra (pan, tilt); gửi:
-  coap-client -m post -e '{"id":10,"pan":PAN,"tilt":TILT,"ttl":1500}' "coap://[$ADDR]/aim"
-  coap-client -m post -e '{"id":10,"dev":"laser","ms":3000}' "coap://[$ADDR]/fire"     # cần /hb chạy song song
+  uv run --no-sync python scripts/aim_point.py --node s1 --x 0.30 --z 0.20     # một điểm (m, hệ sa bàn)
+  uv run --no-sync python scripts/aim_point.py --node s1 --grid                 # lưới 3x3 trong bảng
+  uv run --no-sync python scripts/aim_point.py --node s2 --points diem.csv --repeat 3   # CSV cột x,z
   ```
 
-  Đo khoảng cách từ vết laser tới điểm đích bằng thước. **Qua:** dưới 5 cm cho 5 điểm khác nhau, từng vòi. Không đạt: kế hoạch mục 9 (dựa vào CORRECT, hoặc hiệu chỉnh trực tiếp pixel→góc bằng 9 điểm).
+  Mỗi lượt in và ghi `runs/measure/aim_<thời điểm>.csv` (node, đích, pan/tilt, vết, `miss_cm`, `pass`). Điểm ngoài giới hạn góc bị báo và bỏ qua, không gửi `/aim`. Chưa có camera thì thêm `--no-laser` rồi đo vết bằng thước; thử không phần cứng: `--source sim`. Script không chạy orchestrator và luôn gửi `/stop` khi thoát. **Qua:** `miss_cm` ≤ 5 (đổi bằng `--gate-cm`) cho 5 điểm khác nhau, từng vòi. Không đạt: kế hoạch mục 9 (dựa vào CORRECT, hoặc hiệu chỉnh trực tiếp pixel→góc bằng 9 điểm).
 - [ ] Ghi sai số (cm) 5 điểm × 2 vòi vào nhóm chat.
 
 ---
@@ -176,28 +175,28 @@ Nối servo, laser, bơm theo bước 0, vẫn **chưa có nước** tới khi l
 - [ ] **Hiệu chuẩn nội tại trên chính stream** (20–30 ảnh ChArUco, nghiêng nhiều hướng; không đổi độ phân giải hay ống kính sau đó):
 
   ```bash
-  uv run python scripts/calibrate_camera.py --capture    # SPACE lưu ảnh, Q thoát; đọc camera.stream.url trong site.yaml
-  uv run python scripts/calibrate_camera.py              # tính ra calibration/camera.yaml
+  uv run --no-sync python scripts/calibrate_camera.py --capture    # SPACE lưu ảnh, Q thoát; đọc camera.stream.url trong site.yaml
+  uv run --no-sync python scripts/calibrate_camera.py              # tính ra calibration/camera.yaml
   ```
 
   **Qua:** RMS dưới khoảng 0,5 px (in ra cuối lệnh; ngưỡng là gợi ý). Lưu ý: `camera-dien-thoai.md` mục 5 ghi `--source` nhưng script này không có tham số đó (xem mục "Chênh lệch" cuối runbook).
 - [ ] **Commissioning**:
 
   ```bash
-  uv run python scripts/commission.py          # lưu calibration/commissioning.yaml khi đạt
-  uv run python scripts/commission.py --check  # sau khi ai chạm vào sa bàn
+  uv run --no-sync python scripts/commission.py          # lưu calibration/commissioning.yaml khi đạt
+  uv run --no-sync python scripts/commission.py --check  # sau khi ai chạm vào sa bàn
   ```
 
-  **Qua:** mã thoát 0, thấy đủ 4 tag tham chiếu và cả hai node. Mã 1 (thiếu node hoặc sai số quá `vision.camera_shift_px`), mã 2 (không thấy đủ tag tham chiếu). Có màn hình thì xem bằng `uv run python scripts/live_tags.py --source rtsp://127.0.0.1:8554/cam` (phím C commissioning, K kiểm tra).
+  **Qua:** mã thoát 0, thấy đủ 4 tag tham chiếu và cả hai node. Mã 1 (thiếu node hoặc sai số quá `vision.camera_shift_px`), mã 2 (không thấy đủ tag tham chiếu). Có màn hình thì xem bằng `uv run --no-sync python scripts/live_tags.py --source rtsp://127.0.0.1:8554/cam` (phím C commissioning, K kiểm tra).
 - [ ] **Độ trễ stream** (cần node s1 đã chạy, laser chiếu vào vùng camera thấy):
 
   ```bash
-  uv run python scripts/stream_latency.py --node s1 --trials 10
+  uv run --no-sync python scripts/stream_latency.py --node s1 --trials 10
   ```
 
   Chép giá trị gợi ý vào `camera.stream.latency_s` (đang 0,8). **Qua:** các lượt đo ổn định; lượt nào không thấy laser thì tăng `--laser-ms` hoặc đổi `--pan/--tilt` cho laser vào khung. Đặt hơi lớn hơn giá trị thật còn hơn nhỏ (nhỏ thì CORRECT không bao giờ thấy vết, xem 10). Đo lại sau mỗi thay đổi bitrate, độ phân giải.
 - [ ] Hùng + Hiếu kiểm lại offset tag → đế vòi bằng ảnh.
-- [ ] Kiểm 5 điểm thước (cổng tuần 2 phía thị giác): `uv run python scripts/measure.py click --label p1 --truth 0.30,0.20` (và 4 điểm khác); ghi `runs/measure/click.csv`.
+- [ ] Kiểm 5 điểm thước (cổng tuần 2 phía thị giác): `uv run --no-sync python scripts/measure.py click --label p1 --truth 0.30,0.20` (và 4 điểm khác); ghi `runs/measure/click.csv`.
 
 ---
 
@@ -228,11 +227,11 @@ Chạy nền: `bash pi/deploy/setup_pi.sh --install-services` rồi `sudo system
 
 Ghi số thật, kể cả khi không đạt. Thêm `--headless` khi chạy trên Pi không màn hình; `--source` đặt **trước** tên bài (`measure.py --source ... target ...`).
 
-- [ ] Hùng, pose tag, 9 điểm × 3: `uv run python scripts/measure.py tag --node s1 --truth 0.40,0.58 --repeat 3 --label p1` (và s2).
-- [ ] Hùng, định vị mục tiêu, 9 vị trí × 3: `uv run python scripts/measure.py target --label p1 --truth 0.30,0.20 --repeat 3 --headless`.
-- [ ] Hiếu, vết laser, ngắm một lần: `uv run python scripts/measure.py spot --label p1 --target 0.30,0.20` cho từng vòi.
-- [ ] Hùng, thống kê: `uv run python scripts/report_errors.py --csv runs/measure/target.csv` (và `tag.csv`, `spot.csv`, `click.csv`); hình PNG nằm cạnh CSV.
-- [ ] Hùng, tải của Pi trong lúc chạy end-to-end 30 lượt: `uv run python scripts/log_pi_load.py --interval 1 --out runs/pi_load.csv --duration 3600` (song song với trạm). Kiểm cột `throttled` (thiếu điện, quá nhiệt).
+- [ ] Hùng, pose tag, 9 điểm × 3: `uv run --no-sync python scripts/measure.py tag --node s1 --truth 0.40,0.58 --repeat 3 --label p1` (và s2).
+- [ ] Hùng, định vị mục tiêu, 9 vị trí × 3: `uv run --no-sync python scripts/measure.py target --label p1 --truth 0.30,0.20 --repeat 3 --headless`.
+- [ ] Hiếu, vết laser, ngắm một lần: `uv run --no-sync python scripts/measure.py spot --label p1 --target 0.30,0.20` cho từng vòi.
+- [ ] Hùng, thống kê: `uv run --no-sync python scripts/report_errors.py --csv runs/measure/target.csv` (và `tag.csv`, `spot.csv`, `click.csv`); hình PNG nằm cạnh CSV.
+- [ ] Hùng, tải của Pi trong lúc chạy end-to-end 30 lượt: `uv run --no-sync python scripts/log_pi_load.py --interval 1 --out runs/pi_load.csv --duration 3600` (song song với trạm). Kiểm cột `throttled` (thiếu điện, quá nhiệt).
 - [ ] Hậu, Thread một hop và hai hop, mất Pi, tự phát hiện (SRP, DNS-SD, tuần 4): theo kế hoạch mục 7 (thời gian khứ hồi `/hb` đo ở Pi; không lấy hiệu giữa đồng hồ ESP và Pi). Hai hop cho cả hai vòi: ép bằng `macfilter` hoặc giảm công suất phát, đo lại `ttl` cho lệnh ngắm.
 - [ ] End-to-end 20 lượt có bia + 10 không bia: thời gian từ `/a` tới `reached` và FIRE, tỷ lệ trúng, báo nhầm, dừng an toàn (log trong `runs/station/`).
 - [ ] Nhận diện bia, từ 50 ảnh: `eval_detect.py` (precision, recall); thời gian suy luận `bench_detect.py` trên Pi.
@@ -290,7 +289,5 @@ Cũng cần khớp trong **NVS/Kconfig của node** (không nằm trong site.yam
 ## Chênh lệch giữa tài liệu, cấu hình và code (cần sửa sau)
 
 - `firmware/sensor-h2/README.md` ("Thử tay từ Pi") ghi gói `libcoap-bin`; tên gói thực tế trên Bookworm chưa xác minh, `setup_pi.sh` thử `libcoap3-bin`, `libcoap2-bin`, `libcoap-bin`.
-- `docs/trien-khai-pi.md` mục 5–6 và `camera-dien-thoai.md` dùng `uv run` trơn, trong khi sau khi cài `ncnn` phải là `uv run --no-sync`.
-- `calibration/README.md` liệt kê `servo.yaml`, `offsets.yaml`, `water.yaml`, nhưng không có code nào đọc chúng; giá trị có hiệu lực nằm ở NVS (servo) và `site.yaml` (`pivot_offset`, `water_tilt_deg`).
 - Giới hạn góc khai hai nơi (site.yaml `actuator.nodes` và NVS/Kconfig của node), phải đồng bộ tay. Mặc định hai bên hiện trùng (pan -50..50, tilt -35..45).
 - `firmware/README.md` mô tả RCP "USB-UART"; ví dụ `ot_rcp` mặc định dùng UART0 460800 baud, còn đường USB-Serial-JTAG là một nhánh cấu hình khác (rcp/README.md).

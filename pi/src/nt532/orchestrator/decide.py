@@ -91,27 +91,50 @@ class JevDecider:
         return Decision(ans, render_state(obs), (time.perf_counter() - t0) * 1000, self.name)
 
 
+STAGES = ("decide", "verify")
+
+
+def parse_stages(text: str) -> frozenset[str]:
+    """"verify" hoặc "decide,verify" thành tập giai đoạn; sai tên thì ValueError."""
+    stages = frozenset(s.strip() for s in text.split(",") if s.strip())
+    bad = stages - set(STAGES)
+    if bad or not stages:
+        raise ValueError(f"giai đoạn mô hình phải thuộc {STAGES}, nhận {text!r}")
+    return stages
+
+
+def stage_of(obs: dict, questions: dict) -> str:
+    """`verify` cho câu after_verify, `decide` cho real_fire, action, target, nozzle."""
+    return "verify" if obs.get("stage") == "verify" or "after_verify" in questions else "decide"
+
+
 class HybridDecider:
     """Từng câu hỏi: dùng đáp án mô hình nếu độ tin cậy (đã hiệu chỉnh) >= tau, ngược lại luật.
 
     Cùng chính sách với phần `hybrid` của eval_jev.py. Mô hình lỗi (chưa có trọng số, hết bộ
-    nhớ...) thì cả lần đó dùng luật.
+    nhớ...) thì cả lần đó dùng luật. Câu hỏi thuộc giai đoạn không nằm trong `stages` được luật trả
+    lời và không gọi mô hình (không tốn độ trễ). Mặc định chỉ hỏi mô hình ở `verify`: DECIDE cần
+    nhanh, mô hình Jev mất cỡ 8 s mỗi lần trên CPU, còn luật yếu nhất ở after_verify (62,8% so với
+    89,4% của Jev trên tập val).
     """
 
-    def __init__(self, model: JevDecider, rules: RuleDecider | None = None, tau: float = 0.8):
+    def __init__(self, model: JevDecider, rules: RuleDecider | None = None, tau: float = 0.8,
+                 stages: frozenset[str] | set[str] | str = frozenset({"verify"})):
+        self.stages = parse_stages(stages) if isinstance(stages, str) else frozenset(stages)
         self.model_decider, self.rules, self.tau = model, rules or RuleDecider(), tau
-        self.name = f"hybrid(tau {tau:g})"
+        self.name = f"hybrid(tau {tau:g}, mô hình ở {','.join(s for s in STAGES if s in self.stages)})"
         self.last_error: str | None = None
 
     def decide(self, obs: dict, questions: dict) -> Decision:
         t0 = time.perf_counter()
         rules = self.rules.answers(obs, questions)
-        try:
-            model = self.model_decider.answers(obs, questions)
-            self.last_error = None
-        except Exception as e:  # noqa: BLE001 - mô hình hỏng thì vẫn phải quyết định được
-            self.last_error = f"{type(e).__name__}: {e}"
-            model = {}
+        model = {}
+        if stage_of(obs, questions) in self.stages:
+            try:
+                model = self.model_decider.answers(obs, questions)
+                self.last_error = None
+            except Exception as e:  # noqa: BLE001 - mô hình hỏng thì vẫn phải quyết định được
+                self.last_error = f"{type(e).__name__}: {e}"
         out = {}
         for q, r in rules.items():
             m = model.get(q)
@@ -119,11 +142,12 @@ class HybridDecider:
         return Decision(out, render_state(obs), (time.perf_counter() - t0) * 1000, self.name)
 
 
-def make_decider(kind: str, run: str = "jev1", tau: float = 0.8, device: str = "cpu"):
+def make_decider(kind: str, run: str = "jev1", tau: float = 0.8, device: str = "cpu",
+                 stages: str | frozenset[str] = "verify"):
     if kind == "rules":
         return RuleDecider()
     if kind == "jev":
         return JevDecider(run, device)
     if kind == "hybrid":
-        return HybridDecider(JevDecider(run, device), tau=tau)
+        return HybridDecider(JevDecider(run, device), tau=tau, stages=stages)
     raise ValueError(f"không biết bộ quyết định {kind!r} (rules, jev, hybrid)")

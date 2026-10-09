@@ -16,6 +16,7 @@ from datetime import datetime
 
 from nt532.config import REPO_ROOT
 from nt532.dashboard import Dashboard
+from nt532.orchestrator.decide import parse_stages
 from nt532.station import build_real, build_sim
 
 
@@ -26,6 +27,9 @@ def main() -> None:
     p.add_argument("--decider", choices=["rules", "jev", "hybrid"], default="rules")
     p.add_argument("--jev-run", default="jev1", help="thư mục trong runs/decider/jev/")
     p.add_argument("--tau", type=float, default=0.8, help="ngưỡng tin cậy của chế độ lai")
+    p.add_argument("--model-stages", default="verify",
+                   help="chế độ lai: giai đoạn hỏi mô hình (verify, decide hoặc decide,verify); giai đoạn "
+                        "còn lại dùng luật, không gọi mô hình. Mặc định verify vì DECIDE cần nhanh")
     p.add_argument("--detector", choices=["oracle", "yolo"], default="oracle",
                    help="chỉ cho sa bàn ảo: oracle đọc thẻ thật trong scene, yolo dùng trọng số")
     p.add_argument("--link", choices=["mem", "coap"], default="mem",
@@ -35,13 +39,18 @@ def main() -> None:
     p.add_argument("--port", type=int, default=8080)
     p.add_argument("--seed", type=int, default=0)
     args = p.parse_args()
+    try:
+        parse_stages(args.model_stages)
+    except ValueError as e:
+        p.error(str(e))
 
     log = REPO_ROOT / "runs/station" / f"{datetime.now().astimezone():%Y%m%d-%H%M%S}.jsonl"
     if args.source == "sim":
         st = build_sim(args.decider, args.jev_run, args.tau, args.detector, args.seed, log_path=log,
-                       link=args.link)
+                       link=args.link, model_stages=args.model_stages)
     else:
-        st = build_real(args.decider, args.jev_run, args.tau, args.source, log_path=log)
+        st = build_real(args.decider, args.jev_run, args.tau, args.source, log_path=log,
+                        model_stages=args.model_stages)
     st.start()
     dash = Dashboard(st, args.host, args.port).start()
     print(f"Dashboard: {dash.url}  (nhật ký: {log.relative_to(REPO_ROOT)})")
