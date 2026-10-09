@@ -293,6 +293,9 @@ class SimLink(NodeLink):
         self._reached: dict[str, int] = {}
         self._angle = {n: (0.0, 0.0) for n in world.nodes}
         self._cancel = {n: threading.Event() for n in world.nodes}
+        # id /stop lớn nhất đã nhận; /aim, /fire có id nhỏ hơn là lệnh cũ (gói đến sau /stop) và bị từ chối
+        self._last_stop = dict.fromkeys(world.nodes, 0)
+        self._lock = threading.Lock()
 
     def heartbeat(self, node: str) -> None:
         if self.world.online[node]:
@@ -311,6 +314,9 @@ class SimLink(NodeLink):
     def _handle(self, node: str, path: str, msg) -> None:
         time.sleep(self.latency)
         self.on_rx(node)
+        if path in ("aim", "fire") and msg.id < self._last_stop[node]:
+            self._reply(node, msg.id, "rejected", "stopped")
+            return
         if path == "aim":
             if not limits(self.world.site, node).ok(msg.pan, msg.tilt):
                 self._reply(node, msg.id, "rejected", "limits")
@@ -326,14 +332,20 @@ class SimLink(NodeLink):
             if self._reached.get(node) != msg.id:
                 self._reply(node, msg.id, "rejected", "not reached")
                 return
-            self._cancel[node].clear()
+            with self._lock:  # kiểm tra lại và bật thiết bị cùng lúc, để /stop không lọt vào giữa
+                if msg.id < self._last_stop[node]:
+                    self._reply(node, msg.id, "rejected", "stopped")
+                    return
+                self._cancel[node].clear()
+                if msg.dev == "laser":
+                    self.world.laser(node, True)
+                else:
+                    self.world.pumping[node] = True
             self._reply(node, msg.id, "accepted")
             if msg.dev == "laser":
-                self.world.laser(node, True)
                 self._cancel[node].wait(msg.ms / 1000)
                 self.world.laser(node, False)
             else:
-                self.world.pumping[node] = True
                 end = time.monotonic() + msg.ms / 1000
                 while time.monotonic() < end and not self._cancel[node].is_set():
                     if not self.world.online[node]:
@@ -344,9 +356,11 @@ class SimLink(NodeLink):
             self._reply(node, msg.id, "fault" if self._cancel[node].is_set() else "done",
                          "stopped" if self._cancel[node].is_set() else None)
         elif path == "stop":
-            self._cancel[node].set()
-            self.world.laser(node, False)
-            self.world.pumping[node] = False
+            with self._lock:
+                self._last_stop[node] = max(self._last_stop[node], msg.id)
+                self._cancel[node].set()
+                self.world.laser(node, False)
+                self.world.pumping[node] = False
             self._reply(node, msg.id, "done")
 
 

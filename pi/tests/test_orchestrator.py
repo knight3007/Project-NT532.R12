@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 
 from nt532.decider.state_text import ACTIONS, VERIFY, render_state
-from nt532.net.protocol import Telemetry
+from nt532.net.protocol import Aim, Fire, Stop, Telemetry
 from nt532.orchestrator import aiming
 from nt532.orchestrator.decide import Answer, HybridDecider, RuleDecider
 from nt532.orchestrator.fusion import (
@@ -176,6 +176,22 @@ def test_emergency_stop_turns_everything_off(station):
     time.sleep(0.3)
     assert not any(station.world.truth()["lasers"].values())
     assert not any(station.world.pumping.values())
+
+
+def test_fire_arriving_after_stop_is_rejected():
+    # Gói /fire gửi trước /stop nhưng tới sau (luồng hoặc UDP đảo thứ tự): laser không được bật lại
+    from nt532.sim.world import SimLink, SimWorld
+
+    world = SimWorld(seed=1)
+    link = SimLink(world, latency_s=0.0)
+    link._handle("s1", "aim", Aim(5, 0.0, 0.0, 1500))
+    link._handle("s1", "stop", Stop(6))
+    link._handle("s1", "fire", Fire(5, "laser", 300))
+    assert link.wait(5, ("rejected",), 0.1).err == "stopped"
+    assert not world.truth()["lasers"]["s1"]
+    # lệnh mới sau /stop vẫn chạy bình thường
+    link._handle("s1", "aim", Aim(7, 0.0, 0.0, 1500))
+    assert link.wait(7, ("reached",), 0.1) is not None
 
 
 def test_lost_link_ends_in_safe_state(station):
