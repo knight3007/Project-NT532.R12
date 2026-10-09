@@ -4,14 +4,16 @@ Không đọc truth. Ngưỡng lấy từ config/site.yaml (detect_conf, sensor_
 """
 
 from .scenario import MAX_ATTEMPTS, Geometry
-from .state_text import ACTIONS, NONE_OF_THESE, NOZZLES, VERIFY, target_candidates
-
-HB_MAX_MS = 1500  # mất 3 nhịp heartbeat 500 ms thì vòi tự tắt
-POSE_MAX_S = 60  # pose cũ hơn mức này bị chặn ngắm (ngưỡng đề xuất)
-
-
-def nozzle_healthy(n: dict) -> bool:
-    return n["hb_ms"] <= HB_MAX_MS and n["pose_s"] <= POSE_MAX_S
+from .state_text import (  # noqa: F401 - HB_MAX_MS, POSE_MAX_S, nozzle_healthy được nơi khác import từ đây
+    ACTIONS,
+    HB_MAX_MS,
+    NONE_OF_THESE,
+    NOZZLES,
+    POSE_MAX_S,
+    VERIFY,
+    nozzle_healthy,
+    target_candidates,
+)
 
 
 def _last_conf(conf: list) -> float:
@@ -28,13 +30,10 @@ def rule_decide(obs: dict, geo: Geometry) -> dict:
     if not matched:
         return {"real_fire": False, "action": ACTIONS[2], "target": None, "nozzle": alarm}
     best = max(matched, key=lambda t: _last_conf(t["conf"]))
-    other = NOZZLES[1 - NOZZLES.index(alarm)]
-    nozzle = None
-    for n in (alarm, other):
-        z = obs["nozzles"][n]
-        if nozzle_healthy(z) and z["reach"][best["id"]]:
-            nozzle = n
-            break
+    # vòi khỏe, với tới được và gần bia nhất (khoảng cách 3D từ trục quay; thiếu thì theo X). Không bao giờ `both`
+    able = [n for n in NOZZLES if nozzle_healthy(obs["nozzles"][n]) and obs["nozzles"][n]["reach"][best["id"]]]
+    d3 = best.get("dist3") or best["dist"]
+    nozzle = min(able, key=lambda n: d3[n]) if able else None
     action = ACTIONS[0] if nozzle else ACTIONS[1]
     return {"real_fire": True, "action": action, "target": best["id"], "nozzle": nozzle or alarm}
 

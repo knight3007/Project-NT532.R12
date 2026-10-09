@@ -20,7 +20,7 @@ import numpy as np
 
 from ..decider.rules import HB_MAX_MS, POSE_MAX_S
 from ..decider.scenario import MAX_ATTEMPTS
-from ..decider.state_text import ACTIONS, NOZZLES, VERIFY
+from ..decider.state_text import ACTIONS, BOTH, NOZZLES, VERIFY
 from ..net.link import LinkError, NodeLink
 from ..net.protocol import Alert
 from ..vision import Vision
@@ -307,7 +307,7 @@ class Orchestrator:
         pivots = {n: self.vision.nodes[n].to_world(aiming.pivot_offset(self.site))
                   for n in NOZZLES if n in self.vision.nodes}
         nozzles = {n: {"hb_ms": self.link.hb_age_ms(n), "pose_s": self.pose_age(n),
-                       "reach": self._reach_fn(n, pivots.get(n))} for n in NOZZLES}
+                       "reach": self._reach_fn(n, pivots.get(n)), "pivot": pivots.get(n)} for n in NOZZLES}
         node_x = {n: float(p[0]) if (p := self._node_pos(n)) is not None else -1.0 for n in NOZZLES}
         obs, by_id = decide_obs(alarm, self.sensors, tracks, nozzles, node_x, len(frames),
                                 alarm_limits(self.site))
@@ -329,6 +329,11 @@ class Orchestrator:
         target = by_id[tid].position
         run.target = {"id": tid, "x": round(float(target[0]), 3), "z": round(float(target[2]), 3)}
         self.overlay["target"] = run.target
+        if nozzle == BOTH:  # chưa phun hai vòi cùng lúc: dùng vòi gần bia hơn, vòi kia vẫn là dự phòng
+            d3 = next(t["dist3"] for t in obs["targets"] if t["id"] == tid)
+            nozzle = min(NOZZLES, key=lambda n: d3[n])
+            self.events.emit("safety", f"bộ quyết định chọn cả hai vòi, chưa hỗ trợ phun cùng lúc: dùng {nozzle}",
+                             level="warn")
 
         # chặn an toàn cứng; vòi được chọn bị chặn thì thử vòi còn lại
         reasons = self._blocked(nozzle, target, pivots)
@@ -359,7 +364,7 @@ class Orchestrator:
             # FIRE
             self._set(Phase.FIRE, f"lần {attempt}")
             pan, tilt = aiming.angles(pivot, aim_point)
-            tilt += aiming.water_tilt(self.site)
+            tilt += aiming.water_tilt(self.site, nozzle, aiming.horizontal_distance(pivot, aim_point))
             cmd = self._aim(nozzle, pan, tilt)
             t_spray = self.clock()
             self.link.fire(nozzle, cmd, "pump", self.acfg["fire_ms"])

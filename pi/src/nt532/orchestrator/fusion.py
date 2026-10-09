@@ -5,6 +5,7 @@ quyết định (luật, Jev hoặc lai) chạy được cả trên kịch bản
 cho ra đoạn STATE mà mô hình Jev đọc.
 """
 
+import math
 import threading
 import time
 from collections import deque
@@ -13,7 +14,7 @@ from dataclasses import dataclass
 import numpy as np
 
 from ..decider.scenario import MAX_ATTEMPTS, SENSOR, TOL_CM, WINDOW
-from ..decider.state_text import ACTIONS, NOZZLES, VERIFY, target_candidates
+from ..decider.state_text import ACTIONS, NOZZLES, VERIFY, nozzle_candidates, target_candidates
 from ..net.protocol import Telemetry
 
 JOIN_M = 0.05  # hai phát hiện ở hai khung cách nhau dưới chừng này (theo x, z) là cùng một bia
@@ -109,9 +110,17 @@ def aggregate(frames: list[list], frame_size: tuple[int, int], join_m: float = J
     return tracks
 
 
+def _dist3(pivot, position, x: float, z: float, fallback: float) -> float:
+    if pivot is None:
+        return round(fallback, 2)
+    return round(math.dist((float(pivot[0]), float(pivot[1]), float(pivot[2])),
+                           (x, float(position[1]), z)), 2)
+
+
 def decide_obs(alarm: str, sensors: SensorHistory, tracks: list[Track], nozzles: dict,
                node_x: dict, n_frames: int, limits: dict) -> tuple[dict, dict]:
-    """(obs giai đoạn decide, {id bia: Track}). `nozzles[n]` có hb_ms, pose_s và reach(x, z)."""
+    """(obs giai đoạn decide, {id bia: Track}). `nozzles[n]` có hb_ms, pose_s, reach(x, z) và tùy chọn
+    `pivot` (x, y, z) của trục quay để tính `dist3` (khoảng cách 3D tới bia); thiếu thì `dist3` = `dist`."""
     tracks = sorted(tracks, key=lambda tr: tr.position[0])
     targets, by_id = [], {}
     for i, tr in enumerate(tracks, 1):
@@ -120,6 +129,8 @@ def decide_obs(alarm: str, sensors: SensorHistory, tracks: list[Track], nozzles:
         targets.append({
             "id": tid, "x": x, "z": z, "w": round(tr.w, 3), "h": round(tr.h, 3), "conf": tr.conf,
             "dist": {n: round(abs(x - node_x[n]), 2) for n in NOZZLES},
+            "dist3": {n: _dist3(nozzles[n].get("pivot"), tr.position, x, z, abs(x - node_x[n]))
+                      for n in NOZZLES},
         })
         by_id[tid] = tr
     noz = {}
@@ -157,7 +168,7 @@ def questions_for(obs: dict) -> dict:
          "action": {"type": "choice", "candidates": list(ACTIONS)}}
     if obs["targets"]:
         q["target"] = {"type": "choice", "candidates": target_candidates(obs["targets"])}
-        q["nozzle"] = {"type": "choice", "candidates": list(NOZZLES)}
+        q["nozzle"] = {"type": "choice", "candidates": nozzle_candidates(obs)}
     return q
 
 

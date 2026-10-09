@@ -3,7 +3,7 @@ import time
 import numpy as np
 import pytest
 
-from nt532.decider.state_text import ACTIONS, VERIFY, render_state
+from nt532.decider.state_text import ACTIONS, BOTH, VERIFY, render_state
 from nt532.net.protocol import Aim, Fire, Stop, Telemetry
 from nt532.orchestrator import aiming
 from nt532.orchestrator.decide import Answer, HybridDecider, RuleDecider
@@ -71,6 +71,28 @@ def test_decide_obs_matches_scenario_schema_and_rules_run():
     d = RuleDecider().decide(obs, q)
     assert d.get("real_fire") is True and d.get("action") == ACTIONS[0]
     assert candidate_id(d.get("target")) == "T1" and d.get("nozzle") == "s1"
+
+
+def test_decide_obs_has_dist3_and_both_candidate():
+    tracks = aggregate([[tgt(0.62, 0.25, 0.8, w=128, h=72)]] * 3, (1280, 720))
+    noz = nozzles()
+    noz["s1"]["pivot"] = (0.30, 0.56, 0.25)
+    noz["s2"]["pivot"] = (0.90, 0.56, 0.25)
+    obs, _ = decide_obs("s1", history("s1"), tracks, noz, NODE_X, 3, {"temp": 45.0, "gas": 600.0})
+    t = obs["targets"][0]
+    assert t["w"] == pytest.approx(0.1) and t["h"] == pytest.approx(0.1)
+    assert t["dist3"]["s1"] > t["dist3"]["s2"] > 0.3  # s2 gần hơn (0.28 so với 0.32 theo X)
+    assert questions_for(obs)["nozzle"]["candidates"] == ["s1", "s2", BOTH]
+    d = RuleDecider().decide(obs, questions_for(obs))
+    assert d.get("nozzle") == "s2"  # nearest, không phải node báo động; không bao giờ both
+    noz["s2"]["pose_s"] = 600
+    obs, _ = decide_obs("s1", history("s1"), tracks, noz, NODE_X, 3, {"temp": 45.0, "gas": 600.0})
+    assert questions_for(obs)["nozzle"]["candidates"] == ["s1", "s2"]
+    # không có pivot thì dist3 = dist
+    obs, _ = decide_obs("s1", history("s1"), tracks, nozzles(), NODE_X, 3, {"temp": 45.0, "gas": 600.0})
+    assert obs["targets"][0]["dist3"] == obs["targets"][0]["dist"]
+    v = verify_obs(obs, "T1", BOTH, 1, "ok", [50.0, 45.0, 40.0], [None] * 3, 1.0, history("s1"))
+    assert f"with {BOTH}" in render_state(v)
 
 
 def test_rules_ignore_when_nothing_seen_and_avoid_dead_nozzle():
@@ -185,6 +207,27 @@ def test_station_puts_out_fire_end_to_end(station):
     assert "s1" in station.world.marks  # bơm đã phun thật
     assert not any(station.world.truth()["lasers"].values())
     assert not any(station.world.pumping.values())
+
+
+class BothDecider(RuleDecider):
+    """Luật, nhưng câu `nozzle` luôn trả `both` (như Jev có thể chọn)."""
+
+    def answers(self, obs, questions):
+        ans = super().answers(obs, questions)
+        if "nozzle" in ans:
+            ans["nozzle"] = Answer(BOTH, 1.0, {BOTH: 1.0}, "test")
+        return ans
+
+
+def test_both_answer_falls_back_to_one_nozzle(station):
+    # chưa phun hai vòi cùng lúc: trạm không được sập, dùng vòi gần bia hơn và ghi cảnh báo
+    station.orch.decider = BothDecider()
+    station.world.ignite(0.32, 0.30)
+    assert wait_for(lambda: station.orch.runs, 60), "không có lượt nào hoàn tất"
+    run = station.orch.runs[0]
+    assert run.decisions[0]["answers"]["nozzle"]["answer"] == BOTH
+    assert run.nozzle == "s1" and run.outcome in ("extinguished", "human"), run.to_json()
+    assert any(e["kind"] == "safety" and "cả hai vòi" in e["text"] for e in station.events.since(0, 10_000))
 
 
 def test_emergency_stop_turns_everything_off(station):

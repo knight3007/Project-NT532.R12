@@ -13,7 +13,15 @@ import numpy as np
 import yaml
 
 from ..config import REPO_ROOT, read_site
-from .state_text import ACTIONS, NOZZLES, VERIFY, render_state, target_candidates
+from .state_text import (
+    ACTIONS,
+    BOTH,
+    NOZZLES,
+    VERIFY,
+    nozzle_candidates,
+    render_state,
+    target_candidates,
+)
 
 VIS_MIN = 0.15  # conf thấp nhất mà một bia còn được coi là "nhìn thấy" (ứng viên)
 N_SAMPLES = 70  # độ dài chuỗi cảm biến mô phỏng (1 Hz)
@@ -22,9 +30,13 @@ MAX_ATTEMPTS = 3
 TOL_CM = 3.0  # đúng với targeting.tolerance_m = 0.03 (đề xuất)
 POS_NOISE_M = 0.015  # sai số vị trí bia do localize
 # Giới hạn cơ khí GIẢ ĐỊNH (actuator.nodes.*_limits trong site.yaml còn null)
-PAN_LIM = 50.0
+PAN_LIM = 70.0  # nâng từ 50: với node ở X 0,30 và 0,90 cách bảng 0,24 m, ±50° không cho vùng nào cả hai cùng với tới
 TILT_LIM = (-35.0, 45.0)
 KINDS = ("real_fire", "distractor", "steam", "spike")
+SIZES = ("small", "large")
+# Hệ số nhân lên cỡ hộp (w, h) YOLO của bia lửa thật theo cỡ đám cháy: GIẢ ĐỊNH, chưa đo
+BOX_SCALE = {"small": (0.7, 1.0), "large": (1.5, 2.2)}
+BOX_MAX = 0.95  # cỡ hộp tối đa (tỉ lệ ảnh)
 
 
 @dataclass(frozen=True)
@@ -40,6 +52,8 @@ class SensorModel:
     temp_thr: float = 45.0  # ngưỡng báo động (đặt thật ở tuần 2)
     gas_thr: float = 600.0
     decay_m: float = 0.35  # tín hiệu giảm theo khoảng cách tới nguồn
+    large_gain: float = 1.5  # PLACEHOLDER: lửa lớn nhân đỉnh tín hiệu lên chừng này
+    large_decay: float = 2.0  # PLACEHOLDER: lửa lớn nhân decay_m (suy giảm chậm hơn, với tới cả hai node)
     onset: tuple = (6.0, 14.0)  # giây bắt đầu tăng
     tau: tuple = (4.0, 14.0)  # hằng số thời gian tăng, giây
     fire_gain: tuple = (1.15, 3.0)  # đỉnh / (ngưỡng - nền) với tín hiệu gây báo động
@@ -87,13 +101,14 @@ class Profile:
     p_blind: float = 0.08  # sensor gần lửa nhất bị mù
     extra: tuple = (0.55, 0.30, 0.15)  # số bia gây nhiễu thêm: 0, 1, 2
     p_fault: float = 0.05  # vòi lỗi sau khi phun
+    p_large: float = 0.30  # xác suất lửa thật là đám cháy lớn
 
 
 NORMAL = Profile()
 SHIFT = Profile(
     name="shift", sensor_noise=1.8, conf_jitter=0.08, p_drop=0.25,
     kinds=(0.35, 0.35, 0.15, 0.15), p_unhealthy=0.20, p_noisy_neg=0.97, p_blind=0.15,
-    extra=(0.30, 0.40, 0.30), p_fault=0.10,
+    extra=(0.30, 0.40, 0.30), p_fault=0.10, p_large=0.45,
 )
 
 
@@ -120,6 +135,12 @@ def load_geometry(with_nodes: bool = True) -> Geometry:
         nodes, b["plane_y"], b["width"], b["height"],
         site["vision"]["detect_conf"], site["targeting"]["sensor_match_radius_x"],
     )
+
+
+def _dist3(geo: Geometry, node: str, x: float, z: float) -> float:
+    """Khoảng cách 3D từ trục quay (vị trí node) tới điểm (x, plane_y, z) trên bảng."""
+    nx, ny, nz = geo.nodes[node]
+    return math.dist((nx, ny, nz), (x, geo.plane_y, z))
 
 
 def reachable(geo: Geometry, node: str, x: float, z: float) -> bool:
@@ -203,8 +224,9 @@ def _node_series(rng, sm, noise, amb, peaks, t0, tau, pulse):
 
 
 def simulate_sensors(rng, kind: str, src_x: float, geo: Geometry, prof: Profile,
-                     sm: SensorModel = SENSOR) -> tuple[dict, str, bool]:
-    """Trả (WINDOW mẫu cuối mỗi node, node báo động trước, sensor gần nguồn có bị mù không)."""
+                     sm: SensorModel = SENSOR, large: bool = False) -> tuple[dict, str, bool]:
+    """Trả (WINDOW mẫu cuối mỗi node, node báo động trước, sensor gần nguồn có bị mù không).
+    `large`: lửa lớn, nguồn mạnh hơn (large_gain) và suy giảm theo khoảng cách chậm hơn (large_decay)."""
     if kind == "distractor":  # vật gây nhiễu (đèn, vật cam) đi kèm báo động sai bất kỳ
         kind = str(rng.choice(["spike", "steam", "lamp"]))
     dist = {n: abs(geo.nodes[n][0] - src_x) for n in NOZZLES}
@@ -228,8 +250,10 @@ def simulate_sensors(rng, kind: str, src_x: float, geo: Geometry, prof: Profile,
             gt = rng.uniform(*gain if drive != "gas" else sm.quiet_gain)
             gg = rng.uniform(*gain if drive != "temp" else sm.quiet_gain)
             hum = rng.uniform(*(sm.steam_hum_rise if kind == "steam" else sm.fire_hum_shift))
+            k = sm.large_gain if large else 1.0
+            decay = sm.decay_m * (sm.large_decay if large else 1.0)
             for n in NOZZLES:
-                d = math.exp(-(dist[n] - dist[near]) / sm.decay_m)
+                d = k * math.exp(-(dist[n] - dist[near]) / decay)
                 if blind and n == near:
                     d *= 0.1
                 peaks[n] = (gt * dt * d, gg * dg * d, hum * d)
@@ -285,6 +309,7 @@ def make_scenario(rng, geo: Geometry, pool: Pool, prof: Profile, sid: str,
     kind = KINDS[int(rng.choice(len(KINDS), p=prof.kinds))]
     n_frames = int(rng.integers(3, 6))
     real = kind == "real_fire"
+    size = SIZES[int(rng.random() < prof.p_large)] if real else None
     n_extra = int(rng.choice(3, p=prof.extra)) if real else int(rng.choice([1, 2], p=[0.6, 0.4]))
     if kind in ("steam", "spike"):
         n_extra = int(rng.choice(3, p=[0.5, 0.4, 0.1]))
@@ -296,13 +321,17 @@ def make_scenario(rng, geo: Geometry, pool: Pool, prof: Profile, sid: str,
     things = []
     for i, (x, z) in enumerate(zip(xs, zs)):
         if real and i == 0:
-            things.append((x, z, _pick(rng, pool.fire), True))
+            img = _pick(rng, pool.fire)
+            if img is not None:  # lửa lớn thì hộp lớn hơn
+                s = float(rng.uniform(*BOX_SCALE[size]))
+                img = (img[0], round(min(img[1] * s, BOX_MAX), 3), round(min(img[2] * s, BOX_MAX), 3))
+            things.append((x, z, img, True))
         else:
             noisy = rng.random() < prof.p_noisy_neg and pool.neg_noisy
             things.append((x, z, _pick(rng, pool.neg_noisy if noisy else pool.neg_quiet), False))
     src_x = xs[0] if real else float(rng.uniform(0.05, geo.width - 0.05))
 
-    sensors, alarm, blind = simulate_sensors(rng, kind, src_x, geo, prof, sm)
+    sensors, alarm, blind = simulate_sensors(rng, kind, src_x, geo, prof, sm, size == "large")
 
     # bia nhìn thấy, đánh số từ trái sang phải theo x đo được
     cands = []
@@ -320,6 +349,7 @@ def make_scenario(rng, geo: Geometry, pool: Pool, prof: Profile, sid: str,
         targets.append({
             "id": f"T{i}", "x": c["x"], "z": c["z"], "w": c["w"], "h": c["h"], "conf": c["conf"],
             "dist": {n: round(abs(c["x"] - geo.nodes[n][0]), 2) for n in NOZZLES},
+            "dist3": {n: round(_dist3(geo, n, c["x"], c["z"]), 2) for n in NOZZLES},
         })
 
     health = {n: _health(rng, prof) for n in NOZZLES}
@@ -344,7 +374,7 @@ def make_scenario(rng, geo: Geometry, pool: Pool, prof: Profile, sid: str,
         for n in NOZZLES:
             can[n] = health[n][0] and reachable(geo, n, true_t["tx"], true_t["tz"])
     able = [n for n in NOZZLES if can.get(n)]
-    best = min(able, key=lambda n: abs(true_t["tx"] - geo.nodes[n][0])) if able else None
+    nearest = min(able, key=lambda n: _dist3(geo, n, true_t["tx"], true_t["tz"])) if able else None
     if real and able:
         action = ACTIONS[0]
     elif real:
@@ -354,8 +384,8 @@ def make_scenario(rng, geo: Geometry, pool: Pool, prof: Profile, sid: str,
     truth = {
         "kind": kind, "real_fire": real, "alarm_node": alarm, "sensor_blind": blind,
         "true_target": None if true_idx is None else f"T{true_idx + 1}",
-        "nozzle_ok": {n: health[n][0] for n in NOZZLES}, "can_hit": can, "best_nozzle": best,
-        "n_frames": n_frames,
+        "nozzle_ok": {n: health[n][0] for n in NOZZLES}, "can_hit": can,
+        "size": size, "nearest_nozzle": nearest, "n_frames": n_frames,
     }
 
     cand_txt = target_candidates(targets)
@@ -367,9 +397,14 @@ def make_scenario(rng, geo: Geometry, pool: Pool, prof: Profile, sid: str,
     if targets:
         questions["target"] = {"type": "choice", "candidates": cand_txt}
         labels["target"] = cand_txt[true_idx if true_idx is not None else -1]
-    if best is not None and true_idx is not None:
-        questions["nozzle"] = {"type": "choice", "candidates": list(NOZZLES)}
+    best = None
+    if nearest is not None and true_idx is not None:
+        # hai vòi khi lửa lớn và cả hai vòi thật sự khỏe, với tới; còn lại vòi gần nhất đủ điều kiện
+        nz_cands = nozzle_candidates(obs)
+        best = BOTH if size == "large" and len(able) == 2 and BOTH in nz_cands else nearest
+        questions["nozzle"] = {"type": "choice", "candidates": nz_cands}
         labels["nozzle"] = best
+    truth["best_nozzle"] = best
     records = [{"id": f"{sid}-decide", "state": render_state(obs), "questions": questions,
                 "labels": labels, "truth": truth, "obs": obs}]
 
@@ -383,7 +418,9 @@ def _verify_record(rng, geo, pool, prof, sid, d_obs, sensors, true_idx, true_t, 
     attempt = int(rng.choice([1, 2, 3], p=[0.55, 0.30, 0.15]))
     miss_cm = abs(rng.normal(0, 1.0)) * (2.0 if rng.random() < 0.55 else 5.5)
     miss = miss_cm > TOL_CM
-    out = rng.random() < (0.04 if miss else 0.65)
+    # đám cháy lớn mà chỉ một vòi phun: trúng rồi vẫn dễ còn cháy
+    weak = truth["size"] == "large" and nozzle != BOTH
+    out = rng.random() < (0.04 if miss else 0.40 if weak else 0.65)
     fault = rng.random() < prof.p_fault
     n = 3
     if out:  # hết lửa: không còn phát hiện, hoặc chỉ còn phát hiện sai nhỏ
@@ -391,7 +428,7 @@ def _verify_record(rng, geo, pool, prof, sid, d_obs, sensors, true_idx, true_t, 
     else:
         img = _pick(rng, pool.fire)
     conf = _frames(rng, img, n, prof)
-    t_last = sensors[nozzle]["temp"][-1]
+    t_last = float(np.mean([sensors[n]["temp"][-1] for n in (NOZZLES if nozzle == BOTH else [nozzle])]))
     step = rng.uniform(3, 9)
     sign = -1 if out else rng.choice([-0.2, 0.0, 0.4])
     temp = [round(t_last + sign * step * i + float(rng.normal(0, 0.6 * prof.sensor_noise)), 1)

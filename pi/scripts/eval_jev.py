@@ -107,6 +107,8 @@ def print_table(res: dict, splits: list[str]) -> None:
               "missed_spray": ("lửa thật cần phun mà không phun", "should_spray"),
               "wrong_target": ("phun nhầm bia", "should_spray"),
               "wrong_nozzle": ("phun đúng bia, nhầm vòi", "should_spray"),
+              "one_when_two": ("chọn một vòi khi cần hai", "should_spray"),
+              "two_when_one": ("chọn hai vòi khi một là đủ", "should_spray"),
               "sprayed_correctly": ("phun đúng bia đúng vòi", "should_spray")}
     for key, (text, base) in labels.items():
         row = ""
@@ -115,6 +117,13 @@ def print_table(res: dict, splits: list[str]) -> None:
                 c = res[s][k]["system"]
                 row += f"{c[key]:15d}/{c[base]:<6d}"
         print(f"{text:34}{row}")
+    for size in ("small", "large"):
+        row = ""
+        for s in splits:
+            for k in ("rules", "model"):
+                c = res[s][k]["nozzle_by_size"][size]
+                row += f"{c['correct'] / c['asked'] if c['asked'] else float('nan'):22.1%}"
+        print(f"{'acc nozzle, lửa ' + size:34}{row}")
 
 
 def main() -> None:

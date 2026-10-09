@@ -9,6 +9,10 @@
 7. Khi xong, vào Output của phiên bản, tải `jev_results.zip`, giải nén vào `runs/decider/jev/` (ra hai thư mục `jev1` và `heads_only`, mỗi thư mục có `eval.json`, `eval.log`, `train.log`).
 8. Chấm lại cục bộ nếu cần: `uv run python scripts/eval_jev.py --name jev1 --device cuda` (có thể thêm `--precision fp32`).
 
+## Phải sinh lại bộ kịch bản và train lại (câu hỏi `nozzle` có thêm `both`)
+
+Câu hỏi `nozzle` nay có ứng viên `both (s1 + s2)` và nhãn mới theo cỡ lửa, nên `nt532-scenarios.zip` phải sinh lại (`make_scenarios.py`, zip lại) và Jev phải train lại. `jev1` cũ chưa từng thấy `both`. Trước khi train lại, chính sách lai vẫn giữ `nozzle` ở luật vì đó là câu hỏi giai đoạn decide.
+
 ## Chấm lại mà không train lại
 
 Nếu train xong nhưng bước chấm lỗi (như lần 08/10, thiếu `data/sim/commissioning.yaml`), không cần train lại:

@@ -3,6 +3,9 @@
 NONE_OF_THESE = "none of these"
 ACTIONS = ["spray", "alarm only", "ignore"]
 NOZZLES = ["s1", "s2"]
+BOTH = "both (s1 + s2)"  # ứng viên `nozzle`: phun cả hai vòi cùng lúc
+HB_MAX_MS = 1500  # mất 3 nhịp heartbeat 500 ms thì vòi tự tắt
+POSE_MAX_S = 60  # pose cũ hơn mức này bị chặn ngắm (ngưỡng đề xuất)
 VERIFY = ["done (fire out)", "re-aim (spray missed)", "spray more (hit, still burning)",
           "call human (give up or fault)"]
 
@@ -10,6 +13,27 @@ VERIFY = ["done (fire out)", "re-aim (spray missed)", "spray more (hit, still bu
 def target_candidates(targets: list[dict]) -> list[str]:
     """Chuỗi ứng viên cho câu hỏi `target`, cùng thứ tự với danh sách bia trong state."""
     return [f"{t['id']} (x {t['x']:.2f} z {t['z']:.2f})" for t in targets] + [NONE_OF_THESE]
+
+
+def nozzle_healthy(n: dict) -> bool:
+    return n["hb_ms"] <= HB_MAX_MS and n["pose_s"] <= POSE_MAX_S
+
+
+def nozzle_candidates(obs: dict) -> list[str]:
+    """Ứng viên cho câu hỏi `nozzle`: s1, s2, thêm BOTH khi quan sát cho thấy cả hai vòi khỏe và
+    có một bia thấy mà cả hai với tới. Chỉ dùng quan sát (cùng ngưỡng với luật), không dùng truth."""
+    noz = obs["nozzles"]
+    cands = list(NOZZLES)
+    if all(nozzle_healthy(noz[n]) for n in NOZZLES) and any(
+        all(noz[n]["reach"].get(t["id"]) for n in NOZZLES) for t in obs["targets"]
+    ):
+        cands.append(BOTH)
+    return cands
+
+
+def nozzles_of(answer: str) -> list[str]:
+    """Đáp án `nozzle` thành danh sách vòi cần phun: 's1' -> ['s1'], BOTH -> ['s1', 's2']."""
+    return list(NOZZLES) if answer == BOTH else [answer]
 
 
 def _nums(values: list, fmt: str = "{:.0f}") -> str:

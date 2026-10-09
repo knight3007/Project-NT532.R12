@@ -45,4 +45,4 @@ Tránh dùng: GPIO8 và 9 (chân strapping, thường nối LED và nút BOOT), 
 
 - ESP32-S3 còn dùng làm đường lui hay bỏ hẳn.
 - Vị trí và độ cao đặt node để góc bắn tới bia không quá xiên và không che tầm nhìn camera.
-- Hai vòi có được phun cùng lúc hay không.
+- Hai vòi có được phun cùng lúc hay không. Bộ quyết định đã có ứng viên `both (s1 + s2)`, nhưng orchestrator chưa phun hai vòi cùng lúc: gặp `both` thì dùng vòi gần bia hơn (theo `dist3`), vòi kia vẫn là dự phòng khi bị chặn, và ghi cảnh báo `safety`.

@@ -16,6 +16,7 @@ from pathlib import Path
 from nt532.config import REPO_ROOT
 from nt532.decider.rules import rule_answers
 from nt532.decider.scenario import load_geometry
+from nt532.decider.state_text import BOTH
 
 DIR = REPO_ROOT / "runs/decider"
 QUESTIONS = ("real_fire", "action", "target", "nozzle", "after_verify")
@@ -26,13 +27,19 @@ def evaluate(records: list[dict], geo, answers: list[dict] | None = None) -> dic
     correct = {q: 0 for q in QUESTIONS}
     asked = {q: 0 for q in QUESTIONS}
     sysc = {"false_spray": 0, "missed_spray": 0, "wrong_target": 0, "wrong_nozzle": 0,
-            "no_fire": 0, "should_spray": 0, "sprayed_correctly": 0}
+            "no_fire": 0, "should_spray": 0, "sprayed_correctly": 0,
+            "one_when_two": 0, "two_when_one": 0}
+    by_size = {k: {"asked": 0, "correct": 0} for k in ("small", "large")}
     for i, r in enumerate(records):
         ans = answers[i] if answers is not None else rule_answers(r, geo)
         lab = r["labels"]
         for q in lab:
             asked[q] += 1
             correct[q] += ans.get(q) == lab[q]
+        size = r.get("truth", {}).get("size")
+        if "nozzle" in lab and size in by_size:
+            by_size[size]["asked"] += 1
+            by_size[size]["correct"] += ans.get("nozzle") == lab["nozzle"]
         if "action" not in lab or "real_fire" not in lab:
             continue
         spray = ans["action"] == "spray"
@@ -47,9 +54,14 @@ def evaluate(records: list[dict], geo, answers: list[dict] | None = None) -> dic
                 bad_n = "nozzle" in lab and ans.get("nozzle") != lab["nozzle"]
                 sysc["wrong_target"] += bad_t
                 sysc["wrong_nozzle"] += bad_n and not bad_t
+                if "nozzle" in lab and not bad_t:
+                    both_l, both_a = lab["nozzle"] == BOTH, ans.get("nozzle") == BOTH
+                    sysc["one_when_two"] += both_l and not both_a
+                    sysc["two_when_one"] += both_a and not both_l
                 sysc["sprayed_correctly"] += not bad_t and not bad_n
     acc = {q: correct[q] / asked[q] for q in QUESTIONS if asked[q]}
-    return {"n_records": len(records), "asked": asked, "accuracy": acc, "system": sysc}
+    return {"n_records": len(records), "asked": asked, "accuracy": acc, "system": sysc,
+            "nozzle_by_size": by_size}
 
 
 def main() -> None:
@@ -77,6 +89,8 @@ def main() -> None:
         "missed_spray": "lửa thật cần phun mà không phun",
         "wrong_target": "phun nhầm bia",
         "wrong_nozzle": "phun đúng bia, nhầm vòi",
+        "one_when_two": "chọn một vòi khi cần hai",
+        "two_when_one": "chọn hai vòi khi một là đủ",
         "sprayed_correctly": "phun đúng bia đúng vòi",
     }
     for key, text in labels.items():
@@ -86,6 +100,12 @@ def main() -> None:
             c = result[s]["system"]
             cells += f"{c[key]:7d}/{c[base]:<6d}"
         print(f"{text:36}{cells}")
+    for size in ("small", "large"):
+        row = ""
+        for s in args.splits:
+            c = result[s]["nozzle_by_size"][size]
+            row += f"{c['correct'] / c['asked'] if c['asked'] else float('nan'):14.1%}"
+        print(f"{'acc nozzle, lửa ' + size:36}{row}")
     out = DIR / ("rules_eval_data.json" if args.data else "rules_eval.json")
     out.write_text(json.dumps(result, indent=2, ensure_ascii=False), encoding="utf-8")
     print(f"Đã ghi {out}")
