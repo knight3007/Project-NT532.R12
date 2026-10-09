@@ -155,14 +155,14 @@ PY
 
 ## Checklist lần build đầu và các mục CHƯA KIỂM
 
-Mức biên dịch (đã xác nhận bằng CI ngày 2026-10-09, firmware build với ESP-IDF `release-v5.4`, ứng dụng 0x101ed0 byte, còn trống 33% trong phân vùng 0x180000):
+Mức biên dịch (đã xác nhận bằng CI ngày 2026-10-09, firmware build với ESP-IDF `release-v5.4`; ứng dụng 0x101ed0 byte với `-Og`, còn 0xe24b0 byte với `-Os`, trống 41% trong phân vùng 0x180000):
 
 1. [x] `idf.py build` không lỗi: tên component trong `main/CMakeLists.txt` (`esp_driver_*`, `espressif__coap`), include `coap3/coap.h`.
 2. [x] `espressif/coap` kéo về được; `CONFIG_COAP_MBEDTLS_PSK=n` và `CONFIG_COAP_TCP_SUPPORT=n` (DTLS và TCP tắt) biên dịch được.
 3. [x] Trường `addr.sin6` của `coap_address_t`, macro `COAP_RESPONSE_CLASS`, `COAP_INVALID_MID` (`coap_node.c`).
 13a. [x] Kích thước ứng dụng nằm trong phân vùng 1,5 MB.
 
-Mã SRP thêm sau lần build đó (`net_ot.c`, `CONFIG_OPENTHREAD_SRP_CLIENT`) CHƯA qua CI; xem mục SRP dưới.
+Mã SRP (`net_ot.c`, `CONFIG_OPENTHREAD_SRP_CLIENT`) và bản chỉ thức khi có việc (`coap_io_process_with_fds` với eventfd, `act_next_ms`) đã biên dịch qua CI; chạy thật vẫn CHƯA KIỂM, xem mục SRP và mục 17 dưới.
 
 Mức chạy thật (vẫn CHƯA KIỂM):
 
