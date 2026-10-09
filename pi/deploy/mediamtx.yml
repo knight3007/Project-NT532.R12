@@ -1,0 +1,25 @@
+# Cấu hình mediamtx cho camera điện thoại. Chạy: mediamtx pi/deploy/mediamtx.yml
+# Điện thoại đẩy RTMP vào :1935/cam, Pi đọc lại RTSP ở :8554/cam. Xem docs/camera-dien-thoai.md.
+
+logLevel: info
+
+# Điện thoại phát vào đây
+rtmp: yes
+rtmpAddress: :1935
+
+# Pi (StreamCapture) và laptop kiểm tra đọc ra từ đây
+rtsp: yes
+rtspAddress: :8554
+rtspTransports: [tcp]   # TCP để không mất gói trên Wi-Fi
+
+# Không dùng
+hls: no
+webrtc: no
+srt: no
+api: no
+metrics: no
+pprof: no
+playback: no
+
+paths:
+  cam:

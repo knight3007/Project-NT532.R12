@@ -2,6 +2,9 @@
 
 Đọc liên tục nên khung lấy ra luôn mới (không dính bộ đệm của webcam), và `fresh()` trả đúng khung
 bắt đầu chụp sau thời điểm gọi, thay cho `read_fresh` khi cần ảnh ngay sau khi bật laser.
+
+`read` trả ảnh (thời điểm chụp coi là lúc bắt đầu gọi `read`) hoặc `(ảnh, thời điểm chụp)` khi nguồn
+tự biết, như stream từ điện thoại có độ trễ (`StreamCapture.read_stamped`).
 """
 
 import threading
@@ -12,7 +15,7 @@ import numpy as np
 
 
 class FrameHub:
-    def __init__(self, read: Callable[[], np.ndarray], fps: float = 15.0,
+    def __init__(self, read: Callable[[], np.ndarray | tuple[np.ndarray, float]], fps: float = 15.0,
                  clock: Callable[[], float] = time.monotonic) -> None:
         self.read, self.period, self.clock = read, 1.0 / fps, clock
         self._cv = threading.Condition()
@@ -36,13 +39,16 @@ class FrameHub:
             t0 = self.clock()
             try:
                 frame = self.read()
+                t_shot = t0
+                if isinstance(frame, tuple):
+                    frame, t_shot = frame
                 self.error = None
             except Exception as e:  # noqa: BLE001 - camera lỗi thì báo lên dashboard, thử lại
                 self.error = f"{type(e).__name__}: {e}"
                 self._halt.wait(0.5)
                 continue
             with self._cv:
-                self._frame, self._t = frame, t0
+                self._frame, self._t = frame, t_shot
                 self.seq += 1
                 self._cv.notify_all()
             self._halt.wait(max(0.0, self.period - (self.clock() - t0)))

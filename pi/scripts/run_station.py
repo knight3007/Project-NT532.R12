@@ -20,7 +20,8 @@ from nt532.station import build_real, build_sim
 
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    p.add_argument("--source", default=None, help="sim, số thứ tự webcam hoặc file video")
+    p.add_argument("--source", default=None, help="sim, số thứ tự webcam, file video hoặc URL stream (rtsp://...); "
+                                                 "mặc định theo camera.stream.url trong site.yaml")
     p.add_argument("--decider", choices=["rules", "jev", "hybrid"], default="rules")
     p.add_argument("--jev-run", default="jev1", help="thư mục trong runs/decider/jev/")
     p.add_argument("--tau", type=float, default=0.8, help="ngưỡng tin cậy của chế độ lai")

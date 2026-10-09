@@ -153,7 +153,8 @@ def build_real(decider: str = "rules", jev_run: str = "jev1", tau: float = 0.8,
             raise RuntimeError("không đọc được khung hình")
         return frame
 
-    hub = FrameHub(read, fps).start()
+    # Stream từ điện thoại tự đóng dấu thời điểm chụp (đã trừ độ trễ), để fresh() sau khi bật laser đúng
+    hub = FrameHub(getattr(cap, "read_stamped", read), fps).start()
     net = site.get("network") or {}
     nodes = {n: a for n, a in (net.get("nodes") or {}).items() if a}
     if not nodes:

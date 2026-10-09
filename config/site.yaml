@@ -40,6 +40,13 @@ camera:
   # null là để camera tự chỉnh. Giá trị tùy từng webcam; dò bằng `v4l2-ctl -l` trên Pi.
   focus: null
   exposure: null
+  # Camera điện thoại: điện thoại đẩy RTMP lên mediamtx trên Pi, Pi đọc lại RTSP. url null là dùng webcam
+  # (index ở trên). Xem docs/camera-dien-thoai.md. Độ phân giải, lấy nét, phơi sáng chỉnh trên ứng dụng.
+  stream:
+    url: null                  # ví dụ "rtsp://127.0.0.1:8554/cam"
+    latency_s: 0.8             # độ trễ điện thoại → Pi; đo bằng scripts/stream_latency.py
+    reconnect_s: 2.0
+    timeout_s: 5.0
   # Bảng ChArUco in trên A4. Dùng từ điển 4x4 để không lẫn với tag 36h11 trên sa bàn.
   calib_board:
     dictionary: 4X4_50

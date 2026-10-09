@@ -65,13 +65,14 @@ Các script trong `pi/scripts/`:
 | `bench_detect.py` | Đo thời gian suy luận bằng CPU |
 | `log_pi_load.py` | Ghi CPU, RAM, nhiệt độ của Pi ra CSV |
 | `sim_demo.py` | Chạy trọn kịch bản trên sa bàn ảo bằng YOLO thật và in sai số từng bước |
+| `stream_latency.py` | Đo độ trễ stream điện thoại → Pi bằng laser, gợi ý giá trị `camera.stream.latency_s` |
 | `run_station.py` | Chạy trạm (orchestrator, bộ quyết định, link node) kèm dashboard web ở cổng 8080 |
 
 Chưa có sa bàn thì dùng sa bàn ảo trong `pi/src/nt532/sim/`: thêm `--source sim` vào bất kỳ script nào có `--source` (camera ảo, 4 tag tham chiếu mặc định, hai node, thẻ bia và laser theo pan/tilt).
 
 Chạy cả trạm kèm dashboard trên sa bàn ảo: `uv run python scripts/run_station.py --source sim` rồi mở http://localhost:8080/. Kiến trúc, luồng xử lý và các việc còn mở ở [docs/orchestrator.md](docs/orchestrator.md).
 
-Orchestrator dùng phần thị giác qua lớp `Vision`, mô tả ở [docs/vision-api.md](docs/vision-api.md). Cách đưa lên Pi và chạy các bài đo ở [docs/trien-khai-pi.md](docs/trien-khai-pi.md).
+Orchestrator dùng phần thị giác qua lớp `Vision`, mô tả ở [docs/vision-api.md](docs/vision-api.md). Cách đưa lên Pi và chạy các bài đo ở [docs/trien-khai-pi.md](docs/trien-khai-pi.md). Dùng điện thoại làm camera (RTMP qua mediamtx, đo độ trễ) ở [docs/camera-dien-thoai.md](docs/camera-dien-thoai.md).
 
 Dataset và nguồn tải ghi ở [docs/datasets.md](docs/datasets.md).
 
