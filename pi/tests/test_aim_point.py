@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+from nt532.net.fakenode import CoreLib, CoreUnavailable
 from nt532.station import build_sim
 
 _path = Path(__file__).resolve().parents[1] / "scripts" / "aim_point.py"
@@ -37,6 +38,11 @@ def run_on(link, tmp_path, points):
 
 @pytest.mark.parametrize("link", ["mem", "coap"])
 def test_point_near_centre_is_measured_and_laser_ends_off(tmp_path, link):
+    if link == "coap":
+        try:
+            CoreLib.get()
+        except CoreUnavailable as e:
+            pytest.skip(f"không có lõi C của firmware (libcore.so): {e}")
     st, _, csv_rows, sent = run_on(link, tmp_path, [("s1", 0.45, 0.30)])
     assert len(csv_rows) == 1 and len(sent) >= 1
     miss = float(csv_rows[0]["miss_cm"])

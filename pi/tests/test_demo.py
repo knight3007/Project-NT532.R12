@@ -1,4 +1,5 @@
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -168,9 +169,11 @@ def test_estop_scene_stops_the_run_and_turns_everything_off(station):
 
 
 def test_cli_headless_writes_summary_and_report(tmp_path):
+    # Windows: ép UTF-8 cho cả tiến trình con lẫn phía đọc, để tiếng Việt không vỡ bởi cp1252
+    utf8 = {"encoding": "utf-8", "env": {**os.environ, "PYTHONUTF8": "1"}}
     p = subprocess.run([sys.executable, str(SCRIPT), "--headless", "--fast", "--scenes", "spike", "--report",
                         "--runs-dir", str(tmp_path)], capture_output=True, text=True, timeout=300,
-                       check=False)
+                       check=False, **utf8)
     assert p.returncode == 0, p.stdout + p.stderr
     [summary] = list((tmp_path / "demo").glob("*/summary.json"))
     data = json.loads(summary.read_text(encoding="utf-8"))
@@ -180,5 +183,5 @@ def test_cli_headless_writes_summary_and_report(tmp_path):
     [index] = list((tmp_path / "report").glob("*/index.html"))
     assert "Kịch bản demo trên sa bàn ảo" in index.read_text(encoding="utf-8")
     bad = subprocess.run([sys.executable, str(SCRIPT), "--scenes", "khong_co"], capture_output=True, text=True,
-                         timeout=60, check=False)
+                         timeout=60, check=False, **utf8)
     assert bad.returncode == 2 and "khong_co" in bad.stderr
