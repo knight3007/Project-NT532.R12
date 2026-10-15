@@ -10,8 +10,10 @@ Chỉ dùng `state`, `questions`, `labels`; không đọc truth/obs.
 """
 
 import argparse
+import gc
 import json
 import math
+import os
 import random
 import time
 
@@ -76,8 +78,83 @@ def check_rss(limit: float) -> float:
     return gb
 
 
+def params_finite(params) -> bool:
+    """Mọi tham số trainable đều hữu hạn (không NaN/inf)."""
+    return all(bool(torch.isfinite(x).all()) for x in params)
+
+
+MAX_SKIPPED_STEPS = 10  # số bước tối ưu liên tiếp bị bỏ vì gradient không hữu hạn trước khi dừng
+
+
 def fmt_eta(sec: float) -> str:
     return f"{int(sec // 3600)}h{int(sec % 3600 // 60):02d}m"
+
+
+def fit_temps(model: JevModel, val_all: list[dict], batch: int) -> None:
+    """Khớp nhiệt độ T cho từng câu hỏi trên val, ghi vào model.temps."""
+    print("khớp nhiệt độ trên val ...", flush=True)
+    lg = model.predict_logits(val_all, batch)
+    model.temps = {}
+    for qid, (ls, ts) in gather(val_all, lg).items():
+        t = fit_temperature(ls, ts)
+        print(f"  {qid}: T {t:.3f}  NLL {nll_logits(ls, ts):.4f} -> {nll_logits(ls, ts, t):.4f}")
+        model.temps[qid] = t
+
+
+def finish(args: argparse.Namespace) -> None:
+    """Hoàn tất bản lưu dở (partial_step): bỏ qua train, chỉ khớp T rồi lưu như bản hoàn chỉnh."""
+    out = OUT / args.name
+    cfg_path = out / "config.json"
+    if not cfg_path.exists():
+        raise SystemExit(f"không có {cfg_path}: chưa có bản lưu dở để hoàn tất")
+    cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+    if "partial_step" not in cfg:
+        raise SystemExit(f"{cfg_path} không có partial_step: bản này đã hoàn chỉnh")
+    step = cfg["partial_step"]
+    val_all = load_records("val", args.fit_records or None)
+    print(f"hoàn tất bản dở bước {step}; khớp T trên {len(val_all)} bản ghi val", flush=True)
+    model = JevModel.load(out, device=args.device, precision=args.precision,
+                          checkpointing=False)
+    fit_temps(model, val_all, args.batch * 2)
+    extra = {"args": cfg.get("args"), "history": cfg.get("history"),
+             "finished_from_partial": step,
+             "note": "huấn luyện dừng sớm (hết bộ nhớ ở cuối vòng); dùng bản tốt nhất đã lưu dở, "
+                     "T khớp lại bằng --finish; không có số liệu thời gian/cắt chuỗi của lượt train"}
+    model.save(out, extra=extra)
+    print(f"Đã lưu {out}")
+
+
+RESUME_KEYS = ("batch", "accum", "max_records", "epochs", "seed", "lora_r", "freeze_backbone")
+
+
+def head_state(model: JevModel) -> dict[str, torch.Tensor]:
+    return {k: v.detach().cpu().clone() for k, v in model.state_dict().items()
+            if not k.startswith("backbone.")}
+
+
+def save_resume(path, step: int, opt, model: JevModel, best: float, best_state, hist: list,
+                seen: int, args: argparse.Namespace) -> None:
+    """Ghi nguyên tử trạng thái để chạy tiếp: file tạm rồi os.replace."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    blob = {
+        "step": step, "args": vars(args), "opt": opt.state_dict(),
+        "backbone": model.backbone.trainable_state(), "heads": head_state(model),
+        "best": best, "best_state": best_state, "hist": hist, "seen": seen,
+        "rng_torch": torch.get_rng_state(),
+        "rng_cuda": torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None,
+        "rng_random": random.getstate(),
+    }
+    tmp = path.with_name(path.name + ".tmp")
+    torch.save(blob, tmp)
+    os.replace(tmp, path)
+
+
+def check_resume_args(saved: dict, args: argparse.Namespace, src: str) -> None:
+    bad = [f"{k}: đã lưu {saved.get(k)!r} != hiện tại {getattr(args, k)!r}"
+           for k in RESUME_KEYS if saved.get(k) != getattr(args, k)]
+    if bad:
+        raise SystemExit(f"DỪNG: tham số không khớp với {src} -> không chạy tiếp được:\n  "
+                         + "\n  ".join(bad))
 
 
 def main() -> None:
@@ -102,7 +179,18 @@ def main() -> None:
     p.add_argument("--max-rss-gb", type=float, default=8.0,
                    help="dừng với thông báo rõ nếu RAM máy chủ của tiến trình vượt ngưỡng (0 = tắt)")
     p.add_argument("--seed", type=int, default=0)
+    p.add_argument("--finish", action="store_true",
+                   help="nạp bản đã lưu dở (partial_step) ở runs/decider/jev/<name>, bỏ qua train, "
+                        "chỉ khớp nhiệt độ trên val rồi lưu như bản hoàn chỉnh")
+    p.add_argument("--ckpt-every", type=int, default=50,
+                   help="ghi resume.pt sau mỗi N bước tối ưu (0 = tắt)")
+    p.add_argument("--resume", action="store_true",
+                   help="chạy tiếp từ resume.pt; không có thì thử nạp bản lưu dở (partial_step)")
+    p.add_argument("--stop-after", type=int, default=0, help=argparse.SUPPRESS)  # chỉ để thử resume
     args = p.parse_args()
+    if args.finish:
+        finish(args)
+        return
 
     random.seed(args.seed)
     torch.manual_seed(args.seed)
@@ -138,9 +226,52 @@ def main() -> None:
 
     on_cuda = args.device.startswith("cuda")
     best, best_state, hist = float("inf"), None, []
-    t0, seen = time.time(), 0
-    run_loss = 0.0
-    for step in range(1, total + 1):
+    done, seen = 0, 0
+    out_dir = OUT / args.name
+    resume_path = out_dir / "resume.pt"
+    if args.resume:
+        cfg_path = out_dir / "config.json"
+        cfg = (json.loads(cfg_path.read_text(encoding="utf-8")) if cfg_path.exists() else {})
+        if resume_path.exists():
+            ck = torch.load(resume_path, map_location="cpu", weights_only=False)
+            check_resume_args(ck["args"], args, str(resume_path))
+            bb.load_trainable_state(ck["backbone"])
+            model.load_state_dict(ck["heads"], strict=False)
+            opt.load_state_dict(ck["opt"])
+            best, best_state, hist = ck["best"], ck["best_state"], ck["hist"]
+            done, seen = ck["step"], ck["seen"]
+            torch.set_rng_state(ck["rng_torch"])
+            if ck["rng_cuda"] is not None and torch.cuda.is_available():
+                torch.cuda.set_rng_state_all(ck["rng_cuda"])
+            random.setstate(ck["rng_random"])
+            print(f"CHẠY TIẾP từ {resume_path}: đã xong {done}/{total} bước", flush=True)
+        elif "partial_step" in cfg:
+            check_resume_args(cfg.get("args") or {}, args, str(cfg_path))
+            done = cfg["partial_step"]
+            hist = cfg.get("history") or []
+            heads = torch.load(out_dir / "heads.pt", map_location="cpu")
+            model.choice.load_state_dict(heads["choice"])
+            model.boolean.load_state_dict(heads["boolean"])
+            lora_sd = torch.load(out_dir / "lora.pt", map_location="cpu")
+            if lora_sd:
+                bb.load_trainable_state(lora_sd)
+            best = next((h["val_loss"] for h in hist if h["step"] == done), float("inf"))
+            best_state = (head_state(model), bb.trainable_state())
+            seen = done * per_step
+            print(f"CHẠY TIẾP từ bản lưu dở bước {done}/{total} (val loss {best:.3f}); "
+                  "CẢNH BÁO: optimizer (moment AdamW) khởi tạo lại, RNG không khôi phục", flush=True)
+        else:
+            print("--resume: không có resume.pt hay bản lưu dở -> train từ đầu", flush=True)
+        if done > total:
+            raise SystemExit(f"DỪNG: bước đã xong {done} > tổng {total}")
+    seen0 = seen
+    # Python 3.14 + PyTorch: GC chạy trong luồng autograd (lúc checkpointing tính lại forward) làm
+    # segfault cứ ~170 bước trên máy ảo. Tắt GC tự động, dọn ở luồng chính sau mỗi bước.
+    gc.disable()
+    t0 = time.time()
+    run_loss, run_n = 0.0, 0
+    skipped_micro, skipped_steps, bad_streak = 0, 0, 0
+    for step in range(done + 1, total + 1):
         if step <= warm:
             scale = step / warm
         else:
@@ -151,26 +282,47 @@ def main() -> None:
             i0 = (step - 1) * per_step + a * args.batch
             chunk = [train[j] for j in order[i0:i0 + args.batch]]
             loss, _ = model.loss(chunk)
+            seen += len(chunk)
+            if not torch.isfinite(loss):
+                skipped_micro += 1
+                print(f"CẢNH BÁO bước {step}: loss không hữu hạn ({loss.item()}) ở các bản ghi "
+                      f"{[r['id'] for r in chunk]} -> bỏ bước nhỏ này (tổng đã bỏ {skipped_micro})",
+                      flush=True)
+                continue
             (loss / args.accum).backward()
             run_loss += loss.item() / args.accum
-            seen += len(chunk)
             if on_cuda:
                 # allocator giữ cache theo từng hình dạng chuỗi; trên Windows (WDDM) phần giữ này
                 # tính vào bộ nhớ cam kết của tiến trình và tràn sang RAM -> giải phóng mỗi lô
                 torch.cuda.empty_cache()
-        torch.nn.utils.clip_grad_norm_(all_params, 1.0)
-        opt.step()
+        gnorm = torch.nn.utils.clip_grad_norm_(all_params, 1.0)
+        if torch.isfinite(gnorm):
+            opt.step()
+            bad_streak = 0
+        else:
+            skipped_steps += 1
+            bad_streak += 1
+            print(f"CẢNH BÁO bước {step}: grad norm không hữu hạn ({gnorm.item()}) -> bỏ opt.step "
+                  f"(tổng đã bỏ {skipped_steps})", flush=True)
+            if bad_streak >= MAX_SKIPPED_STEPS:
+                raise SystemExit(f"DỪNG: {bad_streak} bước liên tiếp có gradient không hữu hạn "
+                                 "(chưa ghi đè bản lưu nào)")
         opt.zero_grad(set_to_none=True)
+        if not params_finite(all_params):
+            raise SystemExit(f"DỪNG: tham số trainable có NaN/inf sau bước {step}; không ghi "
+                             "resume.pt hay bản lưu (dùng bản lưu trước đó để chạy tiếp)")
+        gc.collect()
 
-        rate = seen / (time.time() - t0)
+        run_n += 1
+        rate = max(seen - seen0, 1) / (time.time() - t0)
         if step % 5 == 0 or step == total:
             eta = (total * per_step - seen) / rate
             gb = check_rss(args.max_rss_gb)
             cu = (f" | cuda cấp {torch.cuda.memory_allocated() / 1e9:.2f} giữ "
                   f"{torch.cuda.memory_reserved() / 1e9:.2f} GB" if args.device.startswith("cuda") else "")
-            print(f"bước {step}/{total} loss {run_loss / min(step, 5):.3f} "
+            print(f"bước {step}/{total} lr×{scale:.3f} loss {run_loss / run_n:.3f} "
                   f"{rate:.2f} bản ghi/s ETA {fmt_eta(eta)} | RAM {gb:.2f} GB{cu}", flush=True)
-            run_loss = 0.0
+            run_loss, run_n = 0.0, 0
         if step % args.val_every == 0 or step == total:
             vl, acc = evaluate(model, val, args.batch * 2)
             hist.append({"step": step, "val_loss": vl, "acc": acc})
@@ -178,37 +330,37 @@ def main() -> None:
                   flush=True)
             if vl < best:
                 best = vl
-                heads = {k: v.clone() for k, v in model.state_dict().items()
-                         if not k.startswith("backbone.")}
-                best_state = (heads, bb.trainable_state())
+                best_state = (head_state(model), bb.trainable_state())
                 # ghi ngay (chưa khớp T) để phiên bị cắt giữa chừng vẫn còn mô hình dùng được
                 model.save(OUT / args.name, extra={"args": vars(args), "partial_step": step,
                                                    "history": hist})
+        if args.ckpt_every and (step % args.ckpt_every == 0) and step < total:
+            save_resume(resume_path, step, opt, model, best, best_state, hist, seen, args)
+        if args.stop_after and step >= args.stop_after:
+            print(f"[--stop-after] thoát cứng sau bước {step}", flush=True)
+            os._exit(3)
 
     if best_state is not None:
         model.load_state_dict(best_state[0], strict=False)
         bb.load_trainable_state(best_state[1])
         print(f"dùng bản tốt nhất, val loss {best:.3f}")
 
-    print("khớp nhiệt độ trên val ...", flush=True)
-    lg = model.predict_logits(val_all, args.batch * 2)
-    model.temps = {}
-    for qid, (ls, ts) in gather(val_all, lg).items():
-        t = fit_temperature(ls, ts)
-        print(f"  {qid}: T {t:.3f}  NLL {nll_logits(ls, ts):.4f} -> {nll_logits(ls, ts, t):.4f}")
-        model.temps[qid] = t
+    fit_temps(model, val_all, args.batch * 2)
 
     out = OUT / args.name
     elapsed = time.time() - t0
+    seen_run = max(seen - seen0, 1)
     peak_gb = torch.cuda.max_memory_allocated() / 1e9 if args.device.startswith("cuda") else None
     model.save(out, extra={"args": vars(args), "train_records": len(train), "history": hist,
-                           "seconds": elapsed, "records_per_s": seen / elapsed,
+                           "seconds": elapsed, "records_per_s": seen_run / elapsed,
+                           "resumed_from_step": done or None,
                            "truncated": bb.n_truncated, "sequences": bb.n_seen})
     lens = np.array(bb.token_lengths)
     print(f"độ dài token: trung vị {np.median(lens):.0f}, p95 {np.percentile(lens, 95):.0f}, "
           f"max {lens.max()}; cắt {bb.n_truncated}/{bb.n_seen} chuỗi (max_len {args.max_len})")
-    print(f"xong sau {elapsed:.0f}s, {seen / elapsed:.2f} bản ghi/s"
+    print(f"xong sau {elapsed:.0f}s, {seen_run / elapsed:.2f} bản ghi/s"
           + (f", VRAM đỉnh {peak_gb:.1f} GB" if peak_gb else ""))
+    resume_path.unlink(missing_ok=True)
     print(f"Đã lưu {out}")
 
 
