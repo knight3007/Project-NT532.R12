@@ -4,6 +4,12 @@
     uv run python scripts/commission.py --frames 30 --source 1
     uv run python scripts/commission.py --check          # so cảnh hiện tại với file đã lưu
     uv run python scripts/commission.py --source sim     # sa bàn ảo, lưu vào data/sim/
+    uv run python scripts/commission.py --source sim --camera left
+    uv run python scripts/commission.py --source sim --camera 0.6,-1.0,1.0 --look-at 0.6,0.4,0.2
+
+Với --source sim: --camera (preset front/left/right/legacy hoặc x,y,z), --look-at x,y,z và --layout
+(corners|posts, mặc định corners) chọn camera và bố cục node của sa bàn ảo. Kết quả ghi đè data/sim/commissioning.yaml,
+file bộ quyết định (decider/scenario.py) đọc vị trí node, nên chỉ lưu khi muốn đổi bố cục đó.
 
 Thoát mã 1 nếu thiếu node hoặc sai số chiếu lại vượt camera_shift_px (và không ghi đè file đã
 lưu, trừ khi có --force); mã 2 nếu không thấy đủ tag tham chiếu. Với --check, mã 1 nếu có gì
@@ -14,6 +20,7 @@ import argparse
 import sys
 
 from nt532.config import REPO_ROOT, load_site
+from nt532.sim import Scene, SimCamera, add_sim_args, sim_options
 from nt532.vision import Vision, read_frames
 from nt532.vision.camera import open_camera
 from nt532.vision.report import commissioning_report, health_report
@@ -25,14 +32,21 @@ def main() -> None:
     p.add_argument("--frames", type=int, default=None, help="số khung (mặc định commission_frames)")
     p.add_argument("--check", action="store_true", help="kiểm tra so với file đã lưu, không ghi")
     p.add_argument("--force", action="store_true", help="vẫn lưu dù kết quả không đạt")
+    add_sim_args(p)
     args = p.parse_args()
+    sim = sim_options(args, p)
+    if args.source != "sim" and (args.camera or args.look_at or args.layout):
+        p.error("--camera, --look-at và --layout chỉ dùng với --source sim")
 
     site = load_site(source=args.source)
     cfg = site["vision"]
     frames = args.frames or cfg["commission_frames"]
     try:
         vision = Vision.from_site(site)
-        cap = open_camera(site["camera"], args.source)
+        if args.source == "sim":
+            cap = SimCamera(Scene(site, camera_pose=sim["camera"], node_layout=sim["node_layout"]))
+        else:
+            cap = open_camera(site["camera"], args.source)
     except (RuntimeError, FileNotFoundError) as e:
         raise SystemExit(f"{e} (đã chạy calibrate_camera.py chưa?)") from e
     images = read_frames(cap, frames)
@@ -55,6 +69,8 @@ def main() -> None:
     ok = not state.missing and state.reprojection_px <= cfg["camera_shift_px"]
     if ok or args.force:
         print(f"Đã lưu {vision.save().relative_to(REPO_ROOT)}")
+        if args.source == "sim":
+            print("Bộ quyết định (decider/scenario.py) đọc vị trí node từ file này.")
     else:
         print("Kết quả không đạt nên KHÔNG lưu (thêm --force để vẫn lưu).")
     sys.exit(0 if ok else 1)

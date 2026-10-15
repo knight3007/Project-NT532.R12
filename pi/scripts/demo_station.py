@@ -4,8 +4,12 @@
     uv run python scripts/demo_station.py --step               # chờ Enter trước mỗi cảnh (trình diễn)
     uv run python scripts/demo_station.py --headless --fast --scenes fire_s1,lamp,estop --report
     uv run python scripts/demo_station.py --decider hybrid --model-stages decide,verify   # cần runs/decider/jev/jev1
+    uv run python scripts/demo_station.py --headless --fast --scenes fire_floor,fire_s1
+    uv run python scripts/demo_station.py --camera left         # camera preset hoặc x,y,z
 
-Cảnh: fire_s1, fire_s2, fire_large, lamp, steam_object, spike, node_offline, estop (docs/demo.md).
+Cảnh: fire_s1, fire_s2, fire_large, fire_floor, lamp, steam_object, spike, node_offline, estop (docs/demo.md).
+--camera PRESET|x,y,z, --look-at x,y,z, --layout corners|posts (mặc định corners) chọn camera và bố cục node của sa bàn ảo;
+cảnh đặt lửa ở chỗ node với tới được, không có chỗ nào thì bị bỏ qua (có ghi chú, không tính là lỗi).
 Mỗi cảnh in tiêu đề, hành vi mong đợi, kết quả; chấm riêng quyết định (ĐẠT/KHÔNG ĐẠT, không đổi mã thoát)
 và an toàn (VI PHẠM AN TOÀN thì mã thoát 1). Ghi nhật ký vào <runs-dir>/station/<thời điểm>.jsonl, tóm tắt
 vào <runs-dir>/demo/<thời điểm>/summary.json; --report dựng thêm báo cáo HTML chỉ từ lần demo này.
@@ -25,6 +29,7 @@ from nt532.config import REPO_ROOT
 from nt532.dashboard import Dashboard
 from nt532.orchestrator.decide import parse_stages
 from nt532.report import build_report, collect
+from nt532.sim import add_sim_args, sim_options
 from nt532.sim.demo import SCENES, fast_settings, prepare, run_scene, summary_entry
 from nt532.station import build_sim
 
@@ -64,6 +69,9 @@ def latency_text(r: dict) -> str:
 
 def print_result(r: dict) -> None:
     v = r["verdict"]
+    if r.get("skipped"):
+        say("Bỏ qua: " + r["skipped"])
+        return
     say(f"Kết quả: {len(r['runs'])} lượt ({', '.join(map(str, r['outcomes'])) or 'không có'}) · "
         f"vòi phun: {nozzles_text(r)}{' (cùng lúc)' if r['dual_pump'] else ''} · lửa tắt: {out_text(r)} · "
         f"trễ báo động→bơm: {latency_text(r)} s · {r['duration_s']:.0f} s")
@@ -75,7 +83,7 @@ def print_result(r: dict) -> None:
 def print_table(results: list[dict]) -> None:
     head = ["Cảnh", "Kết cục", "Vòi phun", "Lửa tắt", "Trễ (s)", "Quyết định", "An toàn"]
     rows = [[r["name"], ",".join(map(str, r["outcomes"])) or "–", nozzles_text(r), out_text(r),
-             latency_text(r), decision_text(r["verdict"]["decision_ok"]),
+             latency_text(r), "bỏ qua" if r.get("skipped") else decision_text(r["verdict"]["decision_ok"]),
              safety_text(r["verdict"]["safety_ok"])] for r in results]
     w = [max(len(str(c)) for c in col) for col in zip(head, *rows)]
     line = "  ".join(h.ljust(n) for h, n in zip(head, w))
@@ -129,7 +137,9 @@ def main() -> int:
                         "còn lại dùng luật. Hai vòi phun cùng lúc cần mô hình trả lời ở DECIDE")
     p.add_argument("--detector", choices=["oracle", "yolo"], default="oracle",
                    help="oracle đọc thẻ thật trong scene, yolo dùng trọng số")
+    add_sim_args(p)
     args = p.parse_args()
+    sim = sim_options(args, p)
     try:
         parse_stages(args.model_stages)
     except ValueError as e:
@@ -152,13 +162,14 @@ def main() -> int:
     st = build_sim(args.decider, args.jev_run, args.tau, args.detector, args.seed, fps=12.0 if args.fast else 10.0,
                    log_path=log, settings=fast_settings() if args.fast else None,
                    model_stages=args.model_stages, decider_url=args.decider_url,
-                   decider_timeout=args.decider_timeout)
+                   decider_timeout=args.decider_timeout, **sim)
     st.start()
     dash = None
     if not args.headless:
         dash = Dashboard(st, args.host, args.port).start()
         print(f"Dashboard: {dash.url}")
     print(f"Bộ quyết định: {st.orch.decider.name} · detector {args.detector} · seed {args.seed}"
+          f" · bố cục {st.world.scene.node_layout}"
           f"{' · chạy nhanh' if args.fast else ''}")
     print(f"Nhật ký: {shown(log)}")
 
@@ -192,7 +203,7 @@ def main() -> int:
         summary = {
             "start": demo_start, "start_text": datetime.fromtimestamp(demo_start).astimezone().isoformat(timespec="seconds"),
             "end": time.time(), "decider": st.orch.decider.name, "detector": args.detector, "seed": args.seed,
-            "fast": args.fast, "settings": asdict(st.orch.cfg), "log": shown(log), "interrupted": interrupted,
+            "fast": args.fast, "layout": st.world.scene.node_layout, "settings": asdict(st.orch.cfg), "log": shown(log), "interrupted": interrupted,
             "scenes": [summary_entry(r) for r in results],
         }
         out_dir.mkdir(parents=True, exist_ok=True)

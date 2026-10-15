@@ -29,11 +29,18 @@ from ..vision.localize import project
 from ..vision.types import Detection
 from .camera import SimCamera
 from .cards import SYNTH_DIR, ensure_synth_cards
-from .scene import CARD_SIZE, Scene, sim_site
+from .scene import CARD_SIZE, DEFAULT_LAYOUT, Scene, sim_site
 
 AMBIENT = {"temp": 27.0, "gas": 180.0, "hum": 55.0}
 NOISE = {"temp": 0.4, "gas": 10.0, "hum": 0.8}
 DECAY_M = 0.35  # tín hiệu giảm theo e^(-khoảng cách/DECAY_M)
+# Khoảng cách 3D từ nguồn tới cảm biến (tâm tag node). Trừ đi cự ly thường gặp giữa node và bảng
+# (0,25 m) để lửa ngay trước node vẫn cho tín hiệu cỡ đỉnh như khi chỉ tính theo X.
+# Bố cục "corners" đặt cảm biến ở hai góc trước bàn, xa bảng và nền hơn nhiều so với hai trụ sát bảng
+# (0,8 m so với 0,25 m). Cùng độ nhạy thì không đám cháy nhỏ nào đủ gần để báo động, nên ở bố cục
+# đó tín hiệu lan xa gấp từng ấy lần (giả định cảm biến đặt ở góc nhạy hơn).
+DECAY_SCALE = {"posts": 1.0, "corners": 3.0}
+SENSOR_STANDOFF_M = 0.25
 HIT_M = 0.035  # nước rơi cách tâm thẻ lửa dưới chừng này thì có tác dụng
 SPRAY_CREDIT_MAX_S = 0.5  # mỗi lần ghi nước tối đa chừng này giây, dù vòng lặp bị kẹt lâu hơn
 # Lửa lớn (giả định, cùng hướng với large_gain/large_decay của bộ kịch bản): thẻ to hơn, tín hiệu
@@ -48,12 +55,15 @@ SMALL_HP = (0.8, 2.6)
 
 @dataclass
 class Source:
-    """Một nguồn: thẻ trên bảng (có thể có) và tín hiệu cảm biến nó gây ra."""
+    """Một nguồn: thẻ (có thể có) trên bảng hoặc nền và tín hiệu cảm biến nó gây ra. Vị trí 3D
+    (x, y, z): nguồn trên bảng có y = plane_y; nguồn trên nền có z = 0 (điểm đáy chạm nền)."""
 
     id: int
     kind: str  # fire, lamp, object, steam, spike
     x: float
     z: float
+    y: float = 0.0
+    surface: str = "wall"  # wall | floor
     card: int | None = None
     peak: dict = field(default_factory=dict)  # đỉnh cộng thêm cho temp, gas, hum ở khoảng cách 0
     level: float = 0.0  # 0..1, tiến về `goal` theo hằng số thời gian
@@ -67,8 +77,13 @@ class Source:
     decay: float = DECAY_M  # tín hiệu cảm biến giảm theo e^(-khoảng cách/decay)
     size: str = "small"  # lửa: small hoặc large
 
+    @property
+    def pos(self) -> np.ndarray:
+        return np.array([self.x, self.y, self.z])
+
     def to_json(self) -> dict:
         return {"id": self.id, "kind": self.kind, "x": round(self.x, 3), "z": round(self.z, 3),
+                "y": round(self.y, 3), "surface": self.surface,
                 "level": round(self.level, 2), "hp": round(self.hp, 2), "out": self.out,
                 "node": self.node, "size": self.size}
 
@@ -94,14 +109,19 @@ class SimNodeSensors:
 
 class SimWorld:
     def __init__(self, site: dict | None = None, seed: int = 0, servo_bias_deg: float = 3.0,
-                 telemetry_period: float = 1.0, tick: float = 0.1) -> None:
+                 telemetry_period: float = 1.0, tick: float = 0.1,
+                 camera=None, node_layout=None) -> None:
+        """`camera`: tên preset (`CAMERA_PRESETS`) hoặc (vị trí, điểm nhìn); `node_layout`: tên
+        bố cục node (`NODE_LAYOUTS`: "corners", "posts"). Bỏ trống là `DEFAULT_LAYOUT` (corners)."""
         self.site = sim_site(site)
         self.kinds = ensure_synth_cards()
-        self.scene = Scene(self.site, cards_dir=SYNTH_DIR, seed=seed)
+        self.scene = Scene(self.site, cards_dir=SYNTH_DIR, seed=seed, camera_pose=camera,
+                           node_layout=node_layout)
         self.cap = SimCamera(self.scene)
         self.lock = threading.RLock()  # mọi thay đổi scene và mỗi lần dựng khung đều giữ khóa này
         self.rng = np.random.default_rng(seed)
         self.limits = alarm_limits(self.site)
+        self.decay_scale = DECAY_SCALE.get(self.scene.node_layout, DECAY_SCALE[DEFAULT_LAYOUT])
         self.nodes = list(self.scene.nodes)
         for n in self.nodes:
             self.scene.set_servo_bias(n, *self.rng.uniform(-servo_bias_deg, servo_bias_deg, 2))
@@ -168,12 +188,18 @@ class SimWorld:
                 self.on_alert(Alert(n, ns.seq, kind, tel.t, tel.g))
 
     def reading(self, node: str) -> dict:
-        nx = self.scene.nodes[node].position[0]
+        sensor = self.scene.nodes[node].position
         out = {k: AMBIENT[k] + self.rng.normal(0, NOISE[k]) for k in AMBIENT}
         for s in self.sources.values():
             if s.node is not None and s.node != node:
                 continue
-            w = 1.0 if s.node else math.exp(-abs(s.x - nx) / s.decay)
+            if s.node:
+                w = 1.0
+            elif s.kind == "steam":  # hơi nước lan khắp bàn, chỉ phụ thuộc X như trước
+                w = math.exp(-abs(s.x - sensor[0]) / s.decay)
+            else:
+                d = max(float(np.linalg.norm(s.pos - sensor)) - SENSOR_STANDOFF_M, 0.0)
+                w = math.exp(-d / (s.decay * self.decay_scale))
             for k, p in s.peak.items():
                 out[k] += s.level * p * w
         return out
@@ -186,53 +212,69 @@ class SimWorld:
         self.sources[s.id] = s
         return s
 
-    def _pos(self, x, z) -> tuple[float, float]:
+    def _pos(self, x, z, surface: str = "wall", y=None) -> tuple[float, float, float]:
+        """(x, y, z) đã điền: thiếu thì rút ngẫu nhiên trong vùng bia. Trên nền z = 0 (bỏ qua z),
+        trên bảng y = plane_y (bỏ qua y)."""
+        if surface not in ("wall", "floor"):
+            raise ValueError(f"surface phải là 'wall' hoặc 'floor', không phải {surface!r}")
         b = self.site["board"]
         x = float(self.rng.uniform(0.12, b["width"] - 0.12)) if x is None else float(x)
+        if surface == "floor":
+            depth = self.scene.table["depth"]
+            y = float(self.rng.uniform(0.12, depth - 0.12)) if y is None else float(y)
+            return x, y, 0.0
         z = float(self.rng.uniform(0.12, b["height"] - 0.12)) if z is None else float(z)
-        return x, z
+        return x, float(b["plane_y"]), z
 
-    def _card(self, kind: str, x: float, z: float, size: float = CARD_SIZE) -> int:
+    def _card(self, kind: str, pos, surface: str = "wall", size: float = CARD_SIZE) -> int:
         idx = self.kinds[kind]
-        return self.scene.add_card(x, z, index=idx[int(self.rng.integers(len(idx)))], size=size)
+        return self.scene.add_card_3d(pos, surface, index=idx[int(self.rng.integers(len(idx)))],
+                                      size=size)
 
     def _delta(self, ratio_t: float, ratio_g: float, hum: float = 0.0) -> dict:
         return {"temp": ratio_t * (self.limits["temp"] - AMBIENT["temp"]),
                 "gas": ratio_g * (self.limits["gas"] - AMBIENT["gas"]), "hum": hum}
 
-    def ignite(self, x: float | None = None, z: float | None = None, size: str = "small") -> Source:
-        """Đám cháy: thẻ lửa trên bảng, nhiệt và khí tăng dần quanh vị trí x. `size="large"`: thẻ to
-        hơn, tín hiệu mạnh hơn và lan xa hơn (với tới cả hai node), cần nhiều nước hơn để tắt."""
+    def ignite(self, x: float | None = None, z: float | None = None, size: str = "small", *,
+               surface: str = "wall", y: float | None = None) -> Source:
+        """Đám cháy: thẻ lửa trên bảng (x, z) hoặc dựng trên nền (`surface="floor"`, tại x, y),
+        nhiệt và khí tăng dần quanh vị trí. `size="large"`: thẻ to hơn, tín hiệu mạnh hơn và lan xa
+        hơn (với tới cả hai node), cần nhiều nước hơn để tắt."""
         if size not in FIRE_SIZES:
             raise ValueError(f"size phải là một trong {FIRE_SIZES}, không phải {size!r}")
         large = size == "large"
         gain = LARGE_GAIN if large else 1.0
         with self.lock:
-            x, z = self._pos(x, z)
-            card = self._card("fire", x, z, CARD_SIZE * LARGE_CARD if large else CARD_SIZE)
-            return self._new(kind="fire", x=x, z=z, card=card,
+            x, y, z = self._pos(x, z, surface, y)
+            card = self._card("fire", (x, y, z), surface,
+                              CARD_SIZE * LARGE_CARD if large else CARD_SIZE)
+            return self._new(kind="fire", x=x, y=y, z=z, surface=surface, card=card,
                              peak=self._delta(2.2 * gain, 2.2 * gain, -3.0 * gain),
                              tau_rise=4.0, tau_fall=10.0,
                              hp=float(self.rng.uniform(*(LARGE_HP if large else SMALL_HP))),
                              decay=DECAY_M * (LARGE_DECAY if large else 1.0), size=size)
 
-    def add_lamp(self, x: float | None = None, z: float | None = None) -> Source:
+    def add_lamp(self, x: float | None = None, z: float | None = None, *,
+                 surface: str = "wall", y: float | None = None) -> Source:
         """Đèn nóng: trông giống lửa vừa vừa, nóng nhưng không có khí."""
         with self.lock:
-            x, z = self._pos(x, z)
-            return self._new(kind="lamp", x=x, z=z, card=self._card("lamp", x, z),
+            x, y, z = self._pos(x, z, surface, y)
+            return self._new(kind="lamp", x=x, y=y, z=z, surface=surface,
+                             card=self._card("lamp", (x, y, z), surface),
                              peak=self._delta(1.8, 0.05), tau_rise=6.0)
 
-    def add_object(self, x: float | None = None, z: float | None = None) -> Source:
+    def add_object(self, x: float | None = None, z: float | None = None, *,
+                   surface: str = "wall", y: float | None = None) -> Source:
         """Vật màu cam: chỉ đánh lừa camera, không gây tín hiệu cảm biến."""
         with self.lock:
-            x, z = self._pos(x, z)
-            return self._new(kind="object", x=x, z=z, card=self._card("object", x, z), peak={})
+            x, y, z = self._pos(x, z, surface, y)
+            return self._new(kind="object", x=x, y=y, z=z, surface=surface,
+                             card=self._card("object", (x, y, z), surface), peak={})
 
     def add_steam(self, x: float | None = None, duration: float = 25.0) -> Source:
         """Hơi nước nấu ăn: ẩm tăng mạnh, nóng vừa, không có thẻ trên bảng."""
         with self.lock:
-            x, _ = self._pos(x, 0.3)
+            x, _, _ = self._pos(x, 0.3)
             return self._new(kind="steam", x=x, z=0.0, peak=self._delta(1.5, 0.3, 30.0),
                              tau_rise=5.0, tau_fall=6.0, until=self.t + duration)
 
@@ -267,17 +309,22 @@ class SimWorld:
             self.scene.set_laser(node, on)
 
     def spray(self, node: str, seconds: float) -> np.ndarray | None:
-        """Nước của `node` phun `seconds` giây theo hướng hiện tại; trả điểm rơi trên bảng."""
+        """Nước của `node` phun `seconds` giây theo hướng hiện tại; trả điểm rơi (3D) trên bảng hoặc
+        nền, nơi tia nước chạm mặt nào trước."""
         with self.lock:
-            spot = self.scene.spot(node)
-            if spot is None:
+            found = self.scene.spot_surface(node)
+            if found is None:
                 return None
-            hit = spot + np.array([self.rng.normal(0, 0.006), 0, self.rng.normal(0, 0.006)])
+            spot, surface = found
+            jitter = self.rng.normal(0, 0.006, 2)
+            # nhiễu nằm trong mặt bị trúng: bảng là (x, z), nền là (x, y)
+            hit = spot + (np.array([jitter[0], 0, jitter[1]]) if surface == "wall"
+                          else np.array([jitter[0], jitter[1], 0]))
             self.marks[node] = hit
             for s in self.sources.values():
                 if s.kind != "fire" or s.out:
                     continue
-                if math.hypot(hit[0] - s.x, hit[2] - s.z) <= HIT_M:
+                if float(np.linalg.norm(hit - s.pos)) <= HIT_M:
                     s.hp -= seconds * float(self.rng.uniform(0.7, 1.2))
                     if s.hp <= 0:
                         self._extinguish(s)
@@ -287,7 +334,7 @@ class SimWorld:
         s.out, s.goal, s.hp = True, 0.0, 0.0
         if s.card is not None:
             self.scene.remove_card(s.card)
-            s.card = self._card("burnt", s.x, s.z)
+            s.card = self._card("burnt", s.pos, s.surface)
 
     def read(self) -> np.ndarray:
         with self.lock:
@@ -412,18 +459,20 @@ class OracleDetector:
             x0, y0, _, _ = self.vision.board_roi((H, W, 3))
         out = []
         with self.world.lock:
-            cards = list(scene.cards.values())
-        y = scene.board["plane_y"]
-        for c in cards:
+            cards = list(scene.cards.items())
+        for cid, c in cards:
             kind = self._kind_of.get(c.index, "object")
             lo, hi = self.CONF[kind]
             conf = float(self.rng.uniform(lo, hi))
             if conf < self.conf or self.rng.random() < self.DROP:
                 continue
-            r = c.size / 2
-            pts = np.array([project((c.x + a, y, c.z + b), scene.camera)
-                            for a in (-r, r) for b in (-r, r)])
-            u, v = project((c.x, y, c.z), scene.camera)
+            quad = scene.card_quad(cid)
+            pts = np.array([project(p, scene.camera) for p in quad])
             w, h = np.ptp(pts, axis=0)
+            if c.surface == "floor":  # hộp khít ngọn lửa: giữa đáy hộp là điểm chạm nền
+                u, vb = project(scene.card_position(cid), scene.camera)
+                v = vb - h / 2
+            else:
+                u, v = project(scene.card_position(cid), scene.camera)
             out.append(Detection(float(u) - x0, float(v) - y0, float(w), float(h), round(conf, 3)))
         return sorted(out, key=lambda d: -d.conf)

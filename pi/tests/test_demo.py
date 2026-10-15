@@ -31,8 +31,8 @@ def observed(**kw) -> dict:
 
 
 def test_scene_catalog_matches_spec():
-    assert list(SCENES) == ["fire_s1", "fire_s2", "fire_large", "lamp", "steam_object", "spike",
-                            "node_offline", "estop"]
+    assert list(SCENES) == ["fire_s1", "fire_s2", "fire_large", "fire_floor", "lamp", "steam_object",
+                            "spike", "node_offline", "estop"]
     assert all(s.name == n and s.title and s.expect and s.timeout_s > 0 for n, s in SCENES.items())
     assert SCENES["node_offline"].forbid_nodes == {"s2"}
     assert SCENES["estop"].during is not None and SCENES["estop"].expect_outcomes == {"stopped"}

@@ -86,6 +86,9 @@ th { color: var(--muted); font-weight: 500; }
 .out-extinguished { color: var(--ok); } .out-fault, .out-stopped, .out-human { color: var(--bad); }
 .out-alarm_only { color: var(--warn); } .out-ignored { color: var(--muted); }
 .truth .src { display: flex; justify-content: space-between; font-size: 12.5px; padding: 3px 0; border-bottom: 1px solid #20262e; }
+.camset { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin-top: 8px; font-size: 12px; color: var(--muted); }
+.camset input { width: 62px; padding: 3px 6px; }
+.cover { font-size: 12.5px; margin-top: 8px; padding-top: 6px; border-top: 1px solid #20262e; }
 .muted { color: var(--muted); }
 .hidden { display: none !important; }
 </style>
@@ -110,7 +113,7 @@ th { color: var(--muted); font-weight: 500; }
   <div class="col">
     <section>
       <h2>Camera <span id="camerr" class="warnline"></span></h2>
-      <div id="video"><img id="stream" alt="camera"><span class="hint" id="hint">Bấm lên bảng bia để đặt vật</span></div>
+      <div id="video"><img id="stream" alt="camera"><span class="hint" id="hint">Bấm lên bảng bia hoặc mặt bàn để đặt vật</span></div>
       <div class="toolbar" id="simbar">
         <span class="lbl">Đặt khi bấm:</span>
         <button data-kind="fire" class="on">🔥 Lửa</button>
@@ -122,6 +125,21 @@ th { color: var(--muted); font-weight: 500; }
         <button data-act="steam">Hơi nước</button>
         <button data-act="spike">Xung cảm biến</button>
         <button data-act="clear">Xóa hết</button>
+      </div>
+      <div class="toolbar" id="camerabar">
+        <span class="lbl">Camera:</span>
+        <button data-preset="front" title="Giữa, cao 0,9 m, lùi 0,8 m trước bàn">Trước</button>
+        <button data-preset="left" title="Lệch trái">Trái</button>
+        <button data-preset="right" title="Lệch phải">Phải</button>
+        <button id="camjitter" data-sim title="Giả lập camera bị va: dời vài cm, xoay vài độ">Xê dịch camera</button>
+        <button id="camcheck" title="Trạm kiểm tra camera ngay; nếu camera đã dời thì tự tính lại pose (lúc rảnh)">Kiểm tra camera</button>
+      </div>
+      <div class="camset" id="camset" data-sim>
+        <span>Vị trí</span>
+        <input id="cx" type="number" step="0.05" title="x (m)"><input id="cy" type="number" step="0.05" title="y (m)"><input id="cz" type="number" step="0.05" title="z (m)">
+        <span>Nhìn vào</span>
+        <input id="lx" type="number" step="0.05" title="x (m)"><input id="ly" type="number" step="0.05" title="y (m)"><input id="lz" type="number" step="0.05" title="z (m)">
+        <button id="camapply">Áp dụng</button>
       </div>
       <div class="toolbar" id="faultbar">
         <span class="lbl">Thử lỗi:</span>
@@ -160,6 +178,7 @@ th { color: var(--muted); font-weight: 500; }
     <section id="truthbox" class="truth">
       <h2>Sự thật trên sa bàn ảo <span class="muted" style="text-transform:none;letter-spacing:0">(orchestrator không thấy)</span></h2>
       <div id="truth"></div>
+      <div id="cover" class="cover"></div>
     </section>
     <section>
       <h2>Các lượt gần đây</h2>
@@ -173,7 +192,7 @@ const QLABEL = {real_fire: "Cháy thật?", action: "Hành động", target: "Bi
 const OUT = {extinguished: "đã dập", ignored: "bỏ qua", alarm_only: "chỉ báo động", human: "gọi người", fault: "lỗi", stopped: "đã dừng"};
 const nzName = (n) => !n ? "—" : n.startsWith("both") ? "cả hai" : n;  // BOTH = "both (s1 + s2)"
 const KIND = {fire: "🔥 lửa", lamp: "💡 đèn nóng", object: "🟠 vật cam", steam: "♨ hơi nước", spike: "⚡ xung"};
-let placeKind = "fire", lastSeq = 0, state = null, offline = {}, deciderSet = false;
+let camKey = "", placeKind = "fire", lastSeq = 0, state = null, offline = {}, deciderSet = false;
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 
@@ -192,6 +211,13 @@ $("stop").onclick = () => cmd({cmd: "stop"});
 $("enable").onclick = () => cmd({cmd: "enable", on: !(state && state.orch.enabled)});
 $("decider").onchange = (e) => cmd({cmd: "decider", kind: e.target.value});
 $("recommission").onclick = () => cmd({cmd: "recommission"});
+document.querySelectorAll("[data-preset]").forEach(b => b.onclick = () => cmd({cmd: "camera_preset", name: b.dataset.preset}));
+$("camjitter").onclick = () => cmd({cmd: "camera_jitter"});
+$("camcheck").onclick = async () => { const j = await cmd({cmd: "check_camera"}); if (j && j.ok) flash("đã kiểm tra camera, xem nhật ký (vision)"); };
+$("camapply").onclick = () => {
+  const v = (id) => parseFloat($(id).value);
+  cmd({cmd: "camera_set", x: v("cx"), y: v("cy"), z: v("cz"), lx: v("lx"), ly: v("ly"), lz: v("lz")});
+};
 document.querySelectorAll("[data-kind]").forEach(b => b.onclick = () => {
   placeKind = b.dataset.kind;
   document.querySelectorAll("[data-kind]").forEach(x => x.classList.toggle("on", x === b));
@@ -210,7 +236,7 @@ $("stream").onclick = (e) => {
   const s = Math.min(r.width / nw, r.height / nh), ox = (r.width - nw * s) / 2, oy = (r.height - nh * s) / 2;
   const u = (e.clientX - r.left - ox) / s, v = (e.clientY - r.top - oy) / s;
   if (u < 0 || v < 0 || u > nw || v > nh) return;
-  cmd({cmd: placeKind, u, v});
+  cmd({cmd: placeKind, u, v});  // server đổi pixel ra bảng hoặc nền
 };
 $("stream").src = "/stream.mjpg";
 
@@ -224,7 +250,7 @@ function renderSteps(phase, run) {
   const el = $("phase");
   el.textContent = phase;
   el.className = "phase " + (phase === "IDLE" ? "" : ["FAULT","HUMAN","ALARM"].includes(phase) ? phase.toLowerCase() : "busy");
-  $("runinfo").textContent = run ? `lượt ${run.id} · cảnh báo từ ${run.node}` + (run.target ? ` · bia ${run.target.id}` : "") + (run.nozzle ? ` · vòi ${nzName(run.nozzle)}` : "") : "";
+  $("runinfo").textContent = run ? `lượt ${run.id} · cảnh báo từ ${run.node}` + (run.target ? ` · bia ${run.target.id}${run.target.surface === "floor" ? " (nền)" : ""}` : "") + (run.nozzle ? ` · vòi ${nzName(run.nozzle)}` : "") : "";
 }
 
 function renderDecision(run) {
@@ -271,9 +297,23 @@ function renderTruth(t) {
   $("truthbox").classList.toggle("hidden", !t);
   if (!t) return;
   $("truth").innerHTML = t.sources.length ? t.sources.map(s =>
-    `<div class="src"><span>${s.kind === "fire" && s.size === "large" ? "🔥 lửa lớn" : KIND[s.kind] || s.kind}${s.node ? " " + s.node : ""}${s.kind !== "spike" && s.kind !== "steam" ? ` <span class="muted">x ${s.x.toFixed(2)} z ${s.z.toFixed(2)}</span>` : ""}</span>
+    `<div class="src"><span>${s.kind === "fire" && s.size === "large" ? "🔥 lửa lớn" : KIND[s.kind] || s.kind}${s.node ? " " + s.node : ""}${s.kind !== "spike" && s.kind !== "steam" ? ` <span class="muted">${s.surface === "floor" ? `nền x ${s.x.toFixed(2)} y ${s.y.toFixed(2)}` : `x ${s.x.toFixed(2)} z ${s.z.toFixed(2)}`}</span>` : ""}</span>
      <span>${s.kind === "fire" ? (s.out ? '<span class="chip on">đã tắt</span>' : `<span class="chip hot">đang cháy · còn ${s.hp.toFixed(1)}</span>`) : s.kind === "object" ? '<span class="chip">chỉ đánh lừa camera</span>' : `<span class="chip">tín hiệu ${Math.round(s.level*100)}%</span>`}</span></div>`).join("")
     : '<span class="muted">Sa bàn trống. Bấm lên video để đặt lửa hoặc vật gây nhiễu.</span>';
+}
+
+function renderCamera(t) {
+  if (!t || !t.camera) { $("cover").innerHTML = ""; return; }
+  const c = t.coverage, f = (a) => a.map(v => v.toFixed(2)).join(", ");
+  $("cover").innerHTML = `<div>Bố cục node <b>${esc(t.layout)}</b> · camera (${f(t.camera.position)}) nhìn (${f(t.camera.look_at)})</div>`
+    + `<div>Thấy nền <b>${Math.round(c.floor * 100)}%</b> · bảng <b>${Math.round(c.wall * 100)}%</b> · tag tham chiếu ${Object.values(c.reference_tags).filter(Boolean).length}/${Object.keys(c.reference_tags).length} · tag node ${Object.values(c.node_tags).filter(Boolean).length}/${Object.keys(c.node_tags).length}</div>`
+    + (c.warnings.length ? c.warnings.map(w => `<div class="warnline">${esc(w)}</div>`).join("") : '<div class="muted">Camera thấy đủ tag, nền và bảng.</div>');
+  const key = JSON.stringify(t.camera);
+  if (key !== camKey && !document.activeElement.closest(".camset")) {  // không đè lên ô đang gõ
+    camKey = key;
+    [["cx", 0], ["cy", 1], ["cz", 2]].forEach(([id, i]) => $(id).value = t.camera.position[i]);
+    [["lx", 0], ["ly", 1], ["lz", 2]].forEach(([id, i]) => $(id).value = t.camera.look_at[i]);
+  }
 }
 
 function renderRuns(runs) {
@@ -323,9 +363,11 @@ async function tick() {
     state = s; $("conn").className = "dot ok";
     if (evs.length) { lastSeq = evs[evs.length - 1].seq; addLog(evs); }
     const o = s.orch;
-    $("mode").textContent = s.sim ? ` · sa bàn ảo · detector ${s.detector}` : ` · phần cứng · ${s.detector}`;
+    $("mode").textContent = s.sim ? ` · sa bàn ảo · bố cục ${s.truth.layout} · detector ${s.detector}` : ` · phần cứng · ${s.detector}`;
     $("simbar").classList.toggle("hidden", !s.sim); $("hint").classList.toggle("hidden", !s.sim);
     $("faultbar").querySelectorAll("[data-off],[data-move]").forEach(b => b.classList.toggle("hidden", !s.sim));
+    $("camerabar").querySelectorAll("[data-preset],[data-sim]").forEach(b => b.classList.toggle("hidden", !s.sim));
+    $("camset").classList.toggle("hidden", !s.sim);
     $("enable").textContent = "Tự động: " + (o.enabled ? "bật" : "tắt"); $("enable").classList.toggle("on", o.enabled);
     if (!deciderSet) { const k = o.decider.startsWith("hybrid") ? "hybrid" : o.decider.startsWith("remote") ? "remote" : o.decider; $("decider").value = k; deciderSet = true; }
     $("camerr").textContent = s.camera_error || (o.decider_error ? "mô hình lỗi, đang dùng luật: " + o.decider_error : "");
@@ -334,6 +376,7 @@ async function tick() {
     renderDecision(run);
     renderNozzles(o, s.truth);
     renderTruth(s.truth);
+    renderCamera(s.truth);
     renderRuns(o.runs);
     chart($("ctemp"), s.sensors, "temp", s.limits.temp);
     chart($("cgas"), s.sensors, "gas", s.limits.gas);

@@ -185,7 +185,7 @@ def test_large_fire_sensor_model_is_stronger():
 def test_single_nozzle_on_large_fire_leaves_more_fire():
     def still_burning(prof, only_both):
         n = k = 0
-        for r in make(1500, 1, prof):
+        for r in make(3000, 1, prof):
             t = r["truth"]
             if (r["id"].endswith("verify") and t["size"] == "large" and not t["miss"]
                     and (r["obs"]["verify"]["nozzle"] == BOTH) == only_both):

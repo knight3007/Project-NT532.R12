@@ -11,6 +11,13 @@ board:
   width: 1.20
   height: 0.60
 
+floor:
+  # Nền nằm ngang cũng có thể có bia: mặt bàn Z = 0, trải từ X = 0 tới width và từ Y = 0 tới depth
+  # (depth mặc định bằng board.plane_y, tức tới chân bảng). Bỏ mục này thì chỉ có bia trên bảng.
+  enabled: true
+  width: 1.20
+  depth: 0.80
+
 tags:
   family: 36h11
   # ID là đề xuất, chưa chốt với nhóm.
@@ -63,6 +70,9 @@ vision:
   commission_frames: 15         # số khung lấy trung vị khi commissioning và khi kiểm tra
   min_tag_rate: 0.6             # tag phải hiện trong ít nhất chừng này phần số khung
   camera_shift_px: 3.0          # tag tham chiếu lệch quá mức này thì coi camera bị xê dịch
+  # Camera xê dịch mà còn thấy đủ tag tham chiếu thì tự tính lại pose camera (và pose node nhìn thấy)
+  # khi kiểm tra, không chặn. Không đủ tag tham chiếu mới chặn. false: luôn chặn tới khi commissioning lại.
+  auto_repose_camera: true
   node_moved_m: 0.015           # tag node lệch quá mức này thì coi node bị dời
   laser_min_rise: 40            # kênh đỏ phải tăng ít nhất chừng này mới nhận là vết laser
   commissioning: calibration/commissioning.yaml
@@ -80,9 +90,11 @@ actuator:
     # water_tilt_deg: góc bù tilt riêng của vòi này (bỏ thì dùng water_tilt_deg chung bên dưới).
     # water_tilt_table: [[khoảng cách ngang tâm quay -> bia (m), độ], ...] nếu độ rơi của tia phụ thuộc xa gần;
     # có bảng thì nội suy theo khoảng cách. Cách đo ở docs/trien-khai-phan-cung.md.
+    # yaw_deg: hướng pan = 0 của node (độ, ngược chiều kim đồng hồ nhìn từ trên so với +Y; node ở góc trước
+    # nhìn chéo vào (0,6; 0,8) thì -36,87). null = lấy từ trục +Y của tag đế đã commissioning.
     # Node tự báo giới hạn qua GET /info; hẹp hơn số ở đây thì Pi dùng số hẹp hơn và cảnh báo.
-    s1: {pan_limits: null, tilt_limits: null, water_tilt_deg: null, water_tilt_table: null}
-    s2: {pan_limits: null, tilt_limits: null, water_tilt_deg: null, water_tilt_table: null}
+    s1: {yaw_deg: null, pan_limits: null, tilt_limits: null, water_tilt_deg: null, water_tilt_table: null}
+    s2: {yaw_deg: null, pan_limits: null, tilt_limits: null, water_tilt_deg: null, water_tilt_table: null}
   # Tâm quay pan–tilt tính từ tâm tag đế, trong hệ tag (X phải, Y về mép trên tag, Z lên). Hiếu đo.
   pivot_offset: [0.0, 0.0, 0.08]
   water_tilt_deg: 0.0          # giá trị chung khi vòi không có water_tilt_deg riêng (quỹ đạo rơi); đo ở tuần 3

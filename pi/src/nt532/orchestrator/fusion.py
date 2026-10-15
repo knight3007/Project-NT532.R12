@@ -17,7 +17,7 @@ from ..decider.scenario import MAX_ATTEMPTS, SENSOR, TOL_CM, WINDOW
 from ..decider.state_text import ACTIONS, NOZZLES, VERIFY, nozzle_candidates, target_candidates
 from ..net.protocol import Telemetry
 
-JOIN_M = 0.05  # hai phát hiện ở hai khung cách nhau dưới chừng này (theo x, z) là cùng một bia
+JOIN_M = 0.05  # hai phát hiện ở hai khung cách nhau dưới chừng này (khoảng cách 3D) là cùng một bia
 CAP_AGE = 9999  # tuổi heartbeat/pose quá lớn hoặc chưa biết được ghi bằng số này
 
 
@@ -81,6 +81,7 @@ class Track:
     conf: list
     w: float
     h: float
+    surface: str = "wall"  # "wall" (bảng đứng) hoặc "floor" (nền)
 
 
 def aggregate(frames: list[list], frame_size: tuple[int, int], join_m: float = JOIN_M) -> list[Track]:
@@ -94,12 +95,12 @@ def aggregate(frames: list[list], frame_size: tuple[int, int], join_m: float = J
         for t in sorted(targets, key=lambda t: -t.detection.conf):
             best, dist = None, join_m
             for j, tr in enumerate(tracks):
-                d = float(np.hypot(*(tr.position - t.position)[[0, 2]]))
+                d = float(np.linalg.norm(tr.position - t.position))
                 if j not in used and d <= dist:
                     best, dist = j, d
             if best is None:
                 tracks.append(Track(t.position.copy(), [None] * len(frames),
-                                    t.detection.w / W, t.detection.h / H))
+                                    t.detection.w / W, t.detection.h / H, t.surface))
                 pts.append([])
                 best = len(tracks) - 1
             used.add(best)
@@ -111,6 +112,7 @@ def aggregate(frames: list[list], frame_size: tuple[int, int], join_m: float = J
 
 
 def _dist3(pivot, position, x: float, z: float, fallback: float) -> float:
+    """Khoảng cách 3D thật từ trục quay tới bia (x, y, z), bia ở bảng hay nền đều dùng y thật."""
     if pivot is None:
         return round(fallback, 2)
     return round(math.dist((float(pivot[0]), float(pivot[1]), float(pivot[2])),
@@ -119,7 +121,7 @@ def _dist3(pivot, position, x: float, z: float, fallback: float) -> float:
 
 def decide_obs(alarm: str, sensors: SensorHistory, tracks: list[Track], nozzles: dict,
                node_x: dict, n_frames: int, limits: dict) -> tuple[dict, dict]:
-    """(obs giai đoạn decide, {id bia: Track}). `nozzles[n]` có hb_ms, pose_s, reach(x, z) và tùy chọn
+    """(obs giai đoạn decide, {id bia: Track}). `nozzles[n]` có hb_ms, pose_s, reach(x, z, y) và tùy chọn
     `pivot` (x, y, z) của trục quay để tính `dist3` (khoảng cách 3D tới bia); thiếu thì `dist3` = `dist`."""
     tracks = sorted(tracks, key=lambda tr: tr.position[0])
     targets, by_id = [], {}
@@ -127,7 +129,9 @@ def decide_obs(alarm: str, sensors: SensorHistory, tracks: list[Track], nozzles:
         tid = f"T{i}"
         x, z = round(float(tr.position[0]), 2), round(float(tr.position[2]), 2)
         targets.append({
-            "id": tid, "x": x, "z": z, "w": round(tr.w, 3), "h": round(tr.h, 3), "conf": tr.conf,
+            # y và surface là phần thêm cho bia trên nền; bộ quyết định hiện tại chỉ đọc x, z
+            "id": tid, "x": x, "z": z, "y": round(float(tr.position[1]), 2), "surface": tr.surface,
+            "w": round(tr.w, 3), "h": round(tr.h, 3), "conf": tr.conf,
             "dist": {n: round(abs(x - node_x[n]), 2) for n in NOZZLES},
             "dist3": {n: _dist3(nozzles[n].get("pivot"), tr.position, x, z, abs(x - node_x[n]))
                       for n in NOZZLES},
@@ -137,7 +141,7 @@ def decide_obs(alarm: str, sensors: SensorHistory, tracks: list[Track], nozzles:
     for n in NOZZLES:
         z = nozzles[n]
         noz[n] = {"hb_ms": round(min(z["hb_ms"], CAP_AGE)), "pose_s": round(min(z["pose_s"], CAP_AGE)),
-                  "reach": {t["id"]: bool(z["reach"](t["x"], t["z"])) for t in targets}}
+                  "reach": {t["id"]: bool(z["reach"](t["x"], t["z"], t["y"])) for t in targets}}
     obs = {
         "stage": "decide", "alarm": alarm, "limits": limits,
         "sensors": {n: sensors.window(n) for n in NOZZLES},
@@ -152,7 +156,8 @@ def verify_obs(d_obs: dict, target_id: str, nozzle: str, attempt: int, status: s
     return {
         "stage": "verify", "alarm": d_obs["alarm"], "limits": d_obs["limits"],
         "sensors": {n: sensors.window(n) for n in NOZZLES},
-        "verify": {"target": target_id, "x": t["x"], "z": t["z"], "nozzle": nozzle,
+        "verify": {"target": target_id, "x": t["x"], "z": t["z"], "y": t["y"],
+                   "surface": t["surface"], "nozzle": nozzle,
                    "attempt": attempt, "max_attempts": MAX_ATTEMPTS, "status": status,
                    "temp": temp, "conf": conf,
                    "mark_cm": None if mark_cm is None else round(float(mark_cm), 1),

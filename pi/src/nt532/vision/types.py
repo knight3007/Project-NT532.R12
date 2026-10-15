@@ -54,7 +54,8 @@ class TagPose:
 
 @dataclass(frozen=True)
 class Target:
-    """Một bia đã định vị được trên bảng."""
+    """Một bia đã định vị được trên bảng đứng hoặc trên nền."""
 
     detection: Detection
-    position: np.ndarray  # (x, y, z) trong hệ sa bàn, y = mặt phẳng bảng
+    position: np.ndarray  # (x, y, z) trong hệ sa bàn; bảng: y = plane_y, nền: z = 0
+    surface: str = "wall"  # "wall" (bảng đứng) hoặc "floor" (nền nằm ngang)

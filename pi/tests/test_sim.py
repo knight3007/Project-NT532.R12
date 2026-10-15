@@ -65,7 +65,8 @@ def test_commission_matches_ground_truth(commissioned, scene):
     assert np.linalg.norm(state.camera.position - scene.camera.position) < 0.01
     assert state.missing == [] and state.reprojection_px < 1.0
     for name, node in scene.nodes.items():
-        assert np.linalg.norm(state.nodes[name].position - node.position) < 0.01
+        # camera cao và xa hơn nên tag node 8 cm đo kém hơn camera thấp cũ một chút
+        assert np.linalg.norm(state.nodes[name].position - node.position) < 0.02
 
 
 def test_check_flags_moved_node_and_camera(vision, scene, cap):
@@ -76,13 +77,15 @@ def test_check_flags_moved_node_and_camera(vision, scene, cap):
 
     scene.move_node("s1", delta=[-0.05, 0.0, 0.0])
     scene.shift_camera(delta=[0.02, 0.0, 0.0])
+    vision.cfg = {**vision.cfg, "auto_repose_camera": False}  # tắt tự tính lại: giữ hành vi chặn
     health = vision.check(read_frames(cap, 5))
     assert "camera" in health.stale and health.camera_shift_px > 3.0
 
 
 def test_laser_aim_and_find_spot(vision, scene, cap):
     for name in scene.nodes:
-        scene.aim(name, *aim_angles(scene.nodes[name].pivot, TARGET))
+        node = scene.nodes[name]
+        scene.aim(name, *aim_angles(node.pivot, TARGET, node.facing_deg))
         np.testing.assert_allclose(scene.spot(name), TARGET, atol=1e-9)
         scene.set_laser(name, False)
         off = read_fresh(cap)
@@ -107,9 +110,9 @@ def test_large_fire_is_bigger_stronger_and_reaches_far_node():
     with pytest.raises(ValueError):
         w.ignite(size="huge")
 
-    def far_temp(size):  # s2 ở X 0,90, lửa ở X 0,30: xa 0,6 m
+    def far_temp(size):  # s2 ở góc phải (X 1,20), lửa ở X 0,05: xa hơn 1,1 m
         w.clear()
-        s = w.ignite(0.30, 0.30, size=size)
+        s = w.ignite(0.05, 0.30, size=size)
         s.level = 1.0
         return s, float(np.mean([w.reading("s2")["temp"] for _ in range(30)]))
 
@@ -176,8 +179,8 @@ def test_targets_localize_cards(vision, scene, cap):
             (scene.card_position(i) for i in ids), key=lambda p: np.linalg.norm(p - t.position)
         )
         assert np.linalg.norm((t.position - truth)[[0, 2]]) < 0.01
-    near_s1 = vision.targets(read_fresh(cap), sensor="s1")  # s1 ở x = 0,30: chỉ giữ bia x <= 0,65
-    assert sorted(round(t.position[0], 2) for t in near_s1) == [0.25, 0.60]
+    near_s1 = vision.targets(read_fresh(cap), sensor="s1")  # s1 ở góc trái (x = 0): chỉ giữ bia x <= 0,35
+    assert sorted(round(t.position[0], 2) for t in near_s1) == [0.25]
 
 
 def test_missing_cards_error_is_clear(tmp_path):

@@ -10,7 +10,7 @@ giữa chừng (mất liên lạc, không trả lời lệnh ngắm) thì bị b
 
 Mô hình (hoặc luật) chỉ quyết định: có cháy thật không, làm gì, bia nào, vòi nào, sau khi phun
 thì làm gì. Các chặn an toàn cứng luôn là luật ở đây: chưa commissioning hoặc pose hết hạn, mất
-heartbeat, mục tiêu ngoài bảng, góc ngoài giới hạn, quá số lần thử, nút dừng khẩn cấp.
+heartbeat, mục tiêu ngoài vùng bia, góc ngoài giới hạn, quá số lần thử, nút dừng khẩn cấp.
 """
 
 import queue
@@ -110,7 +110,7 @@ class Orchestrator:
         self.run: Run | None = None
         self.runs: deque = deque(maxlen=20)
         # cho dashboard: bia, bia chọn, vòi, `active` (các vòi đang được ngắm/phun), `aims` và `spots`
-        # ({vòi: {"x", "z"}}: điểm ngắm đã bù và vết laser đo được của từng vòi)
+        # ({vòi: {"x", "y", "z", "surface"}}: điểm ngắm đã bù và vết laser đo được của từng vòi)
         self.overlay: dict = {}
         self.pose_time = {n: clock() for n in vision.nodes}
         self.last_health: dict | None = None
@@ -118,6 +118,7 @@ class Orchestrator:
         self._queue: queue.Queue = queue.Queue()
         self._abort = threading.Event()
         self._lock = threading.Lock()
+        self._health_lock = threading.Lock()  # vòng chính và nút "Kiểm tra camera" không chạy chồng nhau
         self._run_ids = 0
         self._last_end: dict[str, float] = {}  # node -> lúc lượt gần nhất của node đó kết thúc
         self._realerts: dict[str, int] = {}  # node -> số lần tự xử lý lại liên tiếp
@@ -239,9 +240,21 @@ class Orchestrator:
                 del self._last_end[node]
                 self._realerts.pop(node, None)
 
+    def check_camera(self) -> bool:
+        """Kiểm tra camera và pose node ngay (nút dashboard), thay vì đợi `health_period_s`. False nếu
+        trạm đang xử lý một lượt (không đụng vào vision giữa lượt)."""
+        if self.phase != Phase.IDLE:
+            return False
+        self._health_check()
+        return True
+
     def _health_check(self) -> None:
         if self.vision.state is None:
             return
+        with self._health_lock:
+            self._health_check_locked()
+
+    def _health_check_locked(self) -> None:
         try:
             h = self.vision.check(self.hub.frames(5))
         except Exception as e:  # noqa: BLE001
@@ -253,6 +266,18 @@ class Orchestrator:
                 self.pose_time[n] = now
         self.last_health = {"camera_shift_px": h.camera_shift_px, "stale": h.stale,
                             "node_moved_cm": {n: round(m * 100, 2) for n, m in h.node_moved_m.items()}}
+        if h.repose:
+            r = h.repose
+            try:
+                path = self.vision.save()  # ghi đè file commissioning đã nạp để lần khởi động sau dùng pose mới
+                saved = f", đã lưu {path.name}"
+            except Exception as e:  # noqa: BLE001
+                saved = f", lưu pose lỗi: {e}"
+            self.events.emit(
+                "vision", f"camera xê dịch {r['shift_px']} px, đã tính lại pose: dời "
+                          f"{r['moved_m'] * 100:.1f} cm, xoay {r['rotated_deg']} độ, đo lại node "
+                          f"{', '.join(r['nodes']) or 'không có'}{saved}",
+                level="warn", repose=r)
         if h.stale:
             self.events.emit("vision", f"hết hạn: {', '.join(h.stale)}", level="warn")
 
@@ -355,7 +380,7 @@ class Orchestrator:
                       else "không chọn được bia")
             return "alarm_only"
         target = by_id[tid].position
-        run.target = {"id": tid, "x": round(float(target[0]), 3), "z": round(float(target[2]), 3)}
+        run.target = {"id": tid, **_point_json(target, by_id[tid].surface)}
         self.overlay["target"] = run.target
 
         # chặn an toàn cứng; vòi được chọn bị chặn thì thử vòi còn lại
@@ -392,9 +417,9 @@ class Orchestrator:
         self.overlay["nozzle"] = run.nozzle
 
     def _mark(self, key: str, node: str, point) -> None:
-        """Ghi điểm (x, z) của `node` vào overlay[key] ({vòi: {"x", "z"}}). Thay cả dict con thay vì sửa
-        tại chỗ, để dashboard đang dựng JSON từ snapshot không gặp dict đổi kích thước."""
-        p = {"x": round(float(point[0]), 3), "z": round(float(point[2]), 3)}
+        """Ghi điểm của `node` vào overlay[key] ({vòi: {"x", "y", "z", "surface"}}). Thay cả dict con
+        thay vì sửa tại chỗ, để dashboard đang dựng JSON từ snapshot không gặp dict đổi kích thước."""
+        p = _point_json(point, self._surface_of(point))
         with self._lock:
             self.overlay[key] = {**self.overlay.get(key, {}), node: p}
 
@@ -458,7 +483,7 @@ class Orchestrator:
             for _ in range(3):
                 found = self.vision.targets(self.hub.fresh())
                 near = [t.detection.conf for t in found
-                        if np.hypot(*(t.position - target)[[0, 2]]) <= 0.05]
+                        if np.linalg.norm(t.position - target) <= 0.05]
                 conf.append(round(max(near), 2) if near else None)
             posts = []
             for n in nozzles:
@@ -493,7 +518,8 @@ class Orchestrator:
             try:
                 if dual and (why := self._blocked(n, target, pivots)):
                     raise LinkError("; ".join(why))
-                pan, tilt = aiming.angles(pivots[n], aim_points[n])
+                pan, tilt = aiming.angles(pivots[n], aim_points[n], self._yaw(n))
+                # bù tia nước theo khoảng cách ngang (mặt phẳng XY) tới bia, đúng cho cả bảng lẫn nền
                 tilt += aiming.water_tilt(self.site, n, aiming.horizontal_distance(pivots[n], aim_points[n]))
                 cmds[n] = self._aim(n, pan, tilt)
             except LinkError as e:
@@ -528,7 +554,7 @@ class Orchestrator:
         """AIM rồi CORRECT bằng vết laser; trả (điểm ngắm đã bù, độ lệch đo được cuối cùng cm).
         `dual`: lượt hai vòi, ghi tên vòi vào pha và dòng sự kiện."""
         self._set(Phase.AIM, node if dual else "", active=[node])
-        cmd = self._aim(node, *aiming.angles(pivot, aim_point))
+        cmd = self._aim(node, *aiming.angles(pivot, aim_point, self._yaw(node)))
         self._set(Phase.CORRECT, node if dual else "", active=[node])
         miss_cm = None
         for i in range(self.tcfg["correct_max_iters"]):
@@ -543,14 +569,14 @@ class Orchestrator:
                 run.shots.append({"round": i + 1, "miss_cm": None, "nozzle": node})
                 break
             miss = np.asarray(target, float) - spot
-            miss_cm = float(np.hypot(miss[0], miss[2]) * 100)
+            miss_cm = float(np.linalg.norm(miss) * 100)  # 3D: bia và vết đều nằm trên bảng hoặc nền
             run.shots.append({"round": i + 1, "miss_cm": round(miss_cm, 2), "nozzle": node})
             self._mark("spots", node, spot)
             self.events.emit("correct", f"vòng {i + 1}: lệch {miss_cm:.1f} cm" + (f" ({node})" if dual else ""))
             if miss_cm < self.tcfg["correct_done_m"] * 100 or i == self.tcfg["correct_max_iters"] - 1:
                 break
-            aim_point = aim_point + miss * np.array([1.0, 0.0, 1.0])
-            cmd = self._aim(node, *aiming.angles(pivot, aim_point))
+            aim_point = aim_point + miss * self._plane_mask(target)
+            cmd = self._aim(node, *aiming.angles(pivot, aim_point, self._yaw(node)))
         self._mark("aims", node, aim_point)
         return aim_point, miss_cm
 
@@ -560,10 +586,23 @@ class Orchestrator:
         p = self.vision.nodes.get(n)
         return None if p is None else p.position
 
+    def _surface_of(self, point) -> str:
+        """"floor" nếu điểm nằm trên mặt nền (Z ~ 0, xa mặt phẳng bảng), ngược lại "wall"."""
+        _, y, z = (float(c) for c in point)
+        return "floor" if abs(z) <= 0.02 and abs(y - self.site["board"]["plane_y"]) > 0.02 else "wall"
+
+    def _plane_mask(self, point) -> np.ndarray:
+        """Hướng được phép bù khi CORRECT: trên bảng chỉ x, z; trên nền chỉ x, y (giữ nguyên mặt)."""
+        return np.array([1.0, 1.0, 0.0]) if self._surface_of(point) == "floor" else np.array([1.0, 0.0, 1.0])
+
+    def _yaw(self, node: str) -> float:
+        """Yaw (pan = 0) của node: site.yaml hoặc trục +Y của tag đế (aiming.node_yaw)."""
+        return aiming.node_yaw(self.site, node, getattr(self.vision, "nodes", {}).get(node))
+
     def _reach_fn(self, node, pivot):
         if pivot is None:
-            return lambda x, z: False
-        return lambda x, z: aiming.reachable(self.site, node, pivot, x, z)
+            return lambda x, z, y=None: False
+        return lambda x, z, y=None: aiming.reachable(self.site, node, pivot, x, z, y, self._yaw(node))
 
     def _blocked(self, node: str, target, pivots: dict) -> list[str]:
         reasons = list(self.vision.blockers(node))
@@ -572,8 +611,8 @@ class Orchestrator:
         if self.link.hb_age_ms(node) > HB_MAX_MS:
             reasons.append(f"mất heartbeat {node}")
         if not self.vision.on_board(np.asarray(target)):
-            reasons.append("mục tiêu ngoài bảng")
-        if node in pivots and not aiming.reachable(self.site, node, pivots[node], target[0], target[2]):
+            reasons.append("mục tiêu ngoài vùng bia")
+        if node in pivots and not aiming.reachable_point(self.site, node, pivots[node], target, self._yaw(node)):
             reasons.append(f"{node} không với tới bia")
         return reasons
 
@@ -582,5 +621,11 @@ def _num(v: float):
     return None if v == float("inf") else round(min(v, CAP_AGE), 1)
 
 
+def _point_json(point, surface: str) -> dict:
+    """Điểm 3D cho dashboard và log: x, y, z (m) và mặt ("wall" | "floor")."""
+    return {"x": round(float(point[0]), 3), "y": round(float(point[1]), 3),
+            "z": round(float(point[2]), 3), "surface": surface}
+
+
 def _track_json(t) -> dict:
-    return {"x": round(float(t.position[0]), 3), "z": round(float(t.position[2]), 3), "conf": t.conf}
+    return {**_point_json(t.position, t.surface), "conf": t.conf}

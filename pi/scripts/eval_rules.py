@@ -3,6 +3,7 @@
     uv run python scripts/eval_rules.py
     uv run python scripts/eval_rules.py --splits test test_shift
     uv run python scripts/eval_rules.py --data ../runs/decider/scenarios/real.jsonl   # lượt thật
+    uv run python scripts/eval_rules.py --data-dir ../runs/decider/scenarios_3d       # bộ khác
 
 In độ chính xác từng câu hỏi và các lỗi mức hệ thống; ghi runs/decider/rules_eval.json.
 `--data` chấm file jsonl bất kỳ cùng định dạng (vd lượt thật từ export_episodes.py; nhãn vắng thì bỏ
@@ -30,13 +31,24 @@ def evaluate(records: list[dict], geo, answers: list[dict] | None = None) -> dic
             "no_fire": 0, "should_spray": 0, "sprayed_correctly": 0,
             "one_when_two": 0, "two_when_one": 0}
     by_size = {k: {"asked": 0, "correct": 0} for k in ("small", "large")}
+    # bản ghi decide có lửa thật nhìn thấy, tách theo mặt chứa lửa (thiếu truth.surface = bảng)
+    by_surface = {k: {"records": 0, "alarm_only": 0, "asked": {q: 0 for q in QUESTIONS},
+                      "correct": {q: 0 for q in QUESTIONS}} for k in ("wall", "floor")}
     for i, r in enumerate(records):
         ans = answers[i] if answers is not None else rule_answers(r, geo)
         lab = r["labels"]
         for q in lab:
             asked[q] += 1
             correct[q] += ans.get(q) == lab[q]
-        size = r.get("truth", {}).get("size")
+        tr = r.get("truth", {})
+        if tr.get("real_fire") and tr.get("true_target") and r["obs"]["stage"] == "decide":
+            b = by_surface[tr.get("surface") or "wall"]
+            b["records"] += 1
+            b["alarm_only"] += lab.get("action") == "alarm only"
+            for q in lab:
+                b["asked"][q] += 1
+                b["correct"][q] += ans.get(q) == lab[q]
+        size = tr.get("size")
         if "nozzle" in lab and size in by_size:
             by_size[size]["asked"] += 1
             by_size[size]["correct"] += ans.get("nozzle") == lab["nozzle"]
@@ -61,7 +73,7 @@ def evaluate(records: list[dict], geo, answers: list[dict] | None = None) -> dic
                 sysc["sprayed_correctly"] += not bad_t and not bad_n
     acc = {q: correct[q] / asked[q] for q in QUESTIONS if asked[q]}
     return {"n_records": len(records), "asked": asked, "accuracy": acc, "system": sysc,
-            "nozzle_by_size": by_size}
+            "nozzle_by_size": by_size, "by_surface": by_surface}
 
 
 def main() -> None:
@@ -69,12 +81,14 @@ def main() -> None:
     p.add_argument("--splits", nargs="+", default=["test", "test_shift"])
     p.add_argument("--data", nargs="+", default=None, metavar="JSONL",
                    help="chấm các file này thay cho --splits")
+    p.add_argument("--data-dir", default=None, metavar="DIR",
+                   help="thư mục chứa {split}.jsonl thay cho runs/decider/scenarios")
     args = p.parse_args()
 
     geo = load_geometry(with_nodes=False)
     result = {}
     paths = ({Path(d).stem: Path(d) for d in args.data} if args.data
-             else {s: DIR / "scenarios" / f"{s}.jsonl" for s in args.splits})
+             else {s: Path(args.data_dir or DIR / "scenarios") / f"{s}.jsonl" for s in args.splits})
     for split, path in paths.items():
         with path.open(encoding="utf-8") as f:
             result[split] = evaluate([json.loads(line) for line in f], geo)
@@ -106,7 +120,21 @@ def main() -> None:
             c = result[s]["nozzle_by_size"][size]
             row += f"{c['correct'] / c['asked'] if c['asked'] else float('nan'):14.1%}"
         print(f"{'acc nozzle, lửa ' + size:36}{row}")
-    out = DIR / ("rules_eval_data.json" if args.data else "rules_eval.json")
+    for surf in ("wall", "floor"):
+        for q in ("action", "target", "nozzle"):
+            row = ""
+            for s in args.splits:
+                b = result[s]["by_surface"][surf]
+                row += f"{b['correct'][q] / b['asked'][q] if b['asked'][q] else float('nan'):14.1%}"
+            print(f"{'acc ' + q + ', lửa ' + surf:36}{row}")
+        row = "".join(
+            f"{result[s]['by_surface'][surf]['records']:7d}/{result[s]['by_surface'][surf]['alarm_only']:<6d}"
+            for s in args.splits)
+        print(f"{'lửa ' + surf + ': số ca / alarm only':36}{row}")
+    name = "rules_eval_data.json" if args.data else "rules_eval.json"
+    if args.data_dir:  # không ghi đè kết quả của bộ mặc định
+        name = f"rules_eval_{Path(args.data_dir).name}.json"
+    out = DIR / name
     out.write_text(json.dumps(result, indent=2, ensure_ascii=False), encoding="utf-8")
     print(f"Đã ghi {out}")
 

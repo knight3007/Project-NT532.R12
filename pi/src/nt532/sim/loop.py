@@ -15,7 +15,7 @@ from .scene import aim_angles
 @dataclass
 class CorrectResult:
     measured: list[np.ndarray | None] = field(default_factory=list)  # find_spot mỗi vòng (x, y, z)
-    errors_m: list[float] = field(default_factory=list)  # |target - vết đo được| theo (x, z), mét
+    errors_m: list[float] = field(default_factory=list)  # |target - vết đo được| (3D), mét
     truth: list[np.ndarray | None] = field(default_factory=list)  # vết thật (ground truth) mỗi vòng
     lost: bool = False  # một vòng không thấy vết laser
 
@@ -44,7 +44,7 @@ def correct(
     aim_point = np.asarray(target, float).copy()
     result = CorrectResult()
     for i in range(max_iters):
-        scene.aim(node, *aim_angles(pivot, aim_point))
+        scene.aim(node, *aim_angles(pivot, aim_point, scene.nodes[node].facing_deg))
         scene.set_laser(node, False)
         off = read_fresh(cap)
         scene.set_laser(node, True)
@@ -57,7 +57,7 @@ def correct(
             result.lost = True
             break
         miss = np.asarray(target, float) - spot
-        result.errors_m.append(float(np.hypot(miss[0], miss[2])))
+        result.errors_m.append(float(np.linalg.norm(miss)))
         if result.errors_m[-1] < done_m or i == max_iters - 1:
             break
         aim_point = aim_point + miss

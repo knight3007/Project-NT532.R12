@@ -5,6 +5,8 @@
     uv run python scripts/run_station.py --source sim --decider hybrid    # cần runs/decider/jev/jev1
     uv run python scripts/run_station.py --source sim --decider remote --decider-url http://laptop:8090
     uv run python scripts/run_station.py --source sim --detector yolo     # YOLO thật (models/fire-n.pt)
+    uv run python scripts/run_station.py --source sim --camera left   # camera lệch trái, vòi ở hai góc trước (bố cục cũ: --layout posts)
+    uv run python scripts/run_station.py --source sim --camera 0.6,-1.0,1.0 --look-at 0.6,0.4,0.2
     uv run python scripts/run_station.py --decider rules                  # phần cứng: webcam + CoAP
 
 Thêm --mqtt để đẩy trạm lên Home Assistant (docs/home-assistant.md).
@@ -19,6 +21,7 @@ from datetime import datetime
 from nt532.config import REPO_ROOT, read_site
 from nt532.dashboard import Dashboard
 from nt532.orchestrator.decide import parse_stages
+from nt532.sim import add_sim_args, sim_options
 from nt532.station import build_real, build_sim
 
 
@@ -50,7 +53,11 @@ def main() -> None:
     p.add_argument("--mqtt-port", type=int, default=None, help="ghi đè mqtt.port")
     p.add_argument("--mqtt-user", default=None, help="ghi đè mqtt.username (mật khẩu lấy từ biến môi trường NT532_MQTT_PASSWORD)")
     p.add_argument("--mqtt-station-id", default=None, help="ghi đè mqtt.station_id")
+    add_sim_args(p)
     args = p.parse_args()
+    sim = sim_options(args, p)
+    if args.source != "sim" and (args.camera or args.look_at or args.layout):
+        p.error("--camera, --look-at và --layout chỉ dùng với --source sim")
     try:
         parse_stages(args.model_stages)
     except ValueError as e:
@@ -62,7 +69,7 @@ def main() -> None:
     if args.source == "sim":
         st = build_sim(args.decider, args.jev_run, args.tau, args.detector, args.seed, log_path=log,
                        link=args.link, model_stages=args.model_stages,
-                       decider_url=args.decider_url, decider_timeout=args.decider_timeout)
+                       decider_url=args.decider_url, decider_timeout=args.decider_timeout, **sim)
     else:
         st = build_real(args.decider, args.jev_run, args.tau, args.source, log_path=log,
                         model_stages=args.model_stages, decider_url=args.decider_url,

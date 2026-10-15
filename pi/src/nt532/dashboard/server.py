@@ -26,6 +26,7 @@ from ..vision.localize import project
 
 STATIC = files("nt532.dashboard") / "static"
 CYAN, YELLOW, RED, GREEN, WHITE = (255, 200, 0), (0, 220, 255), (40, 40, 255), (80, 220, 80), (240, 240, 240)
+MAGENTA = (220, 80, 220)  # viền vùng nền, khác viền bảng đứng (CYAN)
 
 
 def _default(o):
@@ -82,10 +83,30 @@ class Dashboard:
             "limits": alarm_limits(st.site), "sim": st.world is not None,
             "detector": st.detector_name, "camera_error": st.hub.error,
             "board": {"width": st.site["board"]["width"], "height": st.site["board"]["height"]},
+            "floor": self._floor_json(),
         }
         if st.world is not None:
-            out["truth"] = st.world.truth()
+            out["truth"] = {**st.world.truth(), **self._sim_camera()}
         return _clean(out)
+
+    def _sim_camera(self) -> dict:
+        """Camera ảo (vị trí, điểm nhìn), bố cục node và camera thấy gì (`Scene.coverage`)."""
+        w = self.st.world
+        with w.lock:
+            pos, look = w.scene.camera_pose()
+            cov = w.scene.coverage()
+        return {"layout": w.scene.node_layout, "coverage": cov,
+                "camera": {"position": [round(float(v), 3) for v in pos],
+                           "look_at": [round(float(v), 3) for v in look]}}
+
+    def _floor_json(self) -> dict | None:
+        """Vùng nền: {width, depth, polygon} với polygon là viền chiếu lên ảnh (pixel); None nếu không có."""
+        vision = self.st.vision
+        floor = vision._floor()
+        if floor is None:
+            return None
+        poly = vision.floor_polygon() if vision.state is not None else []
+        return {**floor, "polygon": [[round(float(u), 1), round(float(v), 1)] for u, v in poly]}
 
     def frame(self) -> np.ndarray | None:
         _, frame = self.st.hub.latest()
@@ -98,31 +119,34 @@ class Dashboard:
         if vision.state is None:
             cv2.putText(img, "chua commissioning", (12, 30), 0, 0.8, RED, 2)
             return img
-        cam, y = vision.camera, self.st.site["board"]["plane_y"]
+        cam, plane_y = vision.camera, self.st.site["board"]["plane_y"]
 
-        def px(x, z):
-            u, v = project((x, y, z), cam)
+        def px(p):  # p: {"x", "z"} và tùy chọn "y" (thiếu thì ở mặt phẳng bảng)
+            u, v = project((p["x"], p.get("y", plane_y), p["z"]), cam)
             return int(u), int(v)
 
         cv2.polylines(img, [vision.board_polygon().astype(np.int32)], True, CYAN, 1)
+        floor = vision.floor_polygon()
+        if len(floor):
+            cv2.polylines(img, [floor.astype(np.int32)], True, MAGENTA, 1)
         ov = self.st.orch.overlay
         for t in ov.get("tracks", []):
-            c = px(t["x"], t["z"])
+            c = px(t)
             confs = [v for v in t["conf"] if v is not None]
             cv2.circle(img, c, 18, YELLOW, 2)
             cv2.putText(img, f"{max(confs, default=0):.2f}", (c[0] + 20, c[1] - 8), 0, 0.5, YELLOW, 1)
         if "target" in ov:
-            c = px(ov["target"]["x"], ov["target"]["z"])
+            c = px(ov["target"])
             cv2.drawMarker(img, c, RED, cv2.MARKER_CROSS, 34, 2)
             cv2.putText(img, ov["target"]["id"], (c[0] + 14, c[1] + 22), 0, 0.6, RED, 2)
         # mỗi vòi một điểm ngắm (chữ thập nghiêng trắng) và một vết laser (vòng xanh), ghi tên vòi
         # bên cạnh để lượt hai vòi vẫn phân biệt được
         for n, a in ov.get("aims", {}).items():
-            c = px(a["x"], a["z"])
+            c = px(a)
             cv2.drawMarker(img, c, WHITE, cv2.MARKER_TILTED_CROSS, 16, 1)
             cv2.putText(img, n, (c[0] + 10, c[1] - 8), 0, 0.4, WHITE, 1)
         for n, sp in ov.get("spots", {}).items():
-            c = px(sp["x"], sp["z"])
+            c = px(sp)
             cv2.circle(img, c, 7, GREEN, 2)
             cv2.putText(img, n, (c[0] + 10, c[1] + 16), 0, 0.4, GREEN, 1)
         for name, pose in vision.nodes.items():
@@ -140,6 +164,10 @@ class Dashboard:
             st.events.emit("config", "orchestrator " + ("bật" if orch.enabled else "tắt"))
         elif cmd == "recommission":
             orch.recommission()
+        elif cmd == "check_camera":
+            if not orch.check_camera():
+                return {"ok": False, "error": "trạm đang xử lý một lượt, kiểm tra camera sau"}
+            return {"ok": True, "health": orch.last_health}
         elif cmd == "decider":
             st.set_decider(body.get("kind", "rules"), body.get("run", "jev1"), float(body.get("tau", 0.8)),
                            body.get("stages", "verify"))
@@ -149,19 +177,62 @@ class Dashboard:
             return self._sim(body)
         return {"ok": True}
 
+    def _camera_cmd(self, body: dict) -> dict:
+        """Lệnh camera của sa bàn ảo: preset, xê dịch ngẫu nhiên, đặt vị trí và điểm nhìn."""
+        from ..sim.scene import CAMERA_PRESETS  # chỉ lệnh sa bàn ảo mới cần tới sim
+
+        w, cmd = self.st.world, body["cmd"]
+        with w.lock:
+            if cmd == "camera_preset":
+                name = body.get("name")
+                if name not in CAMERA_PRESETS:
+                    return {"ok": False, "error": f"preset camera phải là {', '.join(CAMERA_PRESETS)}, "
+                                                  f"không phải {name!r}"}
+                w.scene.use_preset(name)
+                text = f"camera về preset {name}"
+            elif cmd == "camera_jitter":
+                j = w.scene.jitter_camera(w.rng)
+                text = f"camera bị xê dịch: dời {j['shift_m'] * 100:.1f} cm, xoay {j['rot_deg']:.1f} độ"
+            else:  # camera_set
+                try:
+                    pos = [float(body[k]) for k in ("x", "y", "z")]
+                    look = [float(body[k]) for k in ("lx", "ly", "lz")]
+                except (KeyError, TypeError, ValueError):
+                    return {"ok": False, "error": "camera_set cần x, y, z, lx, ly, lz (mét)"}
+                if np.allclose(pos, look):
+                    return {"ok": False, "error": "vị trí camera trùng điểm nhìn"}
+                w.scene.set_camera(pos, look)
+                text = f"đặt camera tại ({pos[0]:.2f}, {pos[1]:.2f}, {pos[2]:.2f}) nhìn "                        f"({look[0]:.2f}, {look[1]:.2f}, {look[2]:.2f})"
+            cov = w.scene.coverage()
+        if cov["warnings"]:
+            text += "; " + ", ".join(cov["warnings"])
+        self.st.events.emit("sim", text, level="info" if cov["ok"] else "warn")
+        return {"ok": True, "coverage": cov, "camera": self._sim_camera()["camera"]}
+
     def _sim(self, body: dict) -> dict:
         w, cmd = self.st.world, body["cmd"]
-        x, z = body.get("x"), body.get("z")
-        if "u" in body and "v" in body:  # bấm lên video: đổi pixel sang tọa độ bảng
-            p = self.st.vision.localize((float(body["u"]), float(body["v"])))
-            if p is None:
-                return {"ok": False, "error": "điểm bấm không nằm trên bảng bia"}
-            x, z = float(p[0]), float(p[2])
-        board = self.st.site["board"]
+        if cmd in ("camera_preset", "camera_jitter", "camera_set"):
+            return self._camera_cmd(body)
+        x, y, z = body.get("x"), body.get("y"), body.get("z")
+        surface = body.get("surface", "wall")
+        if "u" in body and "v" in body:  # bấm lên video: đổi pixel sang tọa độ bảng hoặc nền
+            hit = self.st.vision.localize_surface((float(body["u"]), float(body["v"])))
+            if hit is None:
+                return {"ok": False, "error": "điểm bấm không nằm trên vùng bia"}
+            p, surface = hit
+            x, y, z = float(p[0]), float(p[1]), float(p[2])
+        if surface not in ("wall", "floor"):
+            return {"ok": False, "error": f"surface phải là wall hoặc floor, không phải {surface!r}"}
+        board, depth = self.st.site["board"], w.scene.table["depth"]
         if x is not None:
-            x = min(max(x, 0.05), board["width"] - 0.05)
-        if z is not None:
-            z = min(max(z, 0.05), board["height"] - 0.05)
+            x = min(max(float(x), 0.05), board["width"] - 0.05)
+        if surface == "floor":  # trên nền z = 0, vị trí là (x, y)
+            z = None
+            y = None if y is None else min(max(float(y), 0.05), depth - 0.05)
+        else:
+            y = None
+            z = None if z is None else min(max(float(z), 0.05), board["height"] - 0.05)
+        place = {"surface": surface, "y": y}
         from ..sim.world import FIRE_SIZES  # chỉ lệnh sa bàn ảo mới cần tới sim
 
         make = {"lamp": (w.add_lamp, "đèn nóng"), "object": (w.add_object, "vật màu cam")}
@@ -170,10 +241,10 @@ class Dashboard:
             if size not in FIRE_SIZES:
                 return {"ok": False, "error": f"cỡ đám cháy phải là {' hoặc '.join(FIRE_SIZES)}, "
                                               f"không phải {size!r}"}
-            s = w.ignite(x, z, size=size)
+            s = w.ignite(x, z, size=size, **place)
             text = "đám cháy lớn" if size == "large" else "đám cháy"
         elif cmd in make:
-            s, text = make[cmd][0](x, z), make[cmd][1]
+            s, text = make[cmd][0](x, z, **place), make[cmd][1]
         elif cmd == "steam":
             s, text = w.add_steam(x), "hơi nước"
         elif cmd == "spike":
@@ -194,7 +265,12 @@ class Dashboard:
             return {"ok": True}
         else:
             return {"ok": False, "error": f"không biết lệnh {cmd!r}"}
-        where = f" tại x {s.x:.2f} z {s.z:.2f}" if s.kind not in ("spike", "steam") else ""
+        if s.kind in ("spike", "steam"):
+            where = ""
+        elif s.surface == "floor":
+            where = f" trên nền tại x {s.x:.2f} y {s.y:.2f}"
+        else:
+            where = f" tại x {s.x:.2f} z {s.z:.2f}"
         self.st.events.emit("sim", f"thêm {text}{where}", source=s.id)
         return {"ok": True, "source": s.to_json()}
 

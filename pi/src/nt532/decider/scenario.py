@@ -6,7 +6,7 @@ thật (scripts/cache_yolo_obs.py); số đọc cảm biến là phân phối GI
 
 import json
 import math
-from dataclasses import dataclass, fields, replace
+from dataclasses import dataclass, field, fields, replace
 from pathlib import Path
 
 import numpy as np
@@ -31,7 +31,8 @@ TOL_CM = 3.0  # đúng với targeting.tolerance_m = 0.03 (đề xuất)
 POS_NOISE_M = 0.015  # sai số vị trí bia do localize
 # Giới hạn cơ khí GIẢ ĐỊNH (actuator.nodes.*_limits trong site.yaml còn null)
 PAN_LIM = 70.0  # nâng từ 50: với node ở X 0,30 và 0,90 cách bảng 0,24 m, ±50° không cho vùng nào cả hai cùng với tới
-TILT_LIM = (-35.0, 45.0)
+TILT_LIM = (-35.0, 45.0)  # cận dưới -35 làm nhiều điểm nền gần chân trụ ngoài tầm (-> "alarm only"); cơ khí
+# đang cân nhắc -70: đổi bằng load_geometry(tilt_lim=...) / make_scenarios.py --tilt-min
 KINDS = ("real_fire", "distractor", "steam", "spike")
 SIZES = ("small", "large")
 # Hệ số nhân lên cỡ hộp (w, h) YOLO của bia lửa thật theo cỡ đám cháy: GIẢ ĐỊNH, chưa đo
@@ -102,6 +103,7 @@ class Profile:
     extra: tuple = (0.55, 0.30, 0.15)  # số bia gây nhiễu thêm: 0, 1, 2
     p_fault: float = 0.05  # vòi lỗi sau khi phun
     p_large: float = 0.30  # xác suất lửa thật là đám cháy lớn
+    p_floor: float = 0.50  # xác suất mỗi bia (lửa thật lẫn gây nhiễu) nằm trên nền thay vì trên bảng
 
 
 NORMAL = Profile()
@@ -109,6 +111,7 @@ SHIFT = Profile(
     name="shift", sensor_noise=1.8, conf_jitter=0.08, p_drop=0.25,
     kinds=(0.35, 0.35, 0.15, 0.15), p_unhealthy=0.20, p_noisy_neg=0.97, p_blind=0.15,
     extra=(0.30, 0.40, 0.30), p_fault=0.10, p_large=0.45,
+    p_floor=0.60,  # lệch phân phối: nền nhiều hơn lúc train (nền khó với tới hơn nên nhiều "alarm only")
 )
 
 
@@ -120,35 +123,81 @@ class Geometry:
     height: float
     detect_conf: float
     match_radius: float
+    floor_depth: float = 0.80  # nền Z = 0 trải Y từ 0 tới đây, X từ 0 tới width
+    pan_lim: float = PAN_LIM  # |pan| tối đa, độ
+    tilt_lim: tuple = TILT_LIM  # (tilt thấp nhất, cao nhất), độ
+    # hướng pan = 0 của từng node trong mặt phẳng XY (vector, không cần chuẩn hóa); thiếu = +Y
+    facing: dict = field(default_factory=dict)
 
 
-def load_geometry(with_nodes: bool = True) -> Geometry:
+PIVOT_OFFSET = (0.0, 0.0, 0.08)  # trục quay cao hơn vị trí node (site.yaml actuator.pivot_offset)
+
+
+def parse_nodes(spec: str) -> tuple[dict, dict]:
+    """"s1=0,0,0.33@0.6,0.8;s2=1.2,0,0.33@-0.6,0.8" -> (vị trí trục quay, hướng pan = 0 trong XY).
+    Phần `@fx,fy` có thể bỏ (mặc định +Y)."""
+    pos, facing = {}, {}
+    for item in filter(None, (i.strip() for i in spec.split(";"))):
+        name, _, rest = item.partition("=")
+        xyz, _, face = rest.partition("@")
+        pos[name.strip()] = tuple(float(v) for v in xyz.split(","))
+        if face:
+            facing[name.strip()] = tuple(float(v) for v in face.split(","))
+        if len(pos[name.strip()]) != 3 or len(facing.get(name.strip(), (0, 1))) != 2:
+            raise ValueError(f"nodes: {item!r} cần x,y,z[@fx,fy]")
+    return pos, facing
+
+
+def load_geometry(with_nodes: bool = True, tilt_lim: tuple | None = None,
+                  pan_lim: float | None = None, nodes: str | None = None) -> Geometry:
     """`with_nodes=False` chỉ lấy ngưỡng và kích thước bảng từ site.yaml, không cần file
-    commissioning (không nằm trên git). Đủ cho chấm điểm vì `dist`/`reach` đã tính sẵn trong obs."""
+    commissioning (không nằm trên git). Đủ cho chấm điểm vì `dist`/`reach` đã tính sẵn trong obs.
+    `tilt_lim`/`pan_lim` ghi đè giới hạn cơ khí giả định (vd tilt thấp -70 khi cơ khí chốt).
+    Vị trí node = trục quay = position trong commissioning + PIVOT_OFFSET (khớp orchestrator.aiming);
+    `facing` đọc từ khóa `facing` (fx, fy) của từng node trong commissioning nếu có.
+    `nodes` (chuỗi parse_nodes) thay toàn bộ vị trí và hướng, vd để thử đặt vòi ở hai góc phía trước."""
     site = read_site()
-    nodes = {}
+    nodes_override = parse_nodes(nodes) if nodes else None
+    nodes, facing = {}, {}
     if with_nodes:
         com = yaml.safe_load((REPO_ROOT / "data/sim/commissioning.yaml").read_text(encoding="utf-8"))
-        nodes = {n: tuple(com["nodes"][n]["position"]) for n in NOZZLES}
+        nodes = {n: tuple(a + o for a, o in zip(com["nodes"][n]["position"], PIVOT_OFFSET))
+                 for n in NOZZLES}
+        facing = {n: tuple(com["nodes"][n]["facing"]) for n in NOZZLES if com["nodes"][n].get("facing")}
+        for n in NOZZLES:  # hoặc yaw_deg: ngược chiều kim đồng hồ tính từ +Y (yaw = atan2(-hx, hy))
+            yaw = com["nodes"][n].get("yaw_deg")
+            if yaw is not None:
+                facing[n] = (-math.sin(math.radians(yaw)), math.cos(math.radians(yaw)))
+        if nodes_override:
+            nodes, facing = nodes_override
     b = site["board"]
+    fl = site.get("floor") or {}
     return Geometry(
         nodes, b["plane_y"], b["width"], b["height"],
         site["vision"]["detect_conf"], site["targeting"]["sensor_match_radius_x"],
+        float(fl.get("depth") or b["plane_y"]),
+        PAN_LIM if pan_lim is None else float(pan_lim),
+        TILT_LIM if tilt_lim is None else (float(tilt_lim[0]), float(tilt_lim[1])),
+        facing,
     )
 
 
-def _dist3(geo: Geometry, node: str, x: float, z: float) -> float:
-    """Khoảng cách 3D từ trục quay (vị trí node) tới điểm (x, plane_y, z) trên bảng."""
+def _dist3(geo: Geometry, node: str, x: float, z: float, y: float | None = None) -> float:
+    """Khoảng cách 3D từ trục quay (vị trí node) tới điểm (x, y, z); `y` thiếu thì ở mặt bảng."""
     nx, ny, nz = geo.nodes[node]
-    return math.dist((nx, ny, nz), (x, geo.plane_y, z))
+    return math.dist((nx, ny, nz), (x, geo.plane_y if y is None else y, z))
 
 
-def reachable(geo: Geometry, node: str, x: float, z: float) -> bool:
+def reachable(geo: Geometry, node: str, x: float, z: float, y: float | None = None) -> bool:
+    """Điểm 3D (x, y, z) có trong giới hạn pan/tilt của node không (bảng: y = plane_y; nền: z = 0).
+    Cùng quy ước góc với orchestrator.aiming.angles, giới hạn lấy từ `geo`."""
     nx, ny, nz = geo.nodes[node]
-    dx, dy, dz = x - nx, geo.plane_y - ny, z - nz
-    pan = math.degrees(math.atan2(dx, dy))
+    dx, dy, dz = x - nx, (geo.plane_y if y is None else y) - ny, z - nz
+    fx, fy = geo.facing.get(node, (0.0, 1.0))  # pan đo từ hướng này; mặc định +Y
+    # = wrap180(atan2(-dx, dy) - yaw) với yaw = atan2(-fx, fy) (khớp orchestrator.aiming); yaw 0 = +Y
+    pan = math.degrees(math.atan2(fx * dy - fy * dx, fx * dx + fy * dy))
     tilt = math.degrees(math.atan2(dz, math.hypot(dx, dy)))
-    return abs(pan) <= PAN_LIM and TILT_LIM[0] <= tilt <= TILT_LIM[1]
+    return abs(pan) <= geo.pan_lim and geo.tilt_lim[0] <= tilt <= geo.tilt_lim[1]
 
 
 # --- Cache quan sát YOLO -------------------------------------------------------------------
@@ -223,13 +272,18 @@ def _node_series(rng, sm, noise, amb, peaks, t0, tau, pulse):
     }
 
 
-def simulate_sensors(rng, kind: str, src_x: float, geo: Geometry, prof: Profile,
+def simulate_sensors(rng, kind: str, src, geo: Geometry, prof: Profile,
                      sm: SensorModel = SENSOR, large: bool = False) -> tuple[dict, str, bool]:
     """Trả (WINDOW mẫu cuối mỗi node, node báo động trước, sensor gần nguồn có bị mù không).
-    `large`: lửa lớn, nguồn mạnh hơn (large_gain) và suy giảm theo khoảng cách chậm hơn (large_decay)."""
+    `src`: vị trí nguồn (x, y, z), khoảng cách tới cảm biến là 3D từ vị trí node; truyền một số x thì
+    tính như trước, chỉ theo X. `large`: lửa lớn, nguồn mạnh hơn (large_gain) và suy giảm theo khoảng
+    cách chậm hơn (large_decay)."""
     if kind == "distractor":  # vật gây nhiễu (đèn, vật cam) đi kèm báo động sai bất kỳ
         kind = str(rng.choice(["spike", "steam", "lamp"]))
-    dist = {n: abs(geo.nodes[n][0] - src_x) for n in NOZZLES}
+    if isinstance(src, (int, float)):
+        dist = {n: abs(geo.nodes[n][0] - src) for n in NOZZLES}
+    else:
+        dist = {n: math.dist(geo.nodes[n], src) for n in NOZZLES}
     near = min(dist, key=dist.get)
     blind = kind == "real_fire" and rng.random() < prof.p_blind
     for attempt in range(20):
@@ -295,12 +349,24 @@ def _health(rng, prof: Profile) -> tuple[bool, float, float]:
     return False, float(rng.uniform(700, 1450)), float(rng.uniform(40, 59))
 
 
+def _sample_point(rng, geo: Geometry, floor: bool, x: float) -> tuple[float, float, float]:
+    """Điểm thật (x, y, z): nền (Z = 0, Y ngẫu nhiên) hoặc bảng (Y = plane_y, Z ngẫu nhiên)."""
+    if floor:
+        return x, float(rng.uniform(0.08, geo.floor_depth - 0.08)), 0.0
+    return x, geo.plane_y, float(rng.uniform(0.08, geo.height - 0.08))
+
+
 def _spread_x(rng, geo: Geometry, k: int) -> list[float]:
     for _ in range(100):
         xs = [float(rng.uniform(0.05, geo.width - 0.05)) for _ in range(k)]
         if all(abs(a - b) >= 0.12 for i, a in enumerate(xs) for b in xs[:i]):
             return xs
     return xs
+
+
+def src_xzy(src) -> tuple[float, float, float]:
+    """(x, y, z) của nguồn -> đối số (x, z, y) cho _dist3."""
+    return src[0], src[2], src[1]
 
 
 def make_scenario(rng, geo: Geometry, pool: Pool, prof: Profile, sid: str,
@@ -315,48 +381,58 @@ def make_scenario(rng, geo: Geometry, pool: Pool, prof: Profile, sid: str,
         n_extra = int(rng.choice(3, p=[0.5, 0.4, 0.1]))
     n_targets = n_extra + int(real)
     xs = _spread_x(rng, geo, n_targets) if n_targets else []
-    zs = [float(rng.uniform(0.08, geo.height - 0.08)) for _ in xs]
+    # điểm thật 3D; mỗi bia độc lập rơi trên nền với xác suất p_floor
+    pts = [_sample_point(rng, geo, bool(rng.random() < prof.p_floor), x) for x in xs]
 
-    # bia: (x, z, ảnh, là lửa thật)
+    # bia: (điểm thật, ảnh, là lửa thật)
     things = []
-    for i, (x, z) in enumerate(zip(xs, zs)):
+    for i, pt in enumerate(pts):
         if real and i == 0:
             img = _pick(rng, pool.fire)
             if img is not None:  # lửa lớn thì hộp lớn hơn
                 s = float(rng.uniform(*BOX_SCALE[size]))
                 img = (img[0], round(min(img[1] * s, BOX_MAX), 3), round(min(img[2] * s, BOX_MAX), 3))
-            things.append((x, z, img, True))
+            things.append((pt, img, True))
         else:
             noisy = rng.random() < prof.p_noisy_neg and pool.neg_noisy
-            things.append((x, z, _pick(rng, pool.neg_noisy if noisy else pool.neg_quiet), False))
-    src_x = xs[0] if real else float(rng.uniform(0.05, geo.width - 0.05))
+            things.append((pt, _pick(rng, pool.neg_noisy if noisy else pool.neg_quiet), False))
+    if real:
+        src = pts[0]
+    else:  # báo động sai: nguồn gây nhiễu ở chỗ bất kỳ, kể cả không có bia nào
+        src = _sample_point(rng, geo, bool(rng.random() < prof.p_floor),
+                            float(rng.uniform(0.05, geo.width - 0.05)))
 
-    sensors, alarm, blind = simulate_sensors(rng, kind, src_x, geo, prof, sm, size == "large")
+    sensors, alarm, blind = simulate_sensors(rng, kind, src, geo, prof, sm, size == "large")
 
     # bia nhìn thấy, đánh số từ trái sang phải theo x đo được
     cands = []
-    for x, z, img, is_fire in things:
+    for (x, y, z), img, is_fire in things:
         conf = _frames(rng, img, n_frames, prof)
         if not any(c is not None and c >= VIS_MIN for c in conf):
             continue
+        floor = z == 0.0
         ox = round(x + rng.normal(0, POS_NOISE_M), 2)
-        oz = round(z + rng.normal(0, POS_NOISE_M), 2)
-        cands.append({"x": ox, "z": oz, "w": img[1], "h": img[2], "conf": conf, "fire": is_fire,
-                      "tx": x, "tz": z})
+        # nền: y đo có nhiễu, z = 0; bảng: z đo có nhiễu, y = plane_y (cùng quy ước localize)
+        oy = round(y + rng.normal(0, POS_NOISE_M), 2) if floor else round(y, 2)
+        oz = 0.0 if floor else round(z + rng.normal(0, POS_NOISE_M), 2)
+        cands.append({"x": ox, "y": oy, "z": oz, "surface": "floor" if floor else "wall",
+                      "w": img[1], "h": img[2], "conf": conf, "fire": is_fire,
+                      "tx": x, "ty": y, "tz": z})
     cands.sort(key=lambda c: c["x"])
     targets = []
     for i, c in enumerate(cands, 1):
         targets.append({
-            "id": f"T{i}", "x": c["x"], "z": c["z"], "w": c["w"], "h": c["h"], "conf": c["conf"],
+            "id": f"T{i}", "x": c["x"], "z": c["z"], "y": c["y"], "surface": c["surface"],
+            "w": c["w"], "h": c["h"], "conf": c["conf"],
             "dist": {n: round(abs(c["x"] - geo.nodes[n][0]), 2) for n in NOZZLES},
-            "dist3": {n: round(_dist3(geo, n, c["x"], c["z"]), 2) for n in NOZZLES},
+            "dist3": {n: round(_dist3(geo, n, c["x"], c["z"], c["y"]), 2) for n in NOZZLES},
         })
 
     health = {n: _health(rng, prof) for n in NOZZLES}
     nozzles = {
         n: {
             "hb_ms": round(health[n][1]), "pose_s": round(health[n][2]),
-            "reach": {t["id"]: reachable(geo, n, t["x"], t["z"]) for t in targets},
+            "reach": {t["id"]: reachable(geo, n, t["x"], t["z"], t["y"]) for t in targets},
         }
         for n in NOZZLES
     }
@@ -372,9 +448,10 @@ def make_scenario(rng, geo: Geometry, pool: Pool, prof: Profile, sid: str,
     can = {}
     if true_t is not None:
         for n in NOZZLES:
-            can[n] = health[n][0] and reachable(geo, n, true_t["tx"], true_t["tz"])
+            can[n] = health[n][0] and reachable(geo, n, true_t["tx"], true_t["tz"], true_t["ty"])
     able = [n for n in NOZZLES if can.get(n)]
-    nearest = min(able, key=lambda n: _dist3(geo, n, true_t["tx"], true_t["tz"])) if able else None
+    nearest = (min(able, key=lambda n: _dist3(geo, n, true_t["tx"], true_t["tz"], true_t["ty"]))
+               if able else None)
     if real and able:
         action = ACTIONS[0]
     elif real:
@@ -386,6 +463,11 @@ def make_scenario(rng, geo: Geometry, pool: Pool, prof: Profile, sid: str,
         "true_target": None if true_idx is None else f"T{true_idx + 1}",
         "nozzle_ok": {n: health[n][0] for n in NOZZLES}, "can_hit": can,
         "size": size, "nearest_nozzle": nearest, "n_frames": n_frames,
+        "surface": true_t["surface"] if true_t is not None else None,
+        "fire_dist_min": round(min(_dist3(geo, n, *src_xzy(src)) for n in NOZZLES), 2),
+        # với tới được ít nhất một vòi, bất kể vòi khỏe hay hỏng (để đếm "alarm only" do tầm với)
+        "reach_any": (any(reachable(geo, n, true_t["tx"], true_t["tz"], true_t["ty"]) for n in NOZZLES)
+                      if true_t is not None else None),
     }
 
     cand_txt = target_candidates(targets)
@@ -448,7 +530,8 @@ def _verify_record(rng, geo, pool, prof, sid, d_obs, sensors, true_idx, true_t, 
     t = d_obs["targets"][true_idx]
     obs = {
         "stage": "verify", "alarm": d_obs["alarm"], "limits": d_obs["limits"], "sensors": sensors,
-        "verify": {"target": t["id"], "x": t["x"], "z": t["z"], "nozzle": nozzle,
+        "verify": {"target": t["id"], "x": t["x"], "z": t["z"], "y": t["y"],
+                   "surface": t["surface"], "nozzle": nozzle,
                    "attempt": attempt, "max_attempts": MAX_ATTEMPTS, "status": status,
                    "temp": temp, "conf": conf, "mark_cm": mark, "tol_cm": TOL_CM},
     }
@@ -463,9 +546,9 @@ def _verify_record(rng, geo, pool, prof, sid, d_obs, sensors, true_idx, true_t, 
 
 
 def generate(n: int, pool: Pool, prof: Profile, split: str, seed: int,
-             sm: SensorModel = SENSOR) -> list[dict]:
-    """n kịch bản, tái lập được theo (seed, split)."""
-    geo = load_geometry()
+             sm: SensorModel = SENSOR, geo: Geometry | None = None) -> list[dict]:
+    """n kịch bản, tái lập được theo (seed, split). `geo` mặc định load_geometry() (tilt -35)."""
+    geo = geo or load_geometry()
     rng = np.random.default_rng([seed, sum(map(ord, split))])
     out = []
     for i in range(n):

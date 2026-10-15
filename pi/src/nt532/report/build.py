@@ -266,6 +266,8 @@ def sec_aim(d: dict) -> Section | None:
     cells: dict[tuple[float, float], list[dict]] = {}
     for r in rows:
         x, z = num(r.get("target_x")), num(r.get("target_z"))
+        if num(r.get("target_y")) is not None:
+            continue  # điểm trên nền (cột target_y): lưới này vẽ theo (x, z) của bảng đứng
         if x is not None and z is not None:
             cells.setdefault((round(x, 3), round(z, 3)), []).append(r)
     if len(cells) >= 2:

@@ -38,7 +38,7 @@ def history(hot: str | None = None) -> SensorHistory:
 
 
 def nozzles(hb=200, pose=10, reach=True):
-    return {n: {"hb_ms": hb, "pose_s": pose, "reach": lambda x, z: reach} for n in ("s1", "s2")}
+    return {n: {"hb_ms": hb, "pose_s": pose, "reach": lambda x, z, y=None: reach} for n in ("s1", "s2")}
 
 
 def test_aggregate_joins_frames_and_marks_misses():
@@ -67,7 +67,7 @@ def test_decide_obs_matches_scenario_schema_and_rules_run():
     assert obs["targets"][0]["dist"] == {"s1": 0.02, "s2": 0.58}
     assert len(obs["sensors"]["s1"]["temp"]) == 5
     text = render_state(obs)
-    assert "T1: x 0.32 z 0.25" in text and "nozzle s1: heartbeat_age 200ms" in text
+    assert "T1: wall x 0.32 z 0.25" in text and "nozzle s1: heartbeat_age 200ms" in text
     q = questions_for(obs)
     assert set(q) == {"real_fire", "action", "target", "nozzle"}
     d = RuleDecider().decide(obs, q)

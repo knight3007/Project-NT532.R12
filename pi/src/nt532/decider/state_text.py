@@ -1,5 +1,7 @@
 """Dựng văn bản STATE từ quan sát có cấu trúc. Chỉ nhận quan sát, không bao giờ nhận truth."""
 
+import re
+
 NONE_OF_THESE = "none of these"
 ACTIONS = ["spray", "alarm only", "ignore"]
 NOZZLES = ["s1", "s2"]
@@ -10,9 +12,23 @@ VERIFY = ["done (fire out)", "re-aim (spray missed)", "spray more (hit, still bu
           "call human (give up or fault)"]
 
 
+def surface_of(t: dict) -> str:
+    """Mặt chứa bia: "wall" (bảng đứng) hoặc "floor" (mặt bàn). Thiếu `surface` (log/bản ghi cũ)
+    thì coi là bảng, với y = plane_y."""
+    return "floor" if t.get("surface") == "floor" else "wall"
+
+
+def pos_text(t: dict) -> str:
+    """Tọa độ để in: bia trên bảng "wall x 0.88 z 0.20", bia trên nền "floor x 0.40 y 0.30"."""
+    if surface_of(t) == "floor":
+        return f"floor x {t['x']:.2f} y {t['y']:.2f}"
+    return f"wall x {t['x']:.2f} z {t['z']:.2f}"
+
+
 def target_candidates(targets: list[dict]) -> list[str]:
-    """Chuỗi ứng viên cho câu hỏi `target`, cùng thứ tự với danh sách bia trong state."""
-    return [f"{t['id']} (x {t['x']:.2f} z {t['z']:.2f})" for t in targets] + [NONE_OF_THESE]
+    """Chuỗi ứng viên cho câu hỏi `target`, cùng thứ tự với danh sách bia trong state:
+    `T1 (floor x 0.40 y 0.30)` hoặc `T1 (wall x 0.88 z 0.20)`."""
+    return [f"{t['id']} ({pos_text(t)})" for t in targets] + [NONE_OF_THESE]
 
 
 def nozzle_healthy(n: dict) -> bool:
@@ -34,6 +50,43 @@ def nozzle_candidates(obs: dict) -> list[str]:
 def nozzles_of(answer: str) -> list[str]:
     """Đáp án `nozzle` thành danh sách vòi cần phun: 's1' -> ['s1'], BOTH -> ['s1', 's2']."""
     return list(NOZZLES) if answer == BOTH else [answer]
+
+
+def questions_from_state(state: str) -> dict:
+    """Dựng lại dict `questions` từ văn bản STATE (đảo của render_state), để gõ tay một state.
+
+    Ứng viên `target`/`nozzle` chỉ phụ thuộc quan sát nên khớp đúng với bộ sinh kịch bản. Riêng
+    việc câu `nozzle` có xuất hiện hay không, bộ sinh quyết theo truth (có lửa thật và có vòi đủ
+    điều kiện), không đọc được từ văn bản: với state gõ tay ta hỏi mỗi khi có ít nhất một bia."""
+    if re.search(r"^stage:\s*verify\s*$", state, re.MULTILINE):
+        return {"after_verify": {"type": "choice", "candidates": list(VERIFY)}}
+    targets = []
+    # `T1: floor x 0.40 y 0.30 ...` / `T1: wall x 0.88 z 0.20 ...`; dạng cũ `T1: x .. z ..` là wall
+    for m in re.finditer(r"^(T\d+): (?:(wall|floor) )?x (-?[\d.]+) ([yz]) (-?[\d.]+)",
+                         state, re.MULTILINE):
+        t = {"id": m[1], "x": float(m[3]), "surface": "floor" if m[2] == "floor" else "wall"}
+        t["y" if t["surface"] == "floor" else "z"] = float(m[5])
+        targets.append(t)
+    questions = {
+        "real_fire": {"type": "boolean", "candidates": []},
+        "action": {"type": "choice", "candidates": list(ACTIONS)},
+    }
+    if targets:
+        questions["target"] = {"type": "choice", "candidates": target_candidates(targets)}
+        noz = {}
+        for m in re.finditer(
+            r"^nozzle (s\d): heartbeat_age (-?[\d.]+)ms pose_age (-?[\d.]+)s(?: reach (.*))?$",
+            state, re.MULTILINE,
+        ):
+            reach = re.findall(r"(T\d+) (yes|no)", m[4] or "")
+            noz[m[1]] = {"hb_ms": float(m[2]), "pose_s": float(m[3]),
+                         "reach": {k: v == "yes" for k, v in reach}}
+        if all(n in noz for n in NOZZLES):
+            cands = nozzle_candidates({"nozzles": noz, "targets": targets})
+        else:  # thiếu dòng nozzle: không biết vòi nào khỏe nên không đề xuất both
+            cands = list(NOZZLES)
+        questions["nozzle"] = {"type": "choice", "candidates": cands}
+    return questions
 
 
 def _nums(values: list, fmt: str = "{:.0f}") -> str:
@@ -62,7 +115,7 @@ def render_state(obs: dict) -> str:
         lines.append(f"detections ({obs['frames']} frames):" + ("" if obs["targets"] else " none"))
         for t in obs["targets"]:
             lines.append(
-                f"{t['id']}: x {t['x']:.2f} z {t['z']:.2f} box {t['w']:.2f}x{t['h']:.2f} "
+                f"{t['id']}: {pos_text(t)} box {t['w']:.2f}x{t['h']:.2f} "
                 f"conf {_nums(t['conf'], '{:.2f}')} dist_s1 {t['dist']['s1']:.2f}m "
                 f"dist_s2 {t['dist']['s2']:.2f}m"
             )
@@ -75,7 +128,7 @@ def render_state(obs: dict) -> str:
             )
     else:
         v = obs["verify"]
-        lines.append(f"sprayed: {v['target']} x {v['x']:.2f} z {v['z']:.2f} with {v['nozzle']}")
+        lines.append(f"sprayed: {v['target']} {pos_text(v)} with {v['nozzle']}")
         lines.append(f"attempt: {v['attempt']} of {v['max_attempts']}")
         lines.append(f"nozzle {v['nozzle']} status: {v['status']}")
         lines.append(f"post_spray {v['nozzle']} temp_c {_nums(v['temp'])} ({_trend(v['temp'], 3)})")

@@ -1,4 +1,14 @@
 from .camera import SimCamera
-from .scene import Node, Scene, aim_angles, default_intrinsics, sim_site
+from .cli import add_sim_args, camera_spec, sim_options
+from .scene import (
+    CAMERA_PRESETS,
+    NODE_LAYOUTS,
+    Node,
+    Scene,
+    aim_angles,
+    default_intrinsics,
+    sim_site,
+)
 
-__all__ = ["Node", "Scene", "SimCamera", "aim_angles", "default_intrinsics", "sim_site"]
+__all__ = ["CAMERA_PRESETS", "NODE_LAYOUTS", "Node", "Scene", "SimCamera", "add_sim_args", "aim_angles",
+           "camera_spec", "default_intrinsics", "sim_options", "sim_site"]

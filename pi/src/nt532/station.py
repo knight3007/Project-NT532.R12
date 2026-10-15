@@ -129,17 +129,23 @@ def build_sim(decider: str = "rules", jev_run: str = "jev1", tau: float = 0.8,
               detector: str = "oracle", seed: int = 0, fps: float = 10.0,
               log_path: str | Path | None = None, settings: Settings | None = None,
               link: str = "mem", model_stages: str = "verify", decider_url: str | None = None,
-              decider_timeout: float = 3.0) -> Station:
+              decider_timeout: float = 3.0, camera=None, node_layout: str | None = None) -> Station:
     """`link="mem"`: node ảo trong bộ nhớ (SimLink). `"coap"`: mỗi node là một FakeNode chạy lõi C của
-    firmware, lệnh và telemetry đi qua UDP localhost bằng CoapLink thật."""
+    firmware, lệnh và telemetry đi qua UDP localhost bằng CoapLink thật.
+
+    `camera` (tên preset hoặc (vị trí, điểm nhìn)) và `node_layout` ("corners" mặc định, "posts") chọn camera
+    và bố cục node của sa bàn ảo. Trạm tự commissioning lúc khởi động từ ảnh dựng ra nên camera và
+    bố cục nào cũng chạy được; pose lưu vào data/sim/station_commissioning.yaml (không đè
+    data/sim/commissioning.yaml mà bộ quyết định đọc vị trí node)."""
     from .sim.world import OracleDetector, SimLink, SimWorld
 
     if link not in ("mem", "coap"):
         raise ValueError(f"link phải là mem hoặc coap, nhận {link!r}")
 
     events = EventLog(path=log_path)
-    world = SimWorld(seed=seed)
+    world = SimWorld(seed=seed, camera=camera, node_layout=node_layout)
     site = world.site
+    site["vision"]["commissioning"] = "data/sim/station_commissioning.yaml"
     if detector == "oracle":
         det = OracleDetector(world, site["vision"]["detect_conf"], seed=seed + 1)
     else:
@@ -149,8 +155,8 @@ def build_sim(decider: str = "rules", jev_run: str = "jev1", tau: float = 0.8,
         det.vision = vision
     hub = FrameHub(world.read, fps).start()
     state = vision.commission(hub.frames(site["vision"]["commission_frames"]))
-    events.emit("vision", f"commissioning sa bàn ảo: chiếu lại {state.reprojection_px:.2f} px, "
-                          f"node {sorted(state.nodes)}")
+    events.emit("vision", f"commissioning sa bàn ảo ({world.scene.node_layout}): chiếu lại "
+                          f"{state.reprojection_px:.2f} px, node {sorted(state.nodes)}")
     fakes = None
     if link == "coap":
         link, fakes = _coap_nodes(world, events)

@@ -1,7 +1,10 @@
 """Tính góc pan/tilt từ pose đế vòi và kiểm tra giới hạn.
 
-Quy ước góc giống `Node.direction` của sa bàn ảo: pan = 0, tilt = 0 là hướng +Y; pan dương quay
-về phía -X; tilt dương ngẩng lên +Z. Bảng hiệu chỉnh servo (góc lệnh -> góc thật) để Hiếu đo ở
+Quy ước góc giống `Node.direction` của sa bàn ảo: pan = 0, tilt = 0 là hướng đầu của node (yaw);
+với yaw = 0 đó là +Y. pan dương quay về phía bên trái node (với yaw = 0 là -X); tilt dương ngẩng lên +Z.
+Yaw (độ) là góc quay ngược chiều kim đồng hồ nhìn từ trên xuống của hướng đầu so với +Y, tức
+yaw = atan2(-hx, hy) với h là hướng đầu trong mặt phẳng XY. Hướng đầu lấy từ trục +Y của tag đế (chiếu
+xuống XY), hoặc `actuator.nodes.<n>.yaw_deg` nếu có. Bảng hiệu chỉnh servo (góc lệnh -> góc thật) để Hiếu đo ở
 tuần 3; ở đây chỉ có offset tâm quay, giới hạn và góc bù tilt cho tia nước từ site.yaml.
 """
 
@@ -40,7 +43,7 @@ def water_tilt(site: dict, node: str | None = None, distance_m: float | None = N
     """Góc cộng thêm vào tilt khi phun nước (tia nước rơi theo quỹ đạo); 0 cho tới khi đo.
 
     Thứ tự: `water_tilt_table` của node nội suy theo `distance_m` (khoảng cách ngang tâm quay -> bia,
-    ngoài đầu bảng thì giữ giá trị đầu), rồi `nodes.<node>.water_tilt_deg`, rồi `actuator.water_tilt_deg`
+    tức trong mặt phẳng XY, dùng chung cho bia trên bảng và trên nền; ngoài đầu bảng thì giữ giá trị đầu), rồi `nodes.<node>.water_tilt_deg`, rồi `actuator.water_tilt_deg`
     chung. Gọi một đối số `water_tilt(site)` vẫn trả giá trị chung như trước.
     """
     act = site.get("actuator", {})
@@ -56,7 +59,8 @@ def water_tilt(site: dict, node: str | None = None, distance_m: float | None = N
 
 
 def horizontal_distance(pivot, target) -> float:
-    """Khoảng cách ngang (m) từ tâm quay tới bia, dùng tra `water_tilt_table`."""
+    """Khoảng cách ngang (m) từ tâm quay tới bia, trong mặt phẳng XY (bỏ chênh cao Z), dùng tra
+    `water_tilt_table`. Bia ở bảng đứng hay trên nền đều tính cùng một cách."""
     v = np.asarray(target, float) - np.asarray(pivot, float)
     return float(math.hypot(v[0], v[1]))
 
@@ -93,15 +97,44 @@ def narrow_limits(site: dict, node: str, info) -> bool:
     return True
 
 
-def angles(pivot, target) -> tuple[float, float]:
-    """(pan, tilt) độ để tia từ `pivot` đi qua `target`, cả hai trong hệ sa bàn."""
+def heading_yaw_deg(pose) -> float:
+    """Yaw (độ, (-180, 180]) của node từ pose tag đế: trục +Y của tag (cột 2 của ma trận xoay) chiếu
+    xuống mặt phẳng XY. Tag không xoay quanh Z thì ra 0 (hướng +Y)."""
+    h = np.asarray(pose.rotation, float)[:, 1]
+    return math.degrees(math.atan2(-h[0], h[1]))
+
+
+def node_yaw(site: dict, node: str, pose=None) -> float:
+    """Yaw của `node`: `actuator.nodes.<node>.yaw_deg` nếu đặt (thắng), không thì từ `pose` tag, không
+    có pose thì 0."""
+    cfg = (site.get("actuator", {}).get("nodes", {}) or {}).get(node) or {}
+    if cfg.get("yaw_deg") is not None:
+        return float(cfg["yaw_deg"])
+    return 0.0 if pose is None else heading_yaw_deg(pose)
+
+
+def _wrap(deg: float) -> float:
+    return (deg + 180.0) % 360.0 - 180.0 if not -180.0 < deg <= 180.0 else deg
+
+
+def angles(pivot, target, yaw_deg: float = 0.0) -> tuple[float, float]:
+    """(pan, tilt) độ để tia từ `pivot` đi qua `target`; pan đo so với hướng đầu `yaw_deg` của node
+    (0 = +Y như cũ), tilt so với mặt phẳng ngang."""
     v = np.asarray(target, float) - np.asarray(pivot, float)
-    pan = math.degrees(math.atan2(-v[0], v[1]))
+    pan = _wrap(math.degrees(math.atan2(-v[0], v[1])) - yaw_deg)
     tilt = math.degrees(math.atan2(v[2], math.hypot(v[0], v[1])))
     return pan, tilt
 
 
-def reachable(site: dict, node: str, pivot, x: float, z: float) -> bool:
-    """Bia (x, z) trên mặt bảng có nằm trong giới hạn góc của `node` không."""
-    pan, tilt = angles(pivot, (x, site["board"]["plane_y"], z))
+def reachable_point(site: dict, node: str, pivot, point, yaw_deg: float = 0.0) -> bool:
+    """Điểm 3D (x, y, z) bất kỳ (bảng đứng hay nền) có nằm trong giới hạn pan/tilt của `node` không."""
+    pan, tilt = angles(pivot, point, yaw_deg)
     return limits(site, node).ok(pan, tilt)
+
+
+def reachable(site: dict, node: str, pivot, x: float, z: float, y: float | None = None,
+              yaw_deg: float = 0.0) -> bool:
+    """Bia (x, z) trên mặt bảng (y = plane_y) hoặc, nếu có `y`, điểm (x, y, z) bất kỳ có với tới được
+    không. Chữ ký cũ (x, z) vẫn dùng được cho bia trên bảng."""
+    y = site["board"]["plane_y"] if y is None else y
+    return reachable_point(site, node, pivot, (x, y, z), yaw_deg)

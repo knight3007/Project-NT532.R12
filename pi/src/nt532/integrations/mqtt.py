@@ -228,6 +228,8 @@ class MqttBridge:
         tgt = run.get("target") or {}
         out[self.station_topic] = {
             "phase": phase, "target": tgt.get("id") or "none", "decider": name, "decider_kind": kind,
+            "target_surface": tgt.get("surface"),
+            "target_xyz": [tgt.get(k) for k in ("x", "y", "z")] if "x" in tgt else None,
             **self._count, "latency_ms": self._latency, "outcome": self._outcome,
             "last_alert": self._alert_text,
         }

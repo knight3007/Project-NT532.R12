@@ -20,11 +20,69 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
+import numpy as np
+
+from ..orchestrator import aiming
 from ..orchestrator.machine import Phase, Settings
 
 STOP_OFF_S = 1.0  # sau nút dừng khẩn cấp, bơm và laser phải tắt hết trong chừng này giây
 STOP_WINDOW_S = 3.0  # chỉ xét khoảng này sau lúc dừng (lượt mới sau đó không bị tính là "còn bật")
 UNEXPECTED = ("fault", "stopped", None)  # kết cục không ai mong khi cảnh không nói gì thêm
+
+
+class Skip(Exception):
+    """Cảnh không dàn được trên cấu hình hiện tại (vd. bố cục node không với tới chỗ đặt lửa)."""
+
+
+def reach_nodes(station, x: float, z: float, y: float | None = None) -> set[str]:
+    """Các node với tới được điểm (x, y, z) theo giới hạn pan/tilt 3D, tính từ pose commissioning của
+    trạm (cùng cách orchestrator tính `reach`). Điểm trên bảng: bỏ `y`; trên nền: z = 0."""
+    orch, off = station.orch, aiming.pivot_offset(station.site)
+    return {n for n, pose in station.vision.nodes.items()
+            if orch._reach_fn(n, pose.to_world(off))(x, z, y)}
+
+
+def reachable_spot(station, node: str, x: float, z: float | None = None, y: float | None = None,
+                   margin: float = 0.12) -> tuple[float, float]:
+    """Điểm gần (x, z) trên bảng (hoặc (x, y) trên nền khi `z is None`) nhất mà `node` với tới được và
+    nằm trong tầm khớp bia theo X của node: chính điểm đó nếu thỏa, không thì quét lưới 5 cm. Trả (x, z) hoặc (x, y); không có thì `Skip`."""
+    floor = z is None
+    b, depth = station.site["board"], station.world.scene.table["depth"]
+    node_x = float(station.vision.nodes[node].position[0])
+    radius = 0.9 * station.site["targeting"]["sensor_match_radius_x"]  # bia phải lọt vào tầm khớp của node
+    lo2, hi2 = (margin, depth - margin) if floor else (margin, b["height"] - margin)
+    xs = np.arange(margin, b["width"] - margin + 1e-9, 0.05)
+    vs = np.arange(lo2, hi2 + 1e-9, 0.05)
+
+    def ok(px, pv):
+        if abs(px - node_x) > radius:
+            return False
+        return node in reach_nodes(station, px, 0.0, pv) if floor else node in reach_nodes(station, px, pv)
+
+    want = (x, y if floor else z)
+    if ok(*want):
+        return want
+    best = min(((px, pv) for px in xs for pv in vs if ok(px, pv)),
+               key=lambda q: np.hypot(q[0] - want[0], q[1] - want[1]), default=None)
+    if best is None:
+        raise Skip(f"{node} không với tới điểm nào trên {'nền' if floor else 'bảng'} với bố cục "
+                   f"{station.world.scene.node_layout}")
+    return float(best[0]), float(best[1])
+
+
+def _ignite_near(node: str, x: float, z: float, size: str = "small"):
+    """Lửa trên bảng gần (x, z), dời tới điểm `node` với tới được nếu bố cục node làm điểm gốc ngoài tầm."""
+    def setup(w, st):
+        w.ignite(*reachable_spot(st, node, x, z), size=size)
+    return setup
+
+
+def _ignite_floor(node: str, x: float, y: float):
+    """Lửa trên nền gần (x, y) mà `node` với tới được; không có thì cảnh bị bỏ qua (Skip)."""
+    def setup(w, st):
+        px, py = reachable_spot(st, node, x, None, y)
+        w.ignite(px, surface="floor", y=py)
+    return setup
 
 
 def fast_settings() -> Settings:
@@ -124,6 +182,8 @@ def score(scene: Scene, observed: dict) -> dict:
     `observed`: ready, timed_out, error, runs (Run.to_json), sprayed, lasered, fire_out (None nếu cảnh
     không có lửa), end_pumps, end_lasers, on_after_stop_s (None nếu cảnh không bấm dừng)."""
     notes: list[str] = []
+    if observed.get("skipped"):
+        return {"decision_ok": None, "safety_ok": True, "notes": [f"bỏ qua cảnh: {observed['skipped']}"]}
     sprayed, lasered = set(observed.get("sprayed", ())), set(observed.get("lasered", ()))
 
     safety_ok = True
@@ -244,7 +304,7 @@ def run_scene(station, scene: Scene, settle_s: float = 4.0, sample_s: float = 0.
     rec = Recorder(world, events, sample_s).start()
     t0 = time.time()
     extra: dict = {}
-    error = None
+    error = skipped = None
     fire_ids: set[int] = set()
     timed_out = False
     try:
@@ -253,9 +313,11 @@ def run_scene(station, scene: Scene, settle_s: float = 4.0, sample_s: float = 0.
             fire_ids = {s["id"] for s in world.truth()["sources"] if s["kind"] == "fire"}
             if scene.during is not None:
                 extra = scene.during(station, world) or {}
+        except Skip as e:
+            skipped = str(e)
         except Exception as e:  # noqa: BLE001 - cảnh hỏng thì báo trong verdict, không làm chết cả buổi demo
             error = f"{type(e).__name__}: {e}"
-        if error is None:  # dàn cảnh hỏng thì không chờ gì nữa
+        if error is None and skipped is None:  # dàn cảnh hỏng hay bị bỏ qua thì không chờ gì nữa
             timed_out = not _wait_done(station, scene, rec, fire_ids, time.time(), t0 + scene.timeout_s,
                                        settle_s, alert_wait_s)
         if timed_out:  # dừng hẳn để cảnh sau bắt đầu sạch; bơm còn bật sau đó mới là vi phạm
@@ -276,7 +338,7 @@ def run_scene(station, scene: Scene, settle_s: float = 4.0, sample_s: float = 0.
     after = None if stop_t is None else round(on_after(rec.changes, rec.t_end, stop_t), 2)
     alert_t = rec.alert_time
     observed = {
-        "ready": ready, "timed_out": timed_out, "error": error, "runs": runs,
+        "ready": ready, "timed_out": timed_out, "error": error, "skipped": skipped, "runs": runs,
         "sprayed": sorted(rec.pumped), "lasered": sorted(rec.lasered), "dual_pump": rec.dual,
         "fire_out": fire_out,
         "end_pumps": sorted(n for n, v in end_state["pumping"].items() if v),
@@ -309,7 +371,7 @@ def summary_entry(result: dict) -> dict:
     độ trễ, lửa có tắt không, verdict."""
     keys = ("name", "title", "expect", "outcomes", "sprayed", "lasered", "dual_pump", "alert_s", "latency_s",
             "fire_out", "end_pumps", "end_lasers", "on_after_stop_s", "timed_out", "ready", "error",
-            "duration_s", "verdict")
+            "skipped", "duration_s", "verdict")
     return {"runs": [compact_run(r) for r in result["runs"]], **{k: result.get(k) for k in keys}}
 
 
@@ -353,13 +415,13 @@ def _scenes() -> dict[str, Scene]:
             "fire_s1", "Đám cháy nhỏ gần vòi s1",
             "s1 báo động, camera thấy bia lửa, bộ quyết định chọn vòi s1 (gần nhất); trạm ngắm, chỉnh bằng "
             "laser rồi phun. Lửa tắt, bơm và laser tắt hết.",
-            lambda w, st: w.ignite(0.32, 0.30), timeout_s=150,
+            _ignite_near("s1", 0.32, 0.30), timeout_s=150,
             should_spray=True, expect_out=True, expect_nozzles={"s1"}),
         Scene(
             "fire_s2", "Đám cháy nhỏ gần vòi s2",
             "s2 báo động, bộ quyết định chọn vòi s2; trạm ngắm, chỉnh bằng laser rồi phun. Lửa tắt, bơm và "
             "laser tắt hết.",
-            lambda w, st: w.ignite(0.90, 0.30), timeout_s=150,
+            _ignite_near("s2", 0.90, 0.30), timeout_s=150,
             should_spray=True, expect_out=True, expect_nozzles={"s2"}),
         Scene(
             "fire_large", "Đám cháy lớn giữa bảng",
@@ -367,6 +429,13 @@ def _scenes() -> dict[str, Scene]:
             "biến vẫn vượt ngưỡng). Hai vòi chỉ phun cùng lúc khi Jev trả lời ở DECIDE (--decider hybrid "
             "--model-stages decide,verify hoặc --decider remote); baseline luật dùng một vòi gần nhất.",
             lambda w, st: w.ignite(0.60, 0.30, size="large"), timeout_s=300,
+            should_spray=True, expect_out=True),
+        Scene(
+            "fire_floor", "Đám cháy nhỏ trên mặt bàn",
+            "Lửa đặt trên nền (Z = 0), camera nhìn chếch xuống thấy bia. Trạm đo điểm trên nền, ngắm vòi s1 (tilt "
+            "chúc xuống), chỉnh bằng laser rồi phun. Cần bố cục node với tới nền (mặc định corners đã đủ); "
+            "bố cục posts (--layout posts) không với tới nên cảnh bị bỏ qua.",
+            _ignite_floor("s1", 0.30, 0.50), timeout_s=150,
             should_spray=True, expect_out=True),
         Scene(
             "lamp", "Đèn nóng giả làm lửa",

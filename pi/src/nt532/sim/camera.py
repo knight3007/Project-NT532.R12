@@ -17,11 +17,12 @@ class SimCamera:
 
     @classmethod
     def demo(cls) -> "SimCamera":
-        """Scene mặc định kèm hai thẻ bia (nếu đã sinh ảnh thẻ) để các script có cái mà nhìn."""
+        """Scene mặc định kèm hai thẻ trên bảng và một thẻ đứng trên nền (nếu đã sinh ảnh thẻ) để các script có cái mà nhìn."""
         scene = Scene()
         try:
             scene.add_card(0.30, 0.25)
             scene.add_card(0.90, 0.35)
+            scene.add_card_3d((0.60, 0.35, 0.0), "floor")
         except FileNotFoundError:
             pass
         return cls(scene)

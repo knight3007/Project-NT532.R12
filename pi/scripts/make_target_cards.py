@@ -1,20 +1,21 @@
-"""Sinh PDF A4 thẻ bia in hình lửa (cắt từ D-Fire, CC0) để dán lên bảng bia của sa bàn.
+"""Sinh thẻ bia in hình lửa (cắt từ D-Fire, CC0) để dán lên bảng bia, kèm bộ thẻ train cho sa bàn ảo.
 
-    uv run python scripts/make_target_cards.py                    # 2 trang, thẻ 70 mm
-    uv run python scripts/make_target_cards.py --size-mm 80 --pages 3
-    uv run python scripts/make_target_cards.py --no-pdf           # chỉ sinh PNG cho sa bàn ảo
+    uv run --no-sync python scripts/make_target_cards.py          # 12 thẻ in 100 mm + bộ thẻ train
+    uv run --no-sync python scripts/make_target_cards.py --no-pdf # chỉ PNG, không ghi PDF
 
-Chỉ giữ ảnh cắt mà model hiện tại báo lửa với độ tin cậy cao, mỗi ảnh gốc một thẻ, các thẻ lấy
-từ ảnh khác nhau. In ở tỷ lệ 100%, cắt theo nét xám rồi ép plastic. Danh sách ảnh nguồn ghi vào
-docs/print/target-cards.txt (để ghi nguồn trong báo cáo).
-
-Mỗi thẻ cũng được lưu thành PNG vuông 256 px trong --png-dir (mặc định data/sim/cards/) để sa bàn
-ảo (nt532.sim) dán lên bảng; --no-pdf bỏ qua PDF và danh sách nguồn.
+Hai bộ tách biệt: không trùng ảnh gốc, không cùng chuỗi video (SEQ_GAP).
+  - Bộ in (mặc định 12 thẻ), lấy từ D-Fire test và val (model chưa từng train trên các ảnh này), tiêu
+    chí chặt: ban ngày, ngọn lửa sáng chiếm >= 60% khung, ít pixel đen, model báo lửa conf >= 0,8.
+    PNG vào data/sim/cards/, PDF vào docs/print/target-cards.pdf, nguồn vào target-cards.txt.
+    In ở tỷ lệ 100%, cắt theo nét xám rồi ép plastic. Bộ này chỉ để ĐÁNH GIÁ, không đưa vào train.
+  - Bộ train (mặc định 240 thẻ), lấy từ D-Fire train, tiêu chí nới hơn để đa dạng. PNG vào
+    data/sim/cards-train/, nguồn vào sources.txt cùng thư mục. Chỉ dùng để sinh dữ liệu train sa bàn.
 """
 
 import argparse
 import random
 import re
+from dataclasses import dataclass
 from pathlib import Path
 
 import cv2
@@ -68,45 +69,105 @@ def seq_key(stem: str) -> tuple[str, int] | None:
     return (m.group(1), int(m.group(2))) if m else None
 
 
-def pick_cards(n: int, weights: Path, min_conf: float, context: float, seed: int) -> list[dict]:
-    """Duyệt ngẫu nhiên ảnh D-Fire có lửa, giữ ảnh cắt mà model báo lửa >= min_conf."""
+@dataclass(frozen=True)
+class Criteria:
+    """Tiêu chí chọn ảnh cắt: lửa sáng, chiếm gần hết khung, ban ngày, model báo lửa conf cao."""
+
+    context: float  # nới vùng cắt so với hộp lửa (nhỏ = ít ngữ cảnh)
+    min_fill: float  # diện tích hộp lửa / diện tích vùng cắt tối thiểu
+    min_gray: float  # độ sáng xám trung bình tối thiểu (0-255)
+    max_dark: float  # tỷ lệ pixel xám < DARK_LEVEL tối đa (loại cảnh đêm nền đen)
+    min_conf: float  # conf của model hiện tại trên vùng cắt
+
+
+PRINT = Criteria(context=1.12, min_fill=0.60, min_gray=95, max_dark=0.12, min_conf=0.80)
+TRAIN = Criteria(context=1.25, min_fill=0.40, min_gray=70, max_dark=0.30, min_conf=0.50)
+DARK_LEVEL = 35
+
+
+def candidates_for(splits: tuple[str, ...], seed: int) -> list[tuple[str, str, tuple]]:
     fire = fire_class_id()
-    candidates = []
-    for split in ("test", "val", "train"):
+    out = []
+    for split in splits:
         for lab in sorted((DFIRE / split / "labels").glob("*.txt")):
             box = largest_fire_box(lab, fire)
             if box:
-                candidates.append((split, lab.stem, box))
-    random.Random(seed).shuffle(candidates)
-    print(f"{len(candidates)} ảnh D-Fire có lửa; cần {n} thẻ")
+                out.append((split, lab.stem, box))
+    random.Random(seed).shuffle(out)
+    return out
+
+
+def pick_cards(
+    n: int,
+    weights: Path,
+    crit: Criteria,
+    splits: tuple[str, ...],
+    seed: int,
+    seen: list[tuple[str, int]],
+    used_files: set[str],
+) -> list[dict]:
+    """Duyệt ngẫu nhiên ảnh D-Fire có lửa, giữ ảnh cắt đạt `crit`.
+
+    `seen` (khóa chuỗi video) và `used_files` được cập nhật tại chỗ, để bộ thẻ chọn sau tránh ảnh
+    và chuỗi video của bộ chọn trước.
+    """
+    candidates = candidates_for(splits, seed)
+    print(f"{len(candidates)} ảnh D-Fire có lửa ({'+'.join(splits)}); cần {n} thẻ")
 
     cards: list[dict] = []
-    seen: list[tuple[str, int]] = []
     for split, stem, box in candidates:
         key = seq_key(stem)
         if key and any(k[0] == key[0] and abs(k[1] - key[1]) < SEQ_GAP for k in seen):
             continue
         path = next((DFIRE / split / "images").glob(f"{stem}.*"), None)
-        img = cv2.imread(str(path)) if path else None
+        if path is None or path.name in used_files or box[2] * box[3] < 0.01:
+            continue
+        img = cv2.imread(str(path))
         if img is None:
             continue
-        crop = square_crop(img.shape[:2], box, context)
+        crop = square_crop(img.shape[:2], box, crit.context)
         if crop is None:
             continue
         x0, y0, side = crop
         patch = img[y0 : y0 + side, x0 : x0 + side]
-        found = detect(patch, weights, conf=0.25, device="cpu")
-        if not found or found[0].conf < min_conf:
+        h, w = img.shape[:2]
+        if box[2] * w * box[3] * h / side**2 < crit.min_fill:
+            continue
+        gray = cv2.cvtColor(patch, cv2.COLOR_BGR2GRAY)
+        if gray.mean() < crit.min_gray or (gray < DARK_LEVEL).mean() > crit.max_dark:
+            continue
+        found = detect(patch, weights, conf=0.25)
+        if not found or found[0].conf < crit.min_conf:
             continue
         cards.append(
             {"split": split, "file": path.name, "crop": (x0, y0, side), "conf": found[0].conf}
-            | {"image": patch}
+            | {"image": patch, "gray": float(gray.mean())}
         )
+        used_files.add(path.name)
         if key:
             seen.append(key)
         if len(cards) == n:
             break
     return cards
+
+
+def write_pngs(cards: list[dict], png_dir: Path) -> None:
+    png_dir.mkdir(parents=True, exist_ok=True)
+    for old in png_dir.glob("card_*.png"):
+        old.unlink()
+    for i, card in enumerate(cards, 1):
+        patch = cv2.resize(card["image"], (256, 256), interpolation=cv2.INTER_AREA)
+        cv2.imwrite(str(png_dir / f"card_{i:03d}.png"), patch)
+
+
+def source_lines(cards: list[dict]) -> list[str]:
+    lines = []
+    for i, c in enumerate(cards, 1):
+        x0, y0, s = c["crop"]
+        lines.append(
+            f"{i:03d}\t{c['split']}/{c['file']}\t{x0},{y0},{s}\t{c['conf']:.2f}\t{c['gray']:.0f}"
+        )
+    return lines
 
 
 def layout(size_mm: float) -> tuple[int, int, float, float]:
@@ -140,30 +201,41 @@ def render_page(cards: list[dict], first_no: int, size_mm: float) -> np.ndarray:
 
 def main() -> None:
     p = argparse.ArgumentParser()
-    p.add_argument("--size-mm", type=float, default=70, help="cạnh thẻ")
-    p.add_argument("--pages", type=int, default=2)
+    p.add_argument("--size-mm", type=float, default=100, help="cạnh thẻ in")
+    p.add_argument("--count", type=int, default=12, help="số thẻ in")
+    p.add_argument("--train-count", type=int, default=240, help="số thẻ train (0 = bỏ bộ train)")
     p.add_argument("--weights", default=str(DEFAULT_WEIGHTS))
-    p.add_argument("--min-conf", type=float, default=0.7)
-    p.add_argument("--context", type=float, default=1.3, help="nới vùng cắt so với hộp lửa")
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--png-dir", default=str(REPO_ROOT / "data" / "sim" / "cards"))
+    p.add_argument("--train-dir", default=str(REPO_ROOT / "data" / "sim" / "cards-train"))
     p.add_argument("--no-pdf", action="store_true", help="chỉ lưu PNG, không ghi PDF và danh sách")
     args = p.parse_args()
+    weights = Path(args.weights)
 
-    per_page = layout(args.size_mm)[0] * layout(args.size_mm)[1]
-    cards = pick_cards(
-        per_page * args.pages, Path(args.weights), args.min_conf, args.context, args.seed
-    )
-    if not cards:
-        raise SystemExit("không chọn được ảnh nào; hạ --min-conf thử")
-    png_dir = Path(args.png_dir)
-    png_dir.mkdir(parents=True, exist_ok=True)
-    for i, card in enumerate(cards, 1):
-        patch = cv2.resize(card["image"], (256, 256), interpolation=cv2.INTER_AREA)
-        cv2.imwrite(str(png_dir / f"card_{i:02d}.png"), patch)
-    print(f"{len(cards)} thẻ PNG: {png_dir}")
+    seen: list[tuple[str, int]] = []
+    used: set[str] = set()
+    cards = pick_cards(args.count, weights, PRINT, ("test", "val"), args.seed, seen, used)
+    if len(cards) < args.count:
+        raise SystemExit(f"chỉ chọn được {len(cards)}/{args.count} thẻ in; nới PRINT")
+    write_pngs(cards, Path(args.png_dir))
+    print(f"{len(cards)} thẻ in PNG: {args.png_dir}")
+
+    if args.train_count:
+        train = pick_cards(args.train_count, weights, TRAIN, ("train",), args.seed, seen, used)
+        write_pngs(train, Path(args.train_dir))
+        head = [
+            "Thẻ train cho sa bàn ảo, cắt từ D-Fire train. KHÔNG dùng để in hay đánh giá.",
+            "Cột: số thẻ, ảnh nguồn, vùng cắt x0,y0,cạnh (px), conf của model, độ sáng xám TB.",
+            "",
+        ]
+        (Path(args.train_dir) / "sources.txt").write_text(
+            "\n".join(head + source_lines(train)) + "\n", encoding="utf-8"
+        )
+        print(f"{len(train)} thẻ train PNG: {args.train_dir}")
     if args.no_pdf:
         return
+
+    per_page = layout(args.size_mm)[0] * layout(args.size_mm)[1]
     pages = [
         render_page(cards[i : i + per_page], i + 1, args.size_mm)
         for i in range(0, len(cards), per_page)
@@ -173,15 +245,20 @@ def main() -> None:
     images = [Image.fromarray(cv2.cvtColor(pg, cv2.COLOR_BGR2RGB)) for pg in pages]
     images[0].save(pdf, save_all=True, append_images=images[1:], resolution=DPI, quality=95)
 
+    splits = sorted({c["split"] for c in cards})
     lines = [
         "Thẻ bia in hình lửa, cắt từ ảnh D-Fire (CC0), bản chia sẵn của sayedgamal99 trên Kaggle.",
-        f"Cạnh thẻ {args.size_mm:g} mm, chỉ giữ ảnh cắt model báo lửa với conf >= {args.min_conf}.",
-        "Cột: số thẻ, ảnh nguồn (tập/tên), vùng cắt x0,y0,cạnh (px), conf của model.",
+        f"Cạnh thẻ {args.size_mm:g} mm, mỗi thẻ có viền trắng {MARGIN_MM} mm quanh phần ảnh.",
+        f"Ảnh nguồn nằm ở split D-Fire: {', '.join(splits)} (model chưa train trên các ảnh này).",
+        (
+            f"Tiêu chí: ban ngày, lửa chiếm >= {PRINT.min_fill:.0%} khung, "
+            f"xám TB >= {PRINT.min_gray:g}, pixel đen <= {PRINT.max_dark:.0%}, "
+            f"conf model >= {PRINT.min_conf}."
+        ),
+        "Cột: số thẻ, ảnh nguồn (tập/tên), vùng cắt x0,y0,cạnh (px), conf của model, xám TB.",
         "",
+        *source_lines(cards),
     ]
-    for i, c in enumerate(cards, 1):
-        x0, y0, s = c["crop"]
-        lines.append(f"{i:02d}\t{c['split']}/{c['file']}\t{x0},{y0},{s}\t{c['conf']:.2f}")
     (OUT_DIR / "target-cards.txt").write_text("\n".join(lines) + "\n", encoding="utf-8")
     print(f"{len(cards)} thẻ trên {len(pages)} trang: {pdf.relative_to(REPO_ROOT)}")
 

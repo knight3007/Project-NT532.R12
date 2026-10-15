@@ -3,8 +3,10 @@
     uv run python scripts/sim_demo.py --show                    # một lượt, hiện ảnh từng bước
     uv run python scripts/sim_demo.py --runs 30 --seed 1        # 30 lượt, in thống kê
     uv run python scripts/sim_demo.py --runs 30 --diagnose      # thêm: vì sao YOLO bỏ sót bia
+    uv run python scripts/sim_demo.py --runs 30 --floor 0.5 --camera left
 
-Mỗi lượt: đặt 1–3 thẻ bia ở vị trí ngẫu nhiên trên bảng, giả cảnh báo từ s1 hoặc s2, gọi
+Mỗi lượt: đặt 1–3 thẻ bia ở vị trí ngẫu nhiên trên bảng (--floor F: mỗi thẻ có xác suất F nằm trên nền,
+chỉ ở chỗ node với tới được theo giới hạn pan/tilt 3D; sai số tính 3D), giả cảnh báo từ s1 hoặc s2, gọi
 `vision.targets(frame, sensor=...)`, chọn bia tin cậy nhất, ngắm bằng `aim_angles` (bản tham chiếu
 của sim) rồi chạy vòng CORRECT bằng find_spot với servo lệch ngẫu nhiên tới 2 độ. Mọi sai số tính
 so với ground truth của sim. Cần data/sim/cards/ (make_target_cards.py) và models/fire-n.pt.
@@ -19,7 +21,8 @@ import cv2
 import numpy as np
 
 from nt532.config import REPO_ROOT
-from nt532.sim import Scene, SimCamera, default_intrinsics, sim_site
+from nt532.orchestrator import aiming
+from nt532.sim import Scene, SimCamera, add_sim_args, default_intrinsics, sim_options, sim_site
 from nt532.sim.loop import correct
 from nt532.vision import Vision, project, read_frames, read_fresh
 from nt532.vision.detect import detect
@@ -29,31 +32,40 @@ MATCH_M = 0.05  # hộp YOLO coi là đúng bia khi cách tâm thẻ thật khô
 SPACING_M = 0.15  # hai thẻ cách nhau ít nhất chừng này
 
 
-def place_cards(scene: Scene, vision: Vision, rng, sensor: str, n: int) -> list[int]:
-    """Đặt n thẻ ngẫu nhiên, thẻ đầu nằm trong tầm khớp của `sensor`; tránh vùng bị trụ node che."""
-    radius = scene.site["targeting"]["sensor_match_radius_x"]
+def place_cards(scene: Scene, vision: Vision, rng, sensor: str, n: int, floor_frac: float = 0.0) -> list[int]:
+    """Đặt n thẻ ngẫu nhiên, thẻ đầu nằm trong tầm khớp của `sensor`; tránh vùng bị trụ node che.
+    Mỗi thẻ có xác suất `floor_frac` nằm trên nền (Z = 0), chỉ ở điểm `sensor` với tới được."""
+    site = scene.site
+    radius = site["targeting"]["sensor_match_radius_x"]
     sx = vision.nodes[sensor].position[0]
-    board = scene.board
+    board, depth = scene.board, scene.table["depth"]
+    pivot = vision.nodes[sensor].to_world(aiming.pivot_offset(site))
+    yaw = aiming.heading_yaw_deg(vision.nodes[sensor])
     hulls = [scene.node_hull_px(name, pad=0.04) for name in scene.nodes]
     scene.clear_cards()
-    placed: list[tuple[float, float]] = []
+    placed: list[np.ndarray] = []
     ids = []
     while len(ids) < n:
         lo, hi = (max(sx - radius, 0.10), min(sx + radius, board["width"] - 0.10))
         x = rng.uniform(lo, hi) if not ids else rng.uniform(0.10, board["width"] - 0.10)
-        z = rng.uniform(0.10, board["height"] - 0.10)
-        if any(np.hypot(x - px, z - pz) < SPACING_M for px, pz in placed):
+        on_floor = rng.random() < floor_frac
+        if on_floor:
+            pos = (x, rng.uniform(0.10, depth - 0.10), 0.0)
+            if not aiming.reachable_point(site, sensor, pivot, pos, yaw):
+                continue
+        else:
+            pos = (x, board["plane_y"], rng.uniform(0.10, board["height"] - 0.10))
+        if any(np.linalg.norm(np.array(pos) - q) < SPACING_M for q in placed):
             continue
-        corners = [(x + a, board["plane_y"], z + b) for a in (-0.04, 0.04) for b in (-0.04, 0.04)]
-        px = [
-            (float(u), float(v)) for u, v in _project(scene, corners + [(x, board["plane_y"], z)])
-        ]
+        scene_id = scene.add_card_3d(pos, "floor" if on_floor else "wall")
+        px = [(float(u), float(v)) for u, v in _project(scene, [*scene.card_quad(scene_id), pos])]
         if any(
             cv2.pointPolygonTest(h.astype(np.float32), p, False) >= 0 for h in hulls for p in px
         ):
+            scene.remove_card(scene_id)
             continue
-        placed.append((x, z))
-        ids.append(scene.add_card(x, z))
+        placed.append(np.array(pos))
+        ids.append(scene_id)
     return ids
 
 
@@ -64,6 +76,8 @@ def _project(scene: Scene, points) -> np.ndarray:
 def annotate(frame, vision, scene, targets, chosen, ids, spot_truth, text) -> np.ndarray:
     view = frame.copy()
     cv2.polylines(view, [vision.board_polygon().astype(np.int32)], True, CYAN, 1)
+    if len(floor := vision.floor_polygon()):
+        cv2.polylines(view, [floor.astype(np.int32)], True, (220, 80, 220), 1)
     for i in ids:  # thẻ thật
         u, v = _project(scene, [scene.card_position(i)])[0]
         cv2.drawMarker(view, (int(u), int(v)), GREEN, cv2.MARKER_CROSS, 14, 1)
@@ -91,14 +105,10 @@ def diagnose(scene: Scene, vision: Vision, frame, ids, args) -> dict[str, tuple[
     confs: dict[str, list[float]] = {}
     sides = []
     for i in ids:
-        c = scene.cards[i]
-        r, y = c.size / 2, scene.board["plane_y"]
-        corners = np.array(
-            [project((c.x + a, y, c.z + b), scene.camera) for a in (-r, r) for b in (-r, r)]
-        )
+        corners = _project(scene, scene.card_quad(i))
         side = float(np.ptp(corners, axis=0).mean())
         sides.append(side)
-        cx, cy = project((c.x, y, c.z), scene.camera)
+        cx, cy = corners.mean(axis=0)
         px0, py0 = max(int(cx - side * 1.5), 0), max(int(cy - side * 1.5), 0)
         near = frame[py0 : int(cy + side * 1.5), px0 : int(cx + side * 1.5)]
         views = {
@@ -134,6 +144,8 @@ def main() -> None:
     p.add_argument("--show", action="store_true", help="hiện ảnh từng bước (phím bất kỳ để tiếp)")
     p.add_argument("--diagnose", action="store_true", help="in cỡ thẻ và conf thấp cho thẻ bị sót")
     p.add_argument("--cards", default="1,3", help="khoảng số thẻ mỗi lượt, ví dụ 1,3")
+    p.add_argument("--floor", type=float, default=0.0,
+                   help="xác suất mỗi thẻ nằm trên nền thay vì bảng (0 đến 1, mặc định 0)")
     p.add_argument("--bias-deg", type=float, default=2.0, help="sai lệch servo tối đa mỗi trục")
     p.add_argument("--focal", type=float, default=900.0, help="tiêu cự (pixel) ứng với rộng 1280")
     p.add_argument("--resolution", default="1280,720", help="độ phân giải ảnh, ví dụ 1920,1080")
@@ -143,7 +155,11 @@ def main() -> None:
     p.add_argument("--device", default=None, help="mặc định để ultralytics tự chọn (GPU nếu có)")
     p.add_argument("--out", default="runs/sim", help="thư mục lưu ảnh minh họa")
     p.add_argument("--save-n", type=int, default=3, help="số lượt đầu được lưu ảnh")
+    add_sim_args(p)
     args = p.parse_args()
+    if not 0.0 <= args.floor <= 1.0:
+        p.error("--floor phải trong khoảng 0 đến 1")
+    sim = sim_options(args, p)
 
     site = sim_site()
     cfg = site["vision"]
@@ -158,6 +174,8 @@ def main() -> None:
         seed=args.seed,
         noise_sigma=args.noise,
         card_gain=args.card_gain,
+        camera_pose=sim["camera"],
+        node_layout=sim["node_layout"],
     )
     cap = SimCamera(scene)
     detector = partial(
@@ -168,7 +186,7 @@ def main() -> None:
         device=args.device,
     )
     vision = Vision(site, scene.intrinsics, detector)
-    out = REPO_ROOT / args.out
+    out = Path(REPO_ROOT / args.out)
     out.mkdir(parents=True, exist_ok=True)
 
     cam = scene.camera.position
@@ -194,7 +212,7 @@ def main() -> None:
     for run in range(1, args.runs + 1):
         sensor = str(rng.choice(sorted(scene.nodes)))
         n_cards = int(rng.integers(lo, hi + 1))
-        ids = place_cards(scene, vision, rng, sensor, n_cards)
+        ids = place_cards(scene, vision, rng, sensor, n_cards, args.floor)
         truth = {i: scene.card_position(i) for i in ids}
         sx = vision.nodes[sensor].position[0]
         in_range = [
@@ -204,12 +222,12 @@ def main() -> None:
         targets = vision.targets(frame, sensor=sensor)
 
         def nearest(pos, ids=ids, truth=truth):
-            return min(ids, key=lambda j: np.linalg.norm((pos - truth[j])[[0, 2]]))
+            return min(ids, key=lambda j: np.linalg.norm(pos - truth[j]))
 
         matched = [
             t
             for t in targets
-            if np.linalg.norm((t.position - truth[nearest(t.position)])[[0, 2]]) < MATCH_M
+            if np.linalg.norm(t.position - truth[nearest(t.position)]) < MATCH_M
         ]
         found_ids = {nearest(t.position) for t in matched}
         seen += len(found_ids & set(in_range))
@@ -236,7 +254,7 @@ def main() -> None:
 
         chosen = max(matched, key=lambda t: t.detection.conf)
         confs.append(chosen.detection.conf)
-        loc = float(np.linalg.norm((chosen.position - truth[nearest(chosen.position)])[[0, 2]]))
+        loc = float(np.linalg.norm(chosen.position - truth[nearest(chosen.position)]))
         loc_err.append(loc * 100)
         real_target = truth[nearest(chosen.position)]
 
@@ -254,7 +272,7 @@ def main() -> None:
             lost += 1
             print("  không thấy vết laser")
             continue
-        errs = [float(np.linalg.norm((s - real_target)[[0, 2]])) * 100 for s in result.truth]
+        errs = [float(np.linalg.norm(s - real_target)) * 100 for s in result.truth]
         first_err.append(errs[0])
         final_err.append(errs[-1])
         rounds.append(result.rounds)
@@ -309,7 +327,7 @@ def main() -> None:
                 f"conf trung vị {np.median(confs_):.2f}"
             )
     cv2.destroyAllWindows()
-    print(f"Ảnh minh họa: {Path(out).relative_to(REPO_ROOT)}")
+    print(f"Ảnh minh họa: {out.relative_to(REPO_ROOT) if out.is_relative_to(REPO_ROOT) else out}")
 
 
 if __name__ == "__main__":

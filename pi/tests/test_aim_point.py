@@ -21,8 +21,8 @@ def rows_of(path):
         return list(csv.DictReader(f))
 
 
-def run_on(link, tmp_path, points):
-    st = build_sim(link=link, fps=12)
+def run_on(link, tmp_path, points, layout=None):
+    st = build_sim(link=link, fps=12, node_layout=layout)
     try:
         st.start(orchestrate=False)
         sent = []
@@ -51,8 +51,11 @@ def test_point_near_centre_is_measured_and_laser_ends_off(tmp_path, link):
     assert not any(st.world.truth()["lasers"].values())
 
 
-def test_point_outside_limits_is_skipped_without_aim(tmp_path):
-    st, _, csv_rows, sent = run_on("mem", tmp_path, [("s1", 1.15, 0.30)])
+# Giới hạn pan ±70 độ: ở bố cục posts (trụ sát bảng) điểm sát mép phải bảng đã ngoài tầm s1; ở corners
+# s1 nằm ở góc (0, 0) nên mọi điểm trên bảng đều với tới, phải chọn điểm lệch ra ngoài mép trái bảng.
+@pytest.mark.parametrize("layout,x", [("posts", 1.15), ("corners", -0.80)])
+def test_point_outside_limits_is_skipped_without_aim(tmp_path, layout, x):
+    st, _, csv_rows, sent = run_on("mem", tmp_path, [("s1", x, 0.30)], layout)
     assert sent == []
     assert "ngoài giới hạn" in csv_rows[0]["note"] and csv_rows[0]["miss_cm"] == ""
     assert not any(st.world.truth()["lasers"].values())

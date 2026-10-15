@@ -1,6 +1,6 @@
 from .camera import open_camera, read_frames, read_fresh
 from .detect import detect
-from .localize import localize, pixel_ray, project
+from .localize import localize, localize_surfaces, pixel_ray, project
 from .spot import find_spot
 from .stream import StreamCapture
 from .system import Commissioning, Health, Vision
@@ -21,6 +21,7 @@ __all__ = [
     "detect_tags",
     "find_spot",
     "localize",
+    "localize_surfaces",
     "median_corners",
     "open_camera",
     "pixel_ray",

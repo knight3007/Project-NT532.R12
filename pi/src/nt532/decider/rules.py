@@ -15,6 +15,8 @@ from .state_text import (  # noqa: F401 - HB_MAX_MS, POSE_MAX_S, nozzle_healthy 
     target_candidates,
 )
 
+MATCH_TOL_M = 0.05  # dung sai khi so khoảng cách 3D của hai node tới bia
+
 
 def _last_conf(conf: list) -> float:
     """Conf của khung gần nhất còn phát hiện; luật thật chỉ chụp một ảnh lúc LOCALIZE."""
@@ -23,10 +25,16 @@ def _last_conf(conf: list) -> float:
 
 def rule_decide(obs: dict, geo: Geometry) -> dict:
     alarm = obs["alarm"]
-    matched = [
-        t for t in obs["targets"]
-        if _last_conf(t["conf"]) >= geo.detect_conf and t["dist"][alarm] <= geo.match_radius
-    ]
+    # Ghép sensor-bia: luật cũ của kế hoạch (|dX| <= bán kính, obs["dist"]) HOẶC node báo động là node
+    # gần bia hơn theo khoảng cách 3D (obs["dist3"], dung sai 5 cm vì sensor có thể mù). Vế sau cần vì
+    # bia nền cách node nhiều theo Y và vì node đặt ở hai góc làm |dX| vượt xa 0,35 m: chỉ dùng |dX| thì
+    # bỏ sót hầu hết lửa. Không cần bán kính 3D, đúng với mọi cách đặt node. Thiếu dist3 thì chỉ có vế cũ.
+    def near_alarm(t: dict) -> bool:
+        d3 = t.get("dist3")
+        return t["dist"][alarm] <= geo.match_radius or (
+            bool(d3) and d3[alarm] <= min(d3.values()) + MATCH_TOL_M)
+
+    matched = [t for t in obs["targets"] if _last_conf(t["conf"]) >= geo.detect_conf and near_alarm(t)]
     if not matched:
         return {"real_fire": False, "action": ACTIONS[2], "target": None, "nozzle": alarm}
     best = max(matched, key=lambda t: _last_conf(t["conf"]))
