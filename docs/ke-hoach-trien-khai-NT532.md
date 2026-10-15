@@ -71,24 +71,24 @@ Sa bàn hình chữ L: mặt bàn 120 × 80 cm làm sàn, bảng bia 120 × 60 c
 
 &#91;embedded content: sa bàn · mặt bằng nhìn từ trên xuống\]
 
-Webcam đứng sau và cao hơn cụm vòi phun nên không bị che; tia ngắm tới bảng gần vuông góc nên sai 1° chỉ lệch khoảng 1,2 cm.
+Webcam đứng sau và cao hơn hai cụm vòi phun nên không bị che. Tia ngắm từ góc trước tới giữa bảng dài khoảng 1 m và chếch khoảng 37° so với pháp tuyến bảng, nên sai 1° lệch khoảng 2 cm; tới góc bảng phía đối diện (dài khoảng 1,45 m, chếch khoảng 56°) sai 1° lệch khoảng 4–5 cm.
 
 | Thành phần | Vị trí | Ghi chú |
 | --- | --- | --- |
 | Bảng bia | Mép sau bàn, dựng đứng | Mặt phẳng Y = 0,80 m; mờ, màu sáng |
 | Webcam | Chính giữa, cách mép trước khoảng 40 cm, cao khoảng 70 cm so với mặt bàn | Nhìn chéo xuống, thấy cả bảng và mọi tag; khóa lấy nét và phơi sáng |
-| Cụm vòi phun | Giữa bàn phía trước, cách mép trước 15 cm, trên trụ cao 30 cm | Cách bảng khoảng 65 cm; vòi và laser tâm ngắm gắn song song, ngang tầm giữa bảng |
-| Sensor 1 và 2 | Trên mặt bàn, cách bảng khoảng 25 cm, lệch trái và lệch phải | Mỗi sensor giữ một vùng; đặt trong hộp che nước |
+| Cụm vòi phun (node s1, s2) | Hai góc trước bàn, trên trụ: s1 ở góc trước trái, tâm tag đế tại (0; 0; 0,25) m; s2 ở góc trước phải, tại (1,2; 0; 0,25) m | Tâm quay pan–tilt cao hơn tag 8 cm (z ≈ 0,33 m), ngang tầm giữa bảng; vòi và laser tâm ngắm gắn song song. Pan = 0 của mỗi node nhìn chéo vào giữa bảng, về điểm (0,6; 0,8): xoay −36,87° (s1) và +36,87° (s2) so với +Y (ngược chiều kim đồng hồ nhìn từ trên là dương). Cách điểm giữa bảng khoảng 1 m |
+| Sensor 1 và 2 | Trên cùng node với cụm vòi, tức hai góc trước bàn | Mỗi sensor giữ một vùng, xa bảng và sàn hơn so với đặt sát bảng nên đo lại ngưỡng; đặt trong hộp che nước |
 | Tag tham chiếu | 4 tag dán cứng trên mặt bàn, tọa độ đo bằng thước | Định nghĩa gốc tọa độ; phát hiện camera bị xê dịch |
 | Tag của node | Nằm ngửa trên nắp sensor và trên đế cố định của vòi phun | Không dán lên phần quay của pan–tilt; ép plastic để chịu nước |
 
 ### Quy ước dùng chung
 
 - **Gốc tọa độ:** góc trước bên trái mặt bàn. X sang phải dọc mép trước, Y hướng về bảng bia, Z lên trên. Đơn vị mét và độ.
-- **Góc ngắm:** pan = 0 và tilt = 0 khi tia laser vuông góc với bảng. Pan dương quay sang trái (nhìn từ sau vòi), tilt dương ngẩng lên.
+- **Góc ngắm:** tilt = 0 khi tia laser nằm ngang; pan = 0 khi tia hướng về giữa bảng, tức lệch khoảng ±36,87° so với +Y (hướng `yaw` của node; Pi lấy từ trục +Y của tag đế, hoặc khai ở `actuator.nodes.*.yaw_deg` trong `config/site.yaml`). Pan dương quay sang trái (nhìn từ sau vòi), tilt dương ngẩng lên.
 - **Tag:** họ AprilTag 36h11. Cạnh 8 cm cho tag tham chiếu và đế vòi, 5–6 cm cho sensor. Đo lại cạnh bằng thước sau khi in.
 - **Bia:** thẻ in hình lửa cỡ 6–8 cm, ép plastic, gắn bằng nam châm hoặc băng dính gai để đổi vị trí nhanh.
-- **Ghép cảnh báo với mục tiêu:** khi một sensor báo động, chỉ nhận bia có tọa độ X cách sensor đó không quá 0,35 m. Vị trí sensor lấy từ tag của nó.
+- **Ghép cảnh báo với mục tiêu:** khi một sensor báo động, nhận bia có tọa độ X cách sensor đó không quá 0,35 m, hoặc bia mà node báo động là node gần nhất theo khoảng cách 3D. Vị trí sensor lấy từ tag của nó.
 - **Vùng phun và chiếu:** giới hạn góc để tia nước và tia laser không ra khỏi bảng bia. Không đặt gương, kính hay vật bóng sau và quanh bảng.
 
 Nước và điện: đặt khay hứng dọc chân bảng. Pi, S3, nguồn và ổ cắm nằm phía sau vòi phun và có che. Lau khô bảng giữa các lượt đo.
@@ -284,7 +284,7 @@ Gác lại trong đồ án này: Matter, camera thứ hai, Depth Anything.
 
 | Rủi ro | Dấu hiệu sớm | Đường lui |
 | --- | --- | --- |
-| Bơm phun yếu hoặc tia nước tỏa rộng | Thử tầm phun ở tuần 2 không tới bảng | Đổi đầu vòi nhỏ hơn, đưa trụ lại gần bảng, hoặc đổi bơm áp cao hơn |
+| Bơm phun yếu hoặc tia nước tỏa rộng | Thử tầm phun ở tuần 2 không tới bảng | Đổi đầu vòi nhỏ hơn, dời hai trụ vào phía trong và gần bảng hơn so với hai góc trước, hoặc đổi bơm áp cao hơn |
 | Hỏng một con H2 | Board không nạp được hoặc không vào mạng | Mua ngay một H2 mini; trong lúc chờ, chạy với một sensor |
 | Laser lệch quá dung sai | Cổng tuần 2 không đạt 5 cm | Dựa vào bước CORRECT; nếu vẫn lệch, hiệu chỉnh trực tiếp từ pixel sang góc bằng 9 điểm trên bảng, bỏ qua chuỗi pose tag |
 | Pose tag nhiễu hoặc camera không thấy tag | Sai số vị trí trên 2 cm | Tăng cỡ tag, lấy trung bình nhiều khung; với sensor chỉ dùng vị trí, không dùng hướng |

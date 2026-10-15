@@ -10,7 +10,7 @@ File kế hoạch gốc chưa sửa; các mục dưới đây ghi đè lên nó.
 | --- | --- | --- |
 | Node chấp hành | 1 ESP32-S3 qua Wi-Fi | 2 ESP32-H2 qua Thread, cùng board với sensor |
 | Số cụm pan–tilt, bơm, laser | 1 | 2 |
-| Vị trí vòi | Giữa bàn phía trước, cách bảng 65 cm | Tại hai vị trí sensor |
+| Vị trí vòi | Giữa bàn phía trước, cách bảng 65 cm | Hai góc trước bàn, cùng chỗ với sensor (s1 ở góc trước trái, s2 ở góc trước phải), trên trụ |
 | Tag | Tag sensor 5–6 cm và tag đế vòi 8 cm | Một tag 8 cm trên đế cố định của mỗi node |
 | Chọn vòi | Chỉ có một | Bộ quyết định chọn `s1`, `s2` hoặc cả hai cùng phun (mục dưới); không còn mặc định node báo động |
 | Hợp đồng CoAP | `/aim`, `/fire`, `/stop`, `/hb`, `/status` tới S3 | Giữ nguyên, gửi tới node H2 tương ứng qua Thread |

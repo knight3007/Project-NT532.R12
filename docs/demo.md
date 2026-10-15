@@ -44,12 +44,12 @@ Kết quả ghi vào `runs/` (hoặc `--runs-dir`):
 
 ## 2. Các cảnh
 
-Tọa độ trên mặt bảng (mét), node s1 ở X 0,30 và s2 ở X 0,90.
+Tọa độ trên mặt bảng (X; Z, mét). Hai node ở hai góc trước bàn: s1 ở góc trước trái (X 0), s2 ở góc trước phải (X 1,2), pan = 0 hướng chéo vào giữa bảng. "Về phía s1" nghĩa là X nhỏ, "về phía s2" là X lớn.
 
 | Cảnh | Dàn gì | Khán giả thấy | Kết quả mong đợi với luật | Với Jev ở DECIDE |
 | --- | --- | --- | --- | --- |
-| `fire_s1` | Đám cháy nhỏ tại (0,32; 0,30), sát s1 | s1 báo động, khung hình có bia lửa, laser chấm lên bia, vòi s1 phun | Phun bằng s1, lửa tắt, bơm và laser tắt hết | Như luật; chọn cả hai vòi cho lửa nhỏ bị tính là nhầm vòi |
-| `fire_s2` | Đám cháy nhỏ tại (0,90; 0,30), sát s2 | Như trên với s2 | Phun bằng s2, lửa tắt | Như luật |
+| `fire_s1` | Đám cháy nhỏ tại (0,32; 0,30), về phía s1 | s1 báo động, khung hình có bia lửa, laser chấm lên bia, vòi s1 phun | Phun bằng s1, lửa tắt, bơm và laser tắt hết | Như luật; chọn cả hai vòi cho lửa nhỏ bị tính là nhầm vòi |
+| `fire_s2` | Đám cháy nhỏ tại (0,90; 0,30), về phía s2 | Như trên với s2 | Phun bằng s2, lửa tắt | Như luật |
 | `fire_large` | Đám cháy lớn tại (0,60; 0,30) | Cả hai node báo động; thẻ lửa to, cần nhiều nước hơn nên có thể qua vài lượt do trạm tự xử lý lại | Một vòi gần nhất (luật không bao giờ chọn `both`), lửa tắt, có thể sau nhiều lượt | Có thể trả lời `both`: hai bơm chạy cùng lúc (`--decider hybrid --model-stages decide,verify` hoặc `--decider remote`), cột "vòi phun" ghi `s1+s2 (cùng lúc)` |
 | `lamp` | Đèn nóng (thẻ đèn) tại (0,32; 0,30): nhiệt cao, gần như không khí | Cảm biến báo động, camera thấy một thẻ giống lửa | Không phun. Luật chỉ nhìn độ tin cậy của camera nên thỉnh thoảng phun nhầm: ghi nhận là sai quyết định, không phải lỗi chương trình | Dựa cả vào chuỗi cảm biến nên kỳ vọng nhận ra đèn; đây là cảnh cho thấy khác biệt giữa luật và Jev |
 | `steam_object` | Vật màu cam tại (0,88; 0,30) cộng hơi nước nấu ăn gần s2 | Ẩm và nhiệt tăng, camera thấy vật cam | Không phun | Như luật |
