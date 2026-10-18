@@ -10,6 +10,11 @@ decide() mỗi bản ghi. Ghi runs/decider/jev/<name>/eval.json.
 Chọn bộ dữ liệu: --data-dir ../runs/decider/scenarios_3d_corners. Chính sách lai theo câu hỏi:
 --rule-questions nozzle luôn lấy đáp án luật cho các câu đó, các câu còn lại dùng mô hình (thêm
 biến thể + tau). Khi dùng nó thì kết quả ghi eval_perq.json thay cho eval.json (--out đổi tên).
+
+Với nozzle theo luật, ngoài biến thể cũ (vòi của bia mà luật chọn, "rule_only") còn chấm biến thể
+mới: vòi chọn theo bia cuối cùng của chính sách lai ("target_nozzle"), và --nozzle-both-tau T1 T2 ...
+cho thêm mức nhận both của mô hình ("target_nozzle_both_T"). Logic ở orchestrator.decide.hybrid_nozzle,
+cùng hàm với trạm. --dump-records PATH ghi jsonl từng bản ghi decide cùng kết cục của mỗi biến thể.
 """
 
 import argparse
@@ -27,6 +32,8 @@ from nt532.decider.head import ece
 from nt532.decider.jev import JevModel, gather
 from nt532.decider.rules import rule_answers
 from nt532.decider.scenario import load_geometry
+from nt532.decider.state_text import BOTH
+from nt532.orchestrator.decide import hybrid_nozzle
 
 TAUS = (0.6, 0.8, 0.9)
 
@@ -100,16 +107,60 @@ def hybrid(records, rules, ans, conf, tau):
     return mixed, used / max(total, 1)
 
 
-def per_question(rules, ans, conf, rule_qs, tau=None):
-    """Câu trong rule_qs luôn theo luật; câu khác theo mô hình (nếu có tau thì lùi về luật khi conf < tau)."""
+def per_question(rules, ans, conf, rule_qs, tau=None, recs=None, target_nozzle=False, both_tau=None):
+    """Câu trong rule_qs luôn theo luật; câu khác theo mô hình (nếu có tau thì lùi về luật khi conf < tau).
+
+    `target_nozzle` (cần `recs`): nozzle theo luật nhưng cho bia cuối cùng của đáp án lai, và nhận
+    both của mô hình khi `both_tau` (hybrid_nozzle, cùng hàm với HybridDecider)."""
     mixed = []
-    for r_ans, m_ans, m_conf in zip(rules, ans, conf, strict=True):
+    for i, (r_ans, m_ans, m_conf) in enumerate(zip(rules, ans, conf, strict=True)):
         h = {}
         for qid, a in m_ans.items():
             keep = qid not in rule_qs and (tau is None or m_conf[qid] >= tau)
             h[qid] = a if keep or qid not in r_ans else r_ans[qid]
+        if target_nozzle and "nozzle" in rule_qs and "nozzle" in h and "nozzle" in r_ans:
+            r = recs[i]
+            h["nozzle"], _ = hybrid_nozzle(r["obs"], r["questions"]["nozzle"]["candidates"], h.get("target"),
+                                           r_ans["nozzle"], m_ans["nozzle"], m_conf["nozzle"], both_tau)
         mixed.append(h)
     return mixed
+
+
+def outcome(lab: dict, ans: dict) -> str | None:
+    """Kết cục mức hệ thống của một bản ghi decide, cùng logic với eval_rules.evaluate."""
+    if "action" not in lab or "real_fire" not in lab:
+        return None
+    spray = ans["action"] == "spray"
+    if not lab["real_fire"]:
+        return "false_spray" if spray else "no_fire_ok"
+    if lab["action"] != "spray":
+        return None
+    if not spray:
+        return "missed_spray"
+    if "target" in lab and ans.get("target") != lab["target"]:
+        return "wrong_target"
+    if "nozzle" in lab and ans.get("nozzle") != lab["nozzle"]:
+        if lab["nozzle"] == BOTH:
+            return "wrong_nozzle(one_when_two)"
+        return "wrong_nozzle(two_when_one)" if ans.get("nozzle") == BOTH else "wrong_nozzle(khac)"
+    return "sprayed_correctly"
+
+
+def dump_records(f, split: str, recs, rules, ans, conf, hyb: dict) -> None:
+    """Một dòng jsonl mỗi bản ghi decide (có câu action); hyb = {biến thể: đáp án lai từng bản ghi}."""
+    for i, r in enumerate(recs):
+        lab = r["labels"]
+        if "action" not in lab:
+            continue
+        pick = lambda a: {q: a[q] for q in ("real_fire", "action", "target", "nozzle") if q in a}  # noqa: E731
+        row = {"split": split, "id": r["id"], "labels": pick(lab), "size": r.get("truth", {}).get("size"),
+               "rules": pick(rules[i]), "model": pick(ans[i]),
+               "nozzle_model_conf": conf[i].get("nozzle"),
+               "hybrid": {k: pick(v[i]) for k, v in hyb.items()},
+               "outcome": {k: outcome(lab, v[i]) for k, v in hyb.items()}}
+        row["outcome"]["rules"] = outcome(lab, rules[i])
+        row["outcome"]["model"] = outcome(lab, ans[i])
+        f.write(json.dumps(row, ensure_ascii=False) + "\n")
 
 
 def print_table(res: dict, splits: list[str]) -> None:
@@ -155,6 +206,10 @@ def main() -> None:
                    help="thư mục chứa {split}.jsonl (mặc định runs/decider/scenarios)")
     p.add_argument("--rule-questions", nargs="+", default=[], choices=QUESTIONS,
                    help="các câu hỏi luôn dùng đáp án luật (chính sách lai theo câu hỏi)")
+    p.add_argument("--nozzle-both-tau", type=float, nargs="*", default=[],
+                   help="với --rule-questions nozzle: thêm các mức tau nhận both của mô hình")
+    p.add_argument("--dump-records", type=Path, default=None, metavar="PATH",
+                   help="ghi jsonl từng bản ghi decide: nhãn, đáp án luật/mô hình/lai và kết cục")
     p.add_argument("--out", default="", help="tên file kết quả (mặc định eval.json, hoặc eval_perq.json)")
     p.add_argument("--lat-n", type=int, default=100, help="số bản ghi đo độ trễ decide()")
     args = p.parse_args()
@@ -164,6 +219,7 @@ def main() -> None:
     model.eval()
     rule_qs = set(args.rule_questions)
     result: dict = {}
+    dump = args.dump_records.open("w", encoding="utf-8") if args.dump_records else None
     for split in args.splits:
         recs = load_full(split, args.max_records, args.data_dir)
         # mô hình chỉ nhận state + questions; obs chỉ để chạy luật
@@ -187,6 +243,15 @@ def main() -> None:
                 mixed = per_question(rules, ans, conf, rule_qs, tau)
                 res["per_question"]["rule_only" if tau is None else str(tau)] = evaluate(
                     recs, geo, mixed)
+            if "nozzle" in rule_qs:
+                variants = {"target_nozzle": None,
+                            **{f"target_nozzle_both_{bt:g}": bt for bt in args.nozzle_both_tau}}
+                hyb = {"rule_only": per_question(rules, ans, conf, rule_qs)}
+                for key, bt in variants.items():
+                    hyb[key] = per_question(rules, ans, conf, rule_qs, None, recs, True, bt)
+                    res["per_question"][key] = evaluate(recs, geo, hyb[key])
+                if dump:
+                    dump_records(dump, split, recs, rules, ans, conf, hyb)
         res["latency"] = latency(model, slim, args.lat_n, args.device)
         result[split] = res
 
@@ -209,8 +274,8 @@ def main() -> None:
         for s in args.splits:
             for tau, h in result[s]["per_question"].items():
                 sy = h["system"]
-                name = "không tau" if tau == "rule_only" else f"tau {tau}"
-                print(f"{s:12}{name:10}: phun nhầm {sy['false_spray']}/{sy['no_fire']} | bỏ sót "
+                name = "không tau" if tau == "rule_only" else tau if tau.startswith("target") else f"tau {tau}"
+                print(f"{s:12}{name:24}: phun nhầm {sy['false_spray']}/{sy['no_fire']} | bỏ sót "
                       f"{sy['missed_spray']}/{sy['should_spray']} | nhầm bia {sy['wrong_target']}"
                       f" | nhầm vòi {sy['wrong_nozzle']} | một khi cần hai {sy['one_when_two']}"
                       f" | hai khi một đủ {sy['two_when_one']} | đúng bia+vòi "
@@ -225,6 +290,9 @@ def main() -> None:
         lt = result[s]["latency"]
         print(f"{s:12}trung vị {lt['median_ms']:.0f} ms, p95 {lt['p95_ms']:.0f} ms "
               f"({lt['n']} bản ghi, {args.device})")
+    if dump:
+        dump.close()
+        print(f"Đã ghi {args.dump_records}")
     out = OUT / args.name / (args.out or ("eval_perq.json" if rule_qs else "eval.json"))
     out.write_text(json.dumps(result, indent=2, ensure_ascii=False), encoding="utf-8")
     print(f"Đã ghi {out}")

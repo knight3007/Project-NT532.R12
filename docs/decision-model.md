@@ -257,7 +257,28 @@ Chính sách lai theo câu hỏi: `nozzle` luôn theo luật, các câu khác th
 | Phun đúng bia, nhầm vòi | 164 | 234 | 176 | 193 | 188 | 136 | 195 | 161 |
 | Phun đúng bia đúng vòi | 590/837 | 514/837 | 581/837 | 555/837 | 567/837 | 367/611 | 309/611 | 343/611 |
 
-Lai theo câu hỏi giữ được lợi thế lớn nhất của model: phun khi không có lửa vẫn là 35/1111 (luật 171) và 52/1301 (luật 228), còn `after_verify` vẫn 79%. `nozzle` trở về đúng mức luật, không còn ca chọn hai vòi khi một là đủ. Số ca đúng bia đúng vòi tăng từ 514 lên 555 trên test, nhưng vẫn thấp hơn luật (590), do phun nhầm bia nhiều hơn (25 so với 12) và nhầm vòi nhiều hơn (193 so với 164) dù `nozzle` đã theo luật. Phần nhầm vòi tăng thêm chưa được phân tích. Thêm τ cho các câu còn lại kéo `after_verify` về mức luật (khoảng 73%), còn τ cao (0,9) đưa phun khi không có lửa lên lại 64/1111 và 90/1301, nên không dùng.
+Lai theo câu hỏi giữ được lợi thế lớn nhất của model: phun khi không có lửa vẫn là 35/1111 (luật 171) và 52/1301 (luật 228), còn `after_verify` vẫn 79%. `nozzle` trở về đúng mức luật, không còn ca chọn hai vòi khi một là đủ. Số ca đúng bia đúng vòi tăng từ 514 lên 555 trên test, nhưng vẫn thấp hơn luật (590), do phun nhầm bia nhiều hơn (25 so với 12) và nhầm vòi nhiều hơn (193 so với 164) dù `nozzle` đã theo luật. Thêm τ cho các câu còn lại kéo `after_verify` về mức luật (khoảng 73%), còn τ cao (0,9) đưa phun khi không có lửa lên lại 64/1111 và 90/1301, nên không dùng.
+
+Nhầm vòi tăng thêm (193 so với 164) có hai nguồn, vì các câu được trả lời độc lập. Thứ nhất, luật chọn vòi cho bia của chính nó (`best` trong `rule_decide`), hoặc trả `nozzle = alarm` khi không ghép được bia nào. Khi model chọn đúng bia mà luật chọn bia khác hoặc không có bia, vòi được tính cho bia khác. Ví dụ: bia trên sàn sát góc của node báo động, mà chính vòi đó không cúi tới được vì giới hạn tilt -35°. Thứ hai, luật không bao giờ trả `both`, nên khi model cứu được thêm ca lửa lớn thì các ca đó thành "một vòi khi cần hai" (158 so với 144 của luật). Loại lỗi này chiếm 158/193 ca nhầm vòi.
+
+Sửa ở cách lai, không train lại. `hybrid_nozzle` (`pi/src/nt532/orchestrator/decide.py`) lấy bia cuối cùng (đáp án `target` sau khi lai) rồi chọn vòi khỏe, với tới được, gần nhất cho đúng bia đó (`rule_nozzle` trong `rules.py`). Không xác định được bia thì giữ đáp án luật. Tùy chọn `both_tau` nhận `both` của model khi độ tin cậy ≥ `both_tau`, `both` có trong ứng viên, và cả hai vòi khỏe, với tới được bia đó. Chấm lại trên RTX 4050 (bf16) với `eval_jev.py --name jev2 --data-dir ../runs/decider/scenarios_3d_corners --rule-questions nozzle --nozzle-both-tau 0.6 0.7 0.8 0.9 --dump-records ../runs/decider/jev/jev2/records_perq2.jsonl --out eval_perq2.json`. Kết quả ở `runs/decider/jev/jev2/eval_perq2.json`, `eval_perq2.log`, kèm từng bản ghi ở `records_perq2.jsonl`. Cột luật và "theo câu" khớp tuyệt đối bảng trên. Phun khi không có lửa và bỏ sót không đổi giữa các biến thể (35/1111 và 64/837 trên test, 52/1301 và 47/611 trên test_shift), vì chỉ `nozzle` thay đổi.
+
+| | đúng bia đúng vòi | nhầm bia | nhầm vòi | một vòi khi cần hai | hai vòi khi một là đủ | acc `nozzle` |
+| --- | --- | --- | --- | --- | --- | --- |
+| test: luật | 590/837 | 12 | 164 | 144 | 0 | 74,4% |
+| test: theo câu (cũ) | 555/837 | 25 | 193 | 158 | 0 | 74,4% |
+| test: vòi theo bia cuối | 570/837 | 25 | 178 | 158 | 0 | 75,9% |
+| test: + `both_tau` 0,6 | 576/837 | 25 | 172 | 146 | 7 | 76,6% |
+| test: + `both_tau` 0,7 | 573/837 | 25 | 175 | 155 | 0 | 76,2% |
+| test: + `both_tau` 0,8 / 0,9 | 571/837 | 25 | 177 | 157 | 0 | 76,0% |
+| test_shift: luật | 367/611 | 34 | 136 | 106 | 0 | 67,9% |
+| test_shift: theo câu (cũ) | 343/611 | 60 | 161 | 116 | 0 | 67,9% |
+| test_shift: vòi theo bia cuối | 357/611 | 60 | 147 | 116 | 0 | 69,6% |
+| test_shift: + `both_tau` 0,6 | 363/611 | 60 | 141 | 107 | 4 | 70,5% |
+| test_shift: + `both_tau` 0,7 | 359/611 | 60 | 145 | 114 | 0 | 69,9% |
+| test_shift: + `both_tau` 0,8 / 0,9 | 357/611 | 60 | 147 | 116 | 0 | 69,6% |
+
+Chốt chính sách cho trạm: `--decider hybrid --tau 0 --model-stages decide,verify --rule-questions nozzle --nozzle-both-tau 0.7`. τ 0,7 là mức cao nhất còn thêm được ca hai vòi mà không có ca hai vòi khi một là đủ (0,6 thêm 3 ca đúng trên test nhưng sinh 7 ca hai vòi thừa, tức chạy hai bơm vô ích). Vòi theo bia cuối lấy lại 15 ca (test) và 14 ca (test_shift), đúng bằng phần tăng do lệch bia. So với luật, chính sách này vẫn kém 17 ca đúng bia đúng vòi trên test (573 so với 590), chủ yếu vì model nhầm bia nhiều hơn (25 so với 12). Bù lại, số ca phun khi không có lửa còn 35 so với 171. `both_tau` gỡ được rất ít ca "một vòi khi cần hai": trong 158 ca của test, model chỉ trả `both` ở 56 ca, và chỉ 12 ca có độ tin cậy ≥ 0,6. Phần này phải sửa ở dữ liệu của lượt train sau: in khoảng cách 3D tới từng vòi vào trạng thái (hiện chỉ có `dist_s1`/`dist_s2` theo X, trong khi nhãn tính theo 3D), và chỉ đưa ứng viên `both` khi cả hai vòi với tới được đúng bia đó (hiện `nozzle_candidates` thêm `both` khi bất kỳ bia nào nằm trong vùng của cả hai vòi).
 
 Ghi chú sự cố train của jev2 (nguồn: `runs/decider/jev/jev2_train.log`, `jev2/train.log`):
 

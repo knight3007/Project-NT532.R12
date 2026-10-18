@@ -169,7 +169,7 @@ class Dashboard:
                 return {"ok": False, "error": "trạm đang xử lý một lượt, kiểm tra camera sau"}
             return {"ok": True, "health": orch.last_health}
         elif cmd == "decider":
-            st.set_decider(body.get("kind", "rules"), body.get("run", "jev1"), float(body.get("tau", 0.8)),
+            st.set_decider(body.get("kind", "rules"), body.get("run", "jev2"), float(body.get("tau", 0.8)),
                            body.get("stages", "verify"))
         elif world is None:
             return {"ok": False, "error": f"lệnh {cmd!r} chỉ có trên sa bàn ảo"}

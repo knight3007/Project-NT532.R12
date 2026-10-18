@@ -168,6 +168,37 @@ def test_hybrid_stages_skip_model_outside_chosen_stage():
     assert "verify" in h.name
 
 
+def test_hybrid_rule_questions_take_rules_even_when_model_is_confident():
+    tracks = aggregate([[tgt(0.32, 0.25, 0.8)]] * 3, (1280, 720))
+    obs, _ = decide_obs("s1", history("s1"), tracks, nozzles(), NODE_X, 3, {"temp": 45.0, "gas": 600.0})
+    q = questions_for(obs)
+    assert "nozzle" in q and "action" in q
+    rules = RuleDecider().decide(obs, q)
+    model = FakeModel(0.99)
+    h = HybridDecider(model, tau=0.0, stages="decide,verify", rule_questions={"nozzle"})
+    d = h.decide(obs, q)
+    assert d.answers["nozzle"].source == "rules" and d.get("nozzle") == rules.get("nozzle")
+    assert d.get("action") == "MODEL" and d.answers["action"].source == "model"
+    assert "nozzle" in h.name
+    assert HybridDecider(FakeModel(0.9)).name == "hybrid(tau 0.8, mô hình ở verify)"  # mặc định không đổi
+    with pytest.raises(ValueError):
+        HybridDecider(model, rule_questions={"khong_co"})
+
+
+def test_hybrid_rule_questions_skip_model_when_only_those_asked():
+    tracks = aggregate([[tgt(0.32, 0.25, 0.8)]] * 3, (1280, 720))
+    obs, _ = decide_obs("s1", history("s1"), tracks, nozzles(), NODE_X, 3, {"temp": 45.0, "gas": 600.0})
+    only = {"nozzle": questions_for(obs)["nozzle"]}
+    model = FakeModel(0.99)
+    h = HybridDecider(model, stages="decide,verify", rule_questions={"nozzle"})
+    d = h.decide(obs, only)
+    assert model.calls == 0 and d.answers["nozzle"].source == "rules"
+    # mô hình lỗi vẫn rơi về luật cho câu còn lại
+    bad = HybridDecider(FakeModel(0.99, fail=True), stages="decide,verify", rule_questions={"nozzle"})
+    assert all(a.source == "rules" for a in bad.decide(obs, questions_for(obs)).answers.values())
+    assert "trọng số" in bad.last_error
+
+
 def test_aiming_matches_sim_convention_and_limits():
     pivot, target = (0.3, 0.55, 0.33), (0.1, 0.8, 0.4)
     assert aiming.angles(pivot, target) == pytest.approx(aim_angles(pivot, target))
@@ -531,3 +562,84 @@ def test_lost_link_ends_in_safe_state(station):
     # s2 mất heartbeat: không được ngắm bằng s2
     assert run.nozzle != "s2"
     assert run.outcome in ("ignored", "alarm_only", "extinguished", "human"), run.to_json()
+
+
+def _obs_two_targets(reach2=(True, True), conf=0.0):
+    """Hai bia T1 (gần s1) và T2 (gần s2); node báo động s1. conf thấp thì luật không ghép được bia nào."""
+    def t(i, x):
+        return {"id": f"T{i}", "x": x, "z": 0.2, "y": 0.8, "surface": "wall", "w": 0.03, "h": 0.03,
+                "conf": [conf] * 3, "dist": {"s1": round(abs(x - 0.3), 2), "s2": round(abs(x - 0.9), 2)},
+                "dist3": {"s1": round(abs(x - 0.3), 2), "s2": round(abs(x - 0.9), 2)}}
+    reach = {"s1": {"T1": True, "T2": reach2[0]}, "s2": {"T1": True, "T2": reach2[1]}}
+    noz = {n: {"hb_ms": 200, "pose_s": 10, "reach": reach[n]} for n in ("s1", "s2")}
+    hist = history("s1")
+    return {"stage": "decide", "alarm": "s1", "limits": {"temp": 45.0, "gas": 600.0},
+            "sensors": {n: hist.window(n) for n in ("s1", "s2")}, "frames": 3,
+            "targets": [t(1, 0.3), t(2, 0.85)], "nozzles": noz}
+
+
+class ScriptedModel:
+    """Mô hình giả trả đáp án cho trước, conf cho trước (nozzle có conf riêng)."""
+
+    def __init__(self, target, nozzle, nozzle_conf):
+        self.out = {"real_fire": (True, 0.99), "action": (ACTIONS[0], 0.99), "target": (target, 0.99),
+                    "nozzle": (nozzle, nozzle_conf)}
+        self.calls = 0
+
+    def answers(self, obs, questions):
+        self.calls += 1
+        return {q: Answer(a, c, {a: c}, "model") for q, (a, c) in self.out.items() if q in questions}
+
+
+def _questions(obs):
+    from nt532.decider.state_text import nozzle_candidates, target_candidates
+    return {"real_fire": {"type": "boolean", "candidates": []},
+            "action": {"type": "choice", "candidates": list(ACTIONS)},
+            "target": {"type": "choice", "candidates": target_candidates(obs["targets"])},
+            "nozzle": {"type": "choice", "candidates": nozzle_candidates(obs)}}
+
+
+def test_rule_nozzle_follows_final_target_when_rules_find_none():
+    from nt532.decider.rules import rule_nozzle
+    obs = _obs_two_targets()
+    q = _questions(obs)
+    t2 = q["target"]["candidates"][1]
+    assert t2.startswith("T2")
+    rules = RuleDecider().decide(obs, q)
+    assert rules.get("nozzle") == "s1" and rules.get("target") == q["target"]["candidates"][-1]  # không ghép được: alarm
+    assert rule_nozzle(obs, "T2") == "s2" and rule_nozzle(obs, "T9") is None
+    h = HybridDecider(ScriptedModel(t2, "s1", 0.9), tau=0.0, stages="decide,verify", rule_questions={"nozzle"})
+    d = h.decide(obs, q)
+    assert d.get("target") == t2 and d.get("nozzle") == "s2"
+    assert d.answers["nozzle"].source == "rules@target"
+
+
+def test_hybrid_both_tau_gates_on_confidence_and_reach():
+    obs = _obs_two_targets()
+    q = _questions(obs)
+    assert BOTH in q["nozzle"]["candidates"]
+    t2 = q["target"]["candidates"][1]
+
+    def run(conf, ob=obs, tau=0.8, qs=q):
+        h = HybridDecider(ScriptedModel(t2, BOTH, conf), tau=0.0, stages="decide,verify",
+                          rule_questions={"nozzle"}, both_tau=tau)
+        return h.decide(ob, qs)
+
+    d = run(0.9)
+    assert d.get("nozzle") == BOTH and d.answers["nozzle"].source == "model"
+    assert run(0.7).get("nozzle") == "s2"  # conf dưới ngưỡng: vòi đơn của bia cuối
+    assert run(0.9, tau=None).get("nozzle") == "s2"  # both_tau tắt
+    one = _obs_two_targets(reach2=(True, False))  # chỉ s1 với tới T2
+    q1 = _questions(one)
+    assert BOTH in q1["nozzle"]["candidates"]  # T1 vẫn với tới cả hai nên BOTH vẫn là ứng viên
+    assert run(0.99, one, qs=q1).get("nozzle") == "s1"  # nhưng bia cuối T2 không đủ hai vòi: vòi đơn
+
+
+def test_hybrid_without_rule_questions_unchanged_by_both_tau():
+    obs = _obs_two_targets()
+    q = _questions(obs)
+    t2 = q["target"]["candidates"][1]
+    h = HybridDecider(ScriptedModel(t2, BOTH, 0.99), tau=0.0, stages="decide,verify", both_tau=0.5)
+    assert h.decide(obs, q).get("nozzle") == BOTH  # nozzle theo mô hình như cũ
+    h2 = HybridDecider(ScriptedModel(t2, "s2", 0.99), tau=0.8, stages="decide,verify")
+    assert h2.decide(obs, q).answers["nozzle"].source == "model" and "both" not in h2.name

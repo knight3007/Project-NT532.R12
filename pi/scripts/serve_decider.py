@@ -1,6 +1,7 @@
 """Chạy bộ quyết định (Jev) ở máy khác, vd laptop có GPU, để Pi gọi qua HTTP.
 
-    uv run python scripts/serve_decider.py --decider jev --jev-run jev1 --device cuda --host 0.0.0.0 --port 8090
+    uv run python scripts/serve_decider.py --decider jev --jev-run jev2 --device cuda --host 0.0.0.0 --port 8090
+    uv run python scripts/serve_decider.py --decider hybrid --tau 0 --model-stages decide,verify --rule-questions nozzle --nozzle-both-tau 0.7 --device cuda --host 0.0.0.0
     uv run python scripts/serve_decider.py --decider hybrid --model-stages verify --host 192.168.1.50
     # trên Pi:
     uv run python scripts/run_station.py --decider remote --decider-url http://192.168.1.50:8090
@@ -17,7 +18,7 @@ máy chủ chậm hoặc lỗi.
 
 import argparse
 
-from nt532.orchestrator.decide import JevDecider, make_decider, parse_stages
+from nt532.orchestrator.decide import QUESTION_IDS, JevDecider, make_decider, parse_stages
 from nt532.orchestrator.remote import make_server
 
 
@@ -32,10 +33,15 @@ def warm_up(decider) -> None:
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     p.add_argument("--decider", choices=["rules", "jev", "hybrid"], default="jev")
-    p.add_argument("--jev-run", default="jev1", help="thư mục trong runs/decider/jev/")
+    p.add_argument("--jev-run", default="jev2", help="thư mục trong runs/decider/jev/")
     p.add_argument("--device", default="cpu", help="cpu hoặc cuda")
     p.add_argument("--tau", type=float, default=0.8, help="ngưỡng tin cậy của chế độ lai")
     p.add_argument("--model-stages", default="verify", help="chế độ lai: verify, decide hoặc decide,verify")
+    p.add_argument("--rule-questions", nargs="+", default=[], choices=QUESTION_IDS,
+                   help="chế độ lai: các câu luôn lấy đáp án luật, vd nozzle (các câu khác theo mô hình)")
+    p.add_argument("--nozzle-both-tau", type=float, default=None,
+                   help="chế độ lai với --rule-questions nozzle: vẫn hỏi mô hình câu nozzle và nhận both "
+                        "(s1 + s2) khi mô hình trả both với conf >= ngưỡng này; mặc định tắt")
     p.add_argument("--host", required=True, help="địa chỉ bind, vd 192.168.1.50 hoặc 0.0.0.0 (mọi giao diện)")
     p.add_argument("--port", type=int, default=8090)
     args = p.parse_args()
@@ -44,7 +50,8 @@ def main() -> None:
     except ValueError as e:
         p.error(str(e))
 
-    decider = make_decider(args.decider, args.jev_run, args.tau, args.device, args.model_stages)
+    decider = make_decider(args.decider, args.jev_run, args.tau, args.device, args.model_stages,
+                           rule_questions=tuple(args.rule_questions), both_tau=args.nozzle_both_tau)
     if args.decider != "rules":
         print(f"Đang nạp mô hình {args.jev_run} trên {args.device}...", flush=True)
         warm_up(decider)

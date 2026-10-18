@@ -23,6 +23,17 @@ def _last_conf(conf: list) -> float:
     return next((c for c in reversed(conf) if c is not None), 0.0)
 
 
+def rule_nozzle(obs: dict, target: str) -> str | None:
+    """Vòi khỏe, với tới được bia `target` (id) và gần bia nhất (khoảng cách 3D từ trục quay; thiếu
+    thì theo X). None nếu không vòi nào đủ điều kiện hoặc không có bia đó. Không bao giờ `both`."""
+    t = next((t for t in obs["targets"] if t["id"] == target), None)
+    if t is None:
+        return None
+    able = [n for n in NOZZLES if nozzle_healthy(obs["nozzles"][n]) and obs["nozzles"][n]["reach"][target]]
+    d3 = t.get("dist3") or t["dist"]
+    return min(able, key=lambda n: d3[n]) if able else None
+
+
 def rule_decide(obs: dict, geo: Geometry) -> dict:
     alarm = obs["alarm"]
     # Ghép sensor-bia: luật cũ của kế hoạch (|dX| <= bán kính, obs["dist"]) HOẶC node báo động là node
@@ -38,10 +49,7 @@ def rule_decide(obs: dict, geo: Geometry) -> dict:
     if not matched:
         return {"real_fire": False, "action": ACTIONS[2], "target": None, "nozzle": alarm}
     best = max(matched, key=lambda t: _last_conf(t["conf"]))
-    # vòi khỏe, với tới được và gần bia nhất (khoảng cách 3D từ trục quay; thiếu thì theo X). Không bao giờ `both`
-    able = [n for n in NOZZLES if nozzle_healthy(obs["nozzles"][n]) and obs["nozzles"][n]["reach"][best["id"]]]
-    d3 = best.get("dist3") or best["dist"]
-    nozzle = min(able, key=lambda n: d3[n]) if able else None
+    nozzle = rule_nozzle(obs, best["id"])  # không bao giờ `both`
     action = ACTIONS[0] if nozzle else ACTIONS[1]
     return {"real_fire": True, "action": action, "target": best["id"], "nozzle": nozzle or alarm}
 

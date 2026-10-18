@@ -4,7 +4,8 @@ Phần này nối các mảnh đã có thành một trạm chạy được: th�
 
 ```
 uv run python scripts/run_station.py --source sim                    # mở http://localhost:8080/
-uv run python scripts/run_station.py --source sim --decider hybrid   # mô hình ở VERIFY (--model-stages); cần runs/decider/jev/jev1 và --extra decider
+uv run python scripts/run_station.py --source sim --decider hybrid   # mô hình ở VERIFY (--model-stages); cần runs/decider/jev/jev2 và --extra decider
+uv run python scripts/run_station.py --source sim --decider hybrid --tau 0 --model-stages decide,verify --rule-questions nozzle --nozzle-both-tau 0.7   # mô hình mọi câu trừ nozzle (luật theo bia của mô hình)
 uv run python scripts/run_station.py --decider rules                 # phần cứng: webcam + CoAP
 ```
 
@@ -66,7 +67,7 @@ uv run python scripts/run_station.py --decider rules                 # phần c�
 | --- | --- |
 | `rules` | Baseline luật của kế hoạch (`nt532.decider.rules`), không cần torch |
 | `jev` | Mô hình Jev ở `runs/decider/jev/<--jev-run>`, cần `uv sync --extra decider` |
-| `hybrid` | Từng câu hỏi: đáp án mô hình nếu độ tin cậy đã hiệu chỉnh ≥ `--tau`, ngược lại luật. Chỉ hỏi mô hình ở các giai đoạn trong `--model-stages` (mặc định `verify`; `decide` hoặc `decide,verify`); giai đoạn khác luật trả lời, không gọi mô hình. Mô hình lỗi thì dùng luật cả lượt và báo trên dashboard |
+| `hybrid` | Từng câu hỏi: đáp án mô hình nếu độ tin cậy đã hiệu chỉnh ≥ `--tau`, ngược lại luật. Chỉ hỏi mô hình ở các giai đoạn trong `--model-stages` (mặc định `verify`; `decide` hoặc `decide,verify`); giai đoạn khác luật trả lời, không gọi mô hình. `--rule-questions` (vd `nozzle`) buộc các câu đó luôn lấy đáp án luật ở mọi giai đoạn, không phụ thuộc τ; lần gọi chỉ gồm các câu đó thì không gọi mô hình. Cùng ngữ nghĩa với `--rule-questions` của `eval_jev.py`; `--tau 0` nghĩa là câu còn lại luôn theo mô hình. Với `--rule-questions nozzle`, luật chọn vòi cho bia cuối cùng (bia mà câu `target` đã chọn sau khi lai), không phải bia của luật. `--nozzle-both-tau 0.7` nhận thêm `both` của mô hình khi độ tin cậy ≥ 0,7 và cả hai vòi khỏe, với tới được bia (xem decision-model.md). Mô hình lỗi thì dùng luật cả lượt và báo trên dashboard |
 | `remote` | Gọi bộ quyết định ở máy khác (`--decider-url`, `--decider-timeout` mặc định 3 s). Máy kia chạy `scripts/serve_decider.py` với `jev`, `hybrid` hoặc `rules`. Quá hạn, mất mạng, HTTP lỗi hoặc trả lời sai dạng thì cả lượt dùng luật (`source` của đáp án là `rules-fallback`, tên bộ quyết định ghi "dự phòng") và dashboard báo "mô hình lỗi, đang dùng luật" như chế độ lai |
 
 `--model-stages` chia câu hỏi theo giai đoạn: `after_verify` thuộc `verify`; `real_fire`, `action`, `target`, `nozzle` thuộc `decide`. Mặc định chỉ `verify` vì DECIDE cần nhanh (xem độ trễ dưới đây) còn luật yếu nhất đúng ở after_verify (62,8% so với 89,4% của Jev trên tập val). Tên bộ quyết định trên dashboard và `source` của từng đáp án (`rules`/`model`) cho biết giai đoạn nào đã dùng mô hình. `--decider jev` thuần mô hình luôn gọi ở cả hai giai đoạn.
@@ -80,7 +81,7 @@ Có thể đổi bộ quyết định ngay trên dashboard. `Decision` ghi cả 
 Jev mất cỡ 8 s mỗi lần trên CPU, nên có thể chạy trên laptop có GPU và để Pi gọi qua HTTP:
 
 ```
-# laptop (cần uv sync --extra decider và runs/decider/jev/jev1)
+# laptop (cần uv sync --extra decider và runs/decider/jev/jev2)
 uv run python scripts/serve_decider.py --decider hybrid --model-stages verify --device cuda --host 0.0.0.0 --port 8090
 # Pi
 uv run python scripts/run_station.py --decider remote --decider-url http://<ip laptop>:8090

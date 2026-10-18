@@ -2,7 +2,8 @@
 
     uv run python scripts/run_station.py --source sim                     # sa bàn ảo, luật
     uv run python scripts/run_station.py --source sim --link coap         # node giả (lõi C firmware) qua UDP
-    uv run python scripts/run_station.py --source sim --decider hybrid    # cần runs/decider/jev/jev1
+    uv run python scripts/run_station.py --source sim --decider hybrid    # cần runs/decider/jev/jev2
+    uv run python scripts/run_station.py --source sim --decider hybrid --tau 0 --model-stages decide,verify --rule-questions nozzle --nozzle-both-tau 0.7   # mô hình mọi câu trừ nozzle
     uv run python scripts/run_station.py --source sim --decider remote --decider-url http://laptop:8090
     uv run python scripts/run_station.py --source sim --detector yolo     # YOLO thật (models/fire-n.pt)
     uv run python scripts/run_station.py --source sim --camera left   # camera lệch trái, vòi ở hai góc trước (bố cục cũ: --layout posts)
@@ -20,7 +21,7 @@ from datetime import datetime
 
 from nt532.config import REPO_ROOT, read_site
 from nt532.dashboard import Dashboard
-from nt532.orchestrator.decide import parse_stages
+from nt532.orchestrator.decide import QUESTION_IDS, parse_stages
 from nt532.sim import add_sim_args, sim_options
 from nt532.station import build_real, build_sim
 
@@ -35,11 +36,16 @@ def main() -> None:
                         "(HTTP không xác thực, chỉ dùng trong LAN phòng lab)")
     p.add_argument("--decider-timeout", type=float, default=3.0,
                    help="giây chờ máy chủ quyết định; quá hạn hoặc lỗi thì lượt đó dùng luật")
-    p.add_argument("--jev-run", default="jev1", help="thư mục trong runs/decider/jev/")
+    p.add_argument("--jev-run", default="jev2", help="thư mục trong runs/decider/jev/")
     p.add_argument("--tau", type=float, default=0.8, help="ngưỡng tin cậy của chế độ lai")
     p.add_argument("--model-stages", default="verify",
                    help="chế độ lai: giai đoạn hỏi mô hình (verify, decide hoặc decide,verify); giai đoạn "
                         "còn lại dùng luật, không gọi mô hình. Mặc định verify vì DECIDE cần nhanh")
+    p.add_argument("--rule-questions", nargs="+", default=[], choices=QUESTION_IDS,
+                   help="chế độ lai: các câu luôn lấy đáp án luật, vd nozzle (các câu khác theo mô hình)")
+    p.add_argument("--nozzle-both-tau", type=float, default=None,
+                   help="chế độ lai với --rule-questions nozzle: vẫn hỏi mô hình câu nozzle và nhận both "
+                        "(s1 + s2) khi mô hình trả both với conf >= ngưỡng này; mặc định tắt")
     p.add_argument("--detector", choices=["oracle", "yolo"], default="oracle",
                    help="chỉ cho sa bàn ảo: oracle đọc thẻ thật trong scene, yolo dùng trọng số")
     p.add_argument("--link", choices=["mem", "coap"], default="mem",
@@ -69,11 +75,13 @@ def main() -> None:
     if args.source == "sim":
         st = build_sim(args.decider, args.jev_run, args.tau, args.detector, args.seed, log_path=log,
                        link=args.link, model_stages=args.model_stages,
-                       decider_url=args.decider_url, decider_timeout=args.decider_timeout, **sim)
+                       decider_url=args.decider_url, decider_timeout=args.decider_timeout,
+                       rule_questions=tuple(args.rule_questions), both_tau=args.nozzle_both_tau, **sim)
     else:
         st = build_real(args.decider, args.jev_run, args.tau, args.source, log_path=log,
                         model_stages=args.model_stages, decider_url=args.decider_url,
-                        decider_timeout=args.decider_timeout)
+                        decider_timeout=args.decider_timeout, rule_questions=tuple(args.rule_questions),
+                        both_tau=args.nozzle_both_tau)
     bridge = None
     if args.mqtt:
         try:
