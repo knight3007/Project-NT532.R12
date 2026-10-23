@@ -185,3 +185,14 @@ def test_cli_headless_writes_summary_and_report(tmp_path):
     bad = subprocess.run([sys.executable, str(SCRIPT), "--scenes", "khong_co"], capture_output=True, text=True,
                          timeout=60, check=False, **utf8)
     assert bad.returncode == 2 and "khong_co" in bad.stderr
+
+
+def test_steam_object_scene_drives_alarm_of_nearest_node_in_both_layouts():
+    from nt532.sim.world import SimWorld
+
+    for layout in ("corners", "posts"):
+        w = SimWorld(seed=1, node_layout=layout)
+        SCENES["steam_object"].setup(w, None)  # cảnh chỉ dùng w; hơi nước phải đặt đúng X của s2 theo bố cục
+        for _ in range(150):  # 15 s mô phỏng, không bật luồng nào
+            w.step(0.1)
+        assert w.node_sensors["s2"].alarm, layout

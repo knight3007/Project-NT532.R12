@@ -4,6 +4,7 @@
     uv run python scripts/run_station.py --source sim --link coap         # node giả (lõi C firmware) qua UDP
     uv run python scripts/run_station.py --source sim --decider hybrid    # cần runs/decider/jev/jev2
     uv run python scripts/run_station.py --source sim --decider hybrid --tau 0 --model-stages decide,verify --rule-questions nozzle --nozzle-both-tau 0.7   # mô hình mọi câu trừ nozzle
+    uv run python scripts/run_station.py --source sim --decider hybrid --device cuda   # Jev trên GPU
     uv run python scripts/run_station.py --source sim --decider remote --decider-url http://laptop:8090
     uv run python scripts/run_station.py --source sim --detector yolo     # YOLO thật (models/fire-n.pt)
     uv run python scripts/run_station.py --source sim --camera left   # camera lệch trái, vòi ở hai góc trước (bố cục cũ: --layout posts)
@@ -37,6 +38,7 @@ def main() -> None:
     p.add_argument("--decider-timeout", type=float, default=3.0,
                    help="giây chờ máy chủ quyết định; quá hạn hoặc lỗi thì lượt đó dùng luật")
     p.add_argument("--jev-run", default="jev2", help="thư mục trong runs/decider/jev/")
+    p.add_argument("--device", default="cpu", help="thiết bị chạy mô hình Jev: cpu hoặc cuda (chỉ cho --decider jev|hybrid)")
     p.add_argument("--tau", type=float, default=0.8, help="ngưỡng tin cậy của chế độ lai")
     p.add_argument("--model-stages", default="verify",
                    help="chế độ lai: giai đoạn hỏi mô hình (verify, decide hoặc decide,verify); giai đoạn "
@@ -76,12 +78,12 @@ def main() -> None:
         st = build_sim(args.decider, args.jev_run, args.tau, args.detector, args.seed, log_path=log,
                        link=args.link, model_stages=args.model_stages,
                        decider_url=args.decider_url, decider_timeout=args.decider_timeout,
-                       rule_questions=tuple(args.rule_questions), both_tau=args.nozzle_both_tau, **sim)
+                       rule_questions=tuple(args.rule_questions), both_tau=args.nozzle_both_tau, device=args.device, **sim)
     else:
         st = build_real(args.decider, args.jev_run, args.tau, args.source, log_path=log,
                         model_stages=args.model_stages, decider_url=args.decider_url,
                         decider_timeout=args.decider_timeout, rule_questions=tuple(args.rule_questions),
-                        both_tau=args.nozzle_both_tau)
+                        both_tau=args.nozzle_both_tau, device=args.device)
     bridge = None
     if args.mqtt:
         try:

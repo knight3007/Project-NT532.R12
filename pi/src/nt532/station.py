@@ -133,7 +133,8 @@ def build_sim(decider: str = "rules", jev_run: str = "jev2", tau: float = 0.8,
               log_path: str | Path | None = None, settings: Settings | None = None,
               link: str = "mem", model_stages: str = "verify", decider_url: str | None = None,
               decider_timeout: float = 3.0, camera=None, node_layout: str | None = None,
-              rule_questions: tuple = (), both_tau: float | None = None) -> Station:
+              rule_questions: tuple = (), both_tau: float | None = None,
+              device: str = "cpu") -> Station:
     """`link="mem"`: node ảo trong bộ nhớ (SimLink). `"coap"`: mỗi node là một FakeNode chạy lõi C của
     firmware, lệnh và telemetry đi qua UDP localhost bằng CoapLink thật.
 
@@ -167,7 +168,7 @@ def build_sim(decider: str = "rules", jev_run: str = "jev2", tau: float = 0.8,
     else:
         link = SimLink(world)
     st = _wire(site, vision, hub, link,
-               make_decider(decider, jev_run, tau, stages=model_stages, url=decider_url,
+               make_decider(decider, jev_run, tau, device, stages=model_stages, url=decider_url,
                             timeout_s=decider_timeout, rule_questions=rule_questions, both_tau=both_tau),
                events, settings, world, detector, fakes, decider_url, decider_timeout, rule_questions,
                both_tau)
@@ -281,7 +282,7 @@ def build_real(decider: str = "rules", jev_run: str = "jev2", tau: float = 0.8,
                log_path: str | Path | None = None, settings: Settings | None = None,
                model_stages: str = "verify", decider_url: str | None = None,
                decider_timeout: float = 3.0, rule_questions: tuple = (),
-               both_tau: float | None = None) -> Station:
+               both_tau: float | None = None, device: str = "cpu") -> Station:
     """Webcam + CoAP. Cần calibration/camera.yaml, commissioning và `network.nodes` trong site.yaml."""
     from .net.coap import CoapLink
     from .vision import open_camera
@@ -304,7 +305,7 @@ def build_real(decider: str = "rules", jev_run: str = "jev2", tau: float = 0.8,
     link = CoapLink(nodes, (net.get("bind", "::"), int(net.get("port", 5683))),
                     transports=net.get("transports")).start()
     st = _wire(site, vision, hub, link,
-               make_decider(decider, jev_run, tau, stages=model_stages, url=decider_url,
+               make_decider(decider, jev_run, tau, device, stages=model_stages, url=decider_url,
                             timeout_s=decider_timeout, rule_questions=rule_questions, both_tau=both_tau),
                events, settings, detector_name="yolo", decider_url=decider_url,
                decider_timeout=decider_timeout, rule_questions=rule_questions, both_tau=both_tau)

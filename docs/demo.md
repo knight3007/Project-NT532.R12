@@ -28,6 +28,7 @@ Chọn bộ quyết định giống `run_station.py`:
 
 ```bash
 uv run python scripts/demo_station.py --decider hybrid --model-stages decide,verify   # Jev ở DECIDE và VERIFY, cần runs/decider/jev/jev2
+uv run python scripts/demo_station.py --decider hybrid --model-stages decide,verify --device cuda   # Jev chạy trên GPU (mặc định --device cpu, mất khoảng 4 s mỗi quyết định)
 uv run python scripts/demo_station.py --decider remote --decider-url http://laptop:8090
 uv run python scripts/demo_station.py --detector yolo                                  # YOLO thật thay oracle
 ```

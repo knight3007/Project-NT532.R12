@@ -5,6 +5,7 @@
     uv run python scripts/demo_station.py --headless --fast --scenes fire_s1,lamp,estop --report
     uv run python scripts/demo_station.py --decider hybrid --model-stages decide,verify   # cần runs/decider/jev/jev2
     uv run python scripts/demo_station.py --decider hybrid --tau 0 --model-stages decide,verify --rule-questions nozzle --nozzle-both-tau 0.7
+    uv run python scripts/demo_station.py --decider hybrid --model-stages decide,verify --device cuda   # Jev trên GPU
     uv run python scripts/demo_station.py --headless --fast --scenes fire_floor,fire_s1
     uv run python scripts/demo_station.py --camera left         # camera preset hoặc x,y,z
 
@@ -132,6 +133,7 @@ def main() -> int:
     p.add_argument("--decider-timeout", type=float, default=3.0,
                    help="giây chờ máy chủ quyết định; quá hạn hoặc lỗi thì lượt đó dùng luật")
     p.add_argument("--jev-run", default="jev2", help="thư mục trong runs/decider/jev/")
+    p.add_argument("--device", default="cpu", help="thiết bị chạy mô hình Jev: cpu hoặc cuda (chỉ cho --decider jev|hybrid)")
     p.add_argument("--tau", type=float, default=0.8, help="ngưỡng tin cậy của chế độ lai")
     p.add_argument("--model-stages", default="verify",
                    help="chế độ lai: giai đoạn hỏi mô hình (verify, decide hoặc decide,verify); giai đoạn "
@@ -168,7 +170,7 @@ def main() -> int:
     st = build_sim(args.decider, args.jev_run, args.tau, args.detector, args.seed, fps=12.0 if args.fast else 10.0,
                    log_path=log, settings=fast_settings() if args.fast else None,
                    model_stages=args.model_stages, decider_url=args.decider_url,
-                   decider_timeout=args.decider_timeout,
+                   decider_timeout=args.decider_timeout, device=args.device,
                    rule_questions=tuple(args.rule_questions), both_tau=args.nozzle_both_tau, **sim)
     st.start()
     dash = None

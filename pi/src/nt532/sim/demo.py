@@ -445,7 +445,8 @@ def _scenes() -> dict[str, Scene]:
         Scene(
             "steam_object", "Vật màu cam và hơi nước nấu ăn",
             "Camera thấy vật màu cam, cảm biến thấy nóng và ẩm nhưng gần như không có khí. Không được phun.",
-            lambda w, st: (w.add_object(0.88, 0.30), w.add_steam(0.90)), timeout_s=90,
+            lambda w, st: (w.add_object(0.88, 0.30), w.add_steam(w.scene.nodes["s2"].position[0])),
+            timeout_s=90,
             should_spray=False),
         Scene(
             "spike", "Nhiễu cảm biến, không có gì trên bảng",
