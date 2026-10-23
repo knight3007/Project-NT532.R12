@@ -26,6 +26,7 @@ from ..orchestrator import aiming
 from ..orchestrator.machine import Phase, Settings
 
 STOP_OFF_S = 1.0  # sau nút dừng khẩn cấp, bơm và laser phải tắt hết trong chừng này giây
+AIM_TOL_CM = 3.0  # dung sai ngắm đề xuất (docs/ke-hoach-trien-khai-NT532.md): nước rơi cách tâm bia không quá chừng này
 STOP_WINDOW_S = 3.0  # chỉ xét khoảng này sau lúc dừng (lượt mới sau đó không bị tính là "còn bật")
 UNEXPECTED = ("fault", "stopped", None)  # kết cục không ai mong khi cảnh không nói gì thêm
 
@@ -103,6 +104,9 @@ class Scene:
     expect_nozzles: set[str] | None = None  # vòi được phép phun (None: không chấm)
     forbid_nodes: set[str] = field(default_factory=set)  # node không bao giờ được phun hay bật laser
     expect_outcomes: set[str] | None = None  # mọi lượt của cảnh phải kết thúc trong tập này
+    max_miss_cm: float | None = None  # nước của mỗi vòi đã phun phải rơi cách tâm bia gần nhất không quá chừng này
+    expect_repose: bool = False  # trạm phải tính lại pose camera (sự kiện "tính lại pose") trong cảnh
+    teardown: Callable | None = None  # teardown(world, station): chạy cuối cảnh, vd. trả camera về chỗ cũ
 
 
 # --- ghi lại những gì xảy ra ----------------------------------------------------------------------
@@ -120,6 +124,8 @@ class Recorder:
         self.pumped: set[str] = set()
         self.lasered: set[str] = set()
         self.dual = False  # hai bơm từng chạy cùng lúc
+        self.hits: dict[str, list[float]] = {}  # vòi -> khoảng cách (cm) từ chỗ nước rơi tới tâm bia lửa gần nhất
+        self._marks = dict(world.marks)  # vết nước có sẵn trước cảnh (của cảnh trước) không tính
         self.first_pump: float | None = None
         self.t_end: float | None = None
         self._halt = threading.Event()
@@ -141,6 +147,20 @@ class Recorder:
         self.dual |= len(pumps) > 1
         if pumps and self.first_pump is None:
             self.first_pump = now
+        self._sample_hits()
+
+    def _sample_hits(self) -> None:
+        """Mỗi lần vòi phun, `world.marks[vòi]` được gán mảng mới (ground truth chỗ nước rơi); lúc đó đo
+        khoảng cách 3D tới tâm thẻ lửa gần nhất (kể cả lửa đã tắt, thẻ cháy vẫn nằm ở tâm cũ)."""
+        with self.world.lock:
+            fires = [s.pos for s in self.world.sources.values() if s.kind == "fire"]
+            for n, mark in self.world.marks.items():
+                if mark is self._marks.get(n):
+                    continue
+                self._marks[n] = mark
+                if fires:
+                    self.hits.setdefault(n, []).append(
+                        round(float(min(np.linalg.norm(mark - f) for f in fires)) * 100, 2))
 
     def _run(self) -> None:
         while not self._halt.wait(self.period):
@@ -156,6 +176,16 @@ class Recorder:
         self._thread.join(2)
         self._sample()
         self.t_end = time.time()
+
+    def miss_by_nozzle(self) -> dict[str, float]:
+        """Độ lệch trung vị (cm) của nước từng vòi đã phun so với tâm bia gần nhất."""
+        return {n: round(float(np.median(v)), 2) for n, v in sorted(self.hits.items()) if v}
+
+    @property
+    def repose(self) -> dict | None:
+        """Số liệu tính lại pose camera của sự kiện "tính lại pose" cuối cùng trong cảnh (None nếu không có)."""
+        return next((e.get("repose") or {"text": e["text"]} for e in reversed(self.events)
+                     if e["kind"] == "vision" and "tính lại pose" in e["text"]), None)
 
     @property
     def alert_time(self) -> float | None:
@@ -180,7 +210,8 @@ def score(scene: Scene, observed: dict) -> dict:
     """Chấm một cảnh từ số quan sát: {"decision_ok": bool | None, "safety_ok": bool, "notes": [..]}.
 
     `observed`: ready, timed_out, error, runs (Run.to_json), sprayed, lasered, fire_out (None nếu cảnh
-    không có lửa), end_pumps, end_lasers, on_after_stop_s (None nếu cảnh không bấm dừng)."""
+    không có lửa), end_pumps, end_lasers, on_after_stop_s (None nếu cảnh không bấm dừng), miss_by_nozzle
+    ({vòi: cm}, nước rơi cách tâm bia), repose (dict hay None: trạm đã tính lại pose camera)."""
     notes: list[str] = []
     if observed.get("skipped"):
         return {"decision_ok": None, "safety_ok": True, "notes": [f"bỏ qua cảnh: {observed['skipped']}"]}
@@ -226,6 +257,16 @@ def score(scene: Scene, observed: dict) -> dict:
                          f"(mong đợi {', '.join(sorted(scene.expect_nozzles))})")
     if scene.expect_out:
         check(observed.get("fire_out") is True, "lửa chưa tắt")
+    if scene.expect_repose:
+        check(bool(observed.get("repose")), "camera bị dịch mà trạm không tính lại pose")
+    if scene.max_miss_cm is not None:
+        by = observed.get("miss_by_nozzle") or {}
+        if not by:
+            check(False, "không đo được chỗ nước rơi (không vòi nào phun)")
+        else:
+            far = {n: m for n, m in by.items() if m > scene.max_miss_cm}
+            check(not far, "nước rơi cách bia " + ", ".join(f"{m:g} cm ({n})" for n, m in far.items())
+                  + f", quá {scene.max_miss_cm:g} cm")
     if scene.expect_outcomes is not None:
         wrong = sorted({str(o) for o in outcomes if o not in scene.expect_outcomes})
         check(not wrong, f"kết cục lượt {', '.join(wrong)} ngoài mong đợi "
@@ -235,7 +276,7 @@ def score(scene: Scene, observed: dict) -> dict:
         check(not wrong, f"có lượt kết thúc {', '.join(wrong)}")
 
     gradable = (scene.should_spray is not None or scene.expect_out or scene.expect_outcomes is not None
-                or scene.expect_nozzles is not None)
+                or scene.expect_nozzles is not None or scene.max_miss_cm is not None or scene.expect_repose)
     return {"decision_ok": all(checks) if gradable else None, "safety_ok": safety_ok, "notes": notes}
 
 
@@ -332,6 +373,11 @@ def run_scene(station, scene: Scene, settle_s: float = 4.0, sample_s: float = 0.
         rec.stop()
         for n in world.nodes:  # node bị cắt liên lạc trong cảnh thì nối lại
             world.set_online(n, True)
+        if scene.teardown is not None:
+            try:
+                scene.teardown(world, station)
+            except Exception as e:  # noqa: BLE001 - dọn cảnh hỏng chỉ là ghi chú, không làm chết buổi demo
+                events.emit("demo", f"dọn cảnh {scene.name} lỗi: {type(e).__name__}: {e}", level="warn")
 
     runs = [r.to_json() for r in list(orch.runs) if r.id > base_id]
     stop_t = extra.get("stopped_at")
@@ -340,7 +386,7 @@ def run_scene(station, scene: Scene, settle_s: float = 4.0, sample_s: float = 0.
     observed = {
         "ready": ready, "timed_out": timed_out, "error": error, "skipped": skipped, "runs": runs,
         "sprayed": sorted(rec.pumped), "lasered": sorted(rec.lasered), "dual_pump": rec.dual,
-        "fire_out": fire_out,
+        "fire_out": fire_out, "miss_by_nozzle": rec.miss_by_nozzle(), "repose": rec.repose,
         "end_pumps": sorted(n for n, v in end_state["pumping"].items() if v),
         "end_lasers": sorted(n for n, v in end_state["lasers"].items() if v),
         "on_after_stop_s": after,
@@ -349,6 +395,7 @@ def run_scene(station, scene: Scene, settle_s: float = 4.0, sample_s: float = 0.
         "name": scene.name, "title": scene.title, "expect": scene.expect,
         "started": t0, "duration_s": round(time.time() - t0, 1),
         "outcomes": [r["outcome"] for r in runs],
+        "water_miss_cm": max(rec.miss_by_nozzle().values(), default=None),
         "alert_s": None if alert_t is None else round(alert_t - t0, 2),
         "latency_s": None if alert_t is None or rec.first_pump is None
         else round(rec.first_pump - alert_t, 2),
@@ -370,7 +417,8 @@ def summary_entry(result: dict) -> dict:
     """Một cảnh trong summary.json (và mục "Kịch bản demo" của báo cáo): lượt rút gọn, vòi đã phun,
     độ trễ, lửa có tắt không, verdict."""
     keys = ("name", "title", "expect", "outcomes", "sprayed", "lasered", "dual_pump", "alert_s", "latency_s",
-            "fire_out", "end_pumps", "end_lasers", "on_after_stop_s", "timed_out", "ready", "error",
+            "fire_out", "water_miss_cm", "miss_by_nozzle", "repose", "end_pumps", "end_lasers",
+            "on_after_stop_s", "timed_out", "ready", "error",
             "skipped", "duration_s", "verdict")
     return {"runs": [compact_run(r) for r in result["runs"]], **{k: result.get(k) for k in keys}}
 
@@ -409,39 +457,117 @@ def _estop_during(station, world) -> dict:
     return {}
 
 
+class CameraBump:
+    """Xô camera một lượng cố định (không phụ thuộc rng của các cảnh trước) và trả về chỗ cũ khi dọn cảnh."""
+
+    SHIFT_M = (0.02, 0.03, 0.015)  # dời chừng 4 cm
+    YAW_DEG, PITCH_DEG = 2.0, 2.0  # xoay chừng 3 độ
+
+    def __init__(self) -> None:
+        self.before = None
+
+    def bump(self, world) -> None:
+        with world.lock:
+            self.before = world.scene.camera_pose()
+            world.scene.shift_camera(self.SHIFT_M, self.YAW_DEG, self.PITCH_DEG)
+
+    def wait_repose(self, station, cap_s: float = 40.0) -> bool:
+        """Chờ trạm tự tính lại pose (kiểm tra camera lúc rảnh; ở đây gọi chủ động mỗi 1,5 s thay vì đợi
+        `health_period_s`). True khi thấy sự kiện "tính lại pose" mới."""
+        seq, end = station.events.last_seq, time.time() + cap_s
+        time.sleep(1.0)  # để luồng camera kịp lấy khung hình mới
+        while time.time() < end:
+            station.orch.check_camera()
+            if any(e["kind"] == "vision" and "tính lại pose" in e["text"] for e in station.events.since(seq, 10_000)):
+                return True
+            time.sleep(1.5)
+        return False
+
+    def restore(self, world, station) -> None:
+        """Trả camera về pose trước khi xô rồi để trạm tính lại pose, để cảnh sau bắt đầu sạch."""
+        if self.before is None:
+            return
+        with world.lock:
+            world.scene.set_camera(*self.before)
+        self.before = None
+        end = time.time() + 60
+        while time.time() < end and not _idle(station.orch):  # check_camera từ chối khi trạm đang bận
+            time.sleep(0.1)
+        time.sleep(1.0)
+        self.wait_repose(station, cap_s=20.0)
+
+
+def _bumped_then_fire(wait: bool):
+    """`wait`: xô camera, chờ trạm tính lại pose rồi mới đốt lửa nhỏ gần s1. Không `wait`: đốt lửa trước rồi
+    xô camera khi cảm biến sắp báo động (đã 2 mẫu liên tiếp vượt ngưỡng, mẫu thứ 3 sau chừng 1 s mới báo), vì
+    kiểm tra camera lúc rảnh chạy mỗi `health_period_s` (10 s) và lửa cần chừng 8 s mới báo động, nếu xô
+    trước thì gần như chắc chắn trạm kịp tính lại pose và cảnh không còn đo khoảng hở."""
+    bump = CameraBump()
+
+    def setup(w, st):
+        if wait:
+            bump.bump(w)
+            if not bump.wait_repose(st):
+                st.events.emit("demo", "trạm không tính lại pose sau khi camera bị dịch", level="warn")
+        _ignite_near("s1", 0.32, 0.30)(w, st)
+        if not wait:
+            end = time.time() + 40
+            while time.time() < end and not any(ns.above >= 2 or ns.alarm for ns in w.node_sensors.values()):
+                time.sleep(0.01)
+            bump.bump(w)
+    return setup, bump.restore
+
+
 def _scenes() -> dict[str, Scene]:
+    bumped_setup, bumped_restore = _bumped_then_fire(True)
+    late_setup, late_restore = _bumped_then_fire(False)
     scenes = [
         Scene(
             "fire_s1", "Đám cháy nhỏ gần vòi s1",
             "s1 báo động, camera thấy bia lửa, bộ quyết định chọn vòi s1 (gần nhất); trạm ngắm, chỉnh bằng "
             "laser rồi phun. Lửa tắt, bơm và laser tắt hết.",
             _ignite_near("s1", 0.32, 0.30), timeout_s=150,
-            should_spray=True, expect_out=True, expect_nozzles={"s1"}),
+            should_spray=True, expect_out=True, expect_nozzles={"s1"}, max_miss_cm=AIM_TOL_CM),
         Scene(
             "fire_s2", "Đám cháy nhỏ gần vòi s2",
             "s2 báo động, bộ quyết định chọn vòi s2; trạm ngắm, chỉnh bằng laser rồi phun. Lửa tắt, bơm và "
             "laser tắt hết.",
             _ignite_near("s2", 0.90, 0.30), timeout_s=150,
-            should_spray=True, expect_out=True, expect_nozzles={"s2"}),
+            should_spray=True, expect_out=True, expect_nozzles={"s2"}, max_miss_cm=AIM_TOL_CM),
         Scene(
             "fire_large", "Đám cháy lớn giữa bảng",
             "Cả hai node báo động. Cần nhiều nước hơn nên có thể phải qua vài lượt (trạm tự xử lý lại khi cảm "
             "biến vẫn vượt ngưỡng). Hai vòi chỉ phun cùng lúc khi Jev trả lời ở DECIDE (--decider hybrid "
             "--model-stages decide,verify hoặc --decider remote); baseline luật dùng một vòi gần nhất.",
             lambda w, st: w.ignite(0.60, 0.30, size="large"), timeout_s=300,
-            should_spray=True, expect_out=True),
+            # thẻ to gấp 1,8 lần nhưng vòi vẫn ngắm vào tâm với cùng độ chính xác, nên giữ nguyên 3 cm
+            should_spray=True, expect_out=True, max_miss_cm=AIM_TOL_CM),
         Scene(
             "fire_floor", "Đám cháy nhỏ trên mặt bàn",
             "Lửa đặt trên nền (Z = 0), camera nhìn chếch xuống thấy bia. Trạm đo điểm trên nền, ngắm vòi s1 (tilt "
             "chúc xuống), chỉnh bằng laser rồi phun. Cần bố cục node với tới nền (mặc định corners đã đủ); "
             "bố cục posts (--layout posts) không với tới nên cảnh bị bỏ qua.",
             _ignite_floor("s1", 0.30, 0.50), timeout_s=150,
-            should_spray=True, expect_out=True),
+            should_spray=True, expect_out=True, max_miss_cm=AIM_TOL_CM),
+        Scene(
+            "camera_bumped", "Camera bị xê dịch, trạm tự tính lại tọa độ rồi dập lửa",
+            "Camera bị va (dời chừng 4 cm, xoay chừng 3 độ). Lúc rảnh trạm thấy tag tham chiếu lệch, tính lại pose "
+            "camera và đo lại node; sau đó có đám cháy nhỏ gần s1. Phun bằng s1, lửa tắt, nước rơi cách tâm bia "
+            "không quá 3 cm. Cuối cảnh camera được trả về chỗ cũ.",
+            bumped_setup, timeout_s=180, should_spray=True, expect_out=True, expect_nozzles={"s1"},
+            max_miss_cm=AIM_TOL_CM, expect_repose=True, teardown=bumped_restore),
+        Scene(
+            "camera_bumped_late", "Camera bị va ngay trước khi có cháy",
+            "Lửa bốc rồi camera bị va (cùng độ lớn) ngay trước lúc cảm biến báo động, trạm chưa kịp kiểm tra camera nên "
+            "ngắm theo pose cũ; bước CORRECT bằng laser phải bù độ lệch. Lửa tắt, nước rơi cách tâm bia không quá 3 cm, an toàn. Cảnh đo khoảng hở đã "
+            "biết: lúc đang xử lý một lượt trạm không tính lại pose camera.",
+            late_setup, timeout_s=180, should_spray=True, expect_out=True, max_miss_cm=AIM_TOL_CM,
+            teardown=late_restore),
         Scene(
             "lamp", "Đèn nóng giả làm lửa",
-            "Cảm biến báo nhiệt cao nhưng không có khí, camera thấy thẻ đèn. Không được phun. Baseline luật "
+            "Đèn đặt trên mặt bàn gần s1: cảm biến báo nhiệt cao nhưng không có khí, camera thấy thẻ đèn. Không được phun. Baseline luật "
             "chỉ nhìn độ tin cậy của camera nên thỉnh thoảng phun nhầm: đó là điểm yếu cổ điển của luật.",
-            lambda w, st: w.add_lamp(0.32, 0.30), timeout_s=90, should_spray=False),
+            lambda w, st: w.add_lamp(0.30, surface="floor", y=0.40), timeout_s=90, should_spray=False),
         Scene(
             "steam_object", "Vật màu cam và hơi nước nấu ăn",
             "Camera thấy vật màu cam, cảm biến thấy nóng và ẩm nhưng gần như không có khí. Không được phun.",

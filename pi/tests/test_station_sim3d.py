@@ -194,3 +194,27 @@ def test_click_on_wall_still_places_on_wall_and_direct_floor_coordinates(rig):
     assert s["surface"] == "floor" and (s["x"], s["y"]) == (0.4, 0.4)
     assert dash.command({"cmd": "fire", "surface": "ceiling", "x": 0.4})["ok"] is False
     assert dash.command({"cmd": "fire", "u": 5.0, "v": 5.0})["ok"] is False
+
+
+def test_camera_bumped_scene_setup_reposes_vision_and_teardown_restores():
+    """Chỉ phần dàn cảnh: xô camera cố định, trạm tính lại pose, rồi dọn trả camera về chỗ cũ."""
+    st = build_sim(camera="left", node_layout="corners", settings=fast_settings(), fps=12)
+    st.start(orchestrate=False)
+    try:
+        scene = SCENES["camera_bumped"]
+        before, _ = st.world.scene.camera_pose()
+        st.world.scene.shift_camera((0, 0, 0))  # không đổi gì, chỉ chắc camera đang ở preset
+        # orchestrate=False: tự gọi _health_check thay vòng chính; đủ để thử luồng bump/repose
+        st.orch.phase = Phase.IDLE
+        scene.setup(st.world, st)
+        pos, _ = st.world.scene.camera_pose()
+        assert 0.03 < np.linalg.norm(pos - before) < 0.05
+        assert any("tính lại pose" in t for t in events(st, "vision"))
+        assert np.linalg.norm(st.vision.camera.position - pos) < 0.02
+        assert any(s.kind == "fire" for s in st.world.sources.values())
+        scene.teardown(st.world, st)
+        pos2, _ = st.world.scene.camera_pose()
+        assert np.allclose(pos2, before, atol=1e-6)
+        assert np.linalg.norm(st.vision.camera.position - before) < 0.02
+    finally:
+        st.stop()

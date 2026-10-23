@@ -26,12 +26,13 @@ def observed(**kw) -> dict:
     base = {"ready": True, "timed_out": False, "error": None,
             "runs": [{"id": 1, "node": "s1", "outcome": "extinguished", "nozzle": "s1"}],
             "sprayed": ["s1"], "lasered": ["s1"], "fire_out": True, "end_pumps": [], "end_lasers": [],
-            "on_after_stop_s": None}
+            "on_after_stop_s": None, "miss_by_nozzle": {"s1": 1.0}, "repose": None}
     return {**base, **kw}
 
 
 def test_scene_catalog_matches_spec():
-    assert list(SCENES) == ["fire_s1", "fire_s2", "fire_large", "fire_floor", "lamp", "steam_object",
+    assert list(SCENES) == ["fire_s1", "fire_s2", "fire_large", "fire_floor",
+                            "camera_bumped", "camera_bumped_late", "lamp", "steam_object",
                             "spike", "node_offline", "estop"]
     assert all(s.name == n and s.title and s.expect and s.timeout_s > 0 for n, s in SCENES.items())
     assert SCENES["node_offline"].forbid_nodes == {"s2"}
@@ -60,6 +61,57 @@ def test_score_no_spray_when_needed_or_fire_still_burning():
     assert any("không phun" in n for n in v["notes"]) and any("lửa chưa tắt" in n for n in v["notes"])
     v = score(SCENES["fire_large"], observed(fire_out=False))
     assert v["decision_ok"] is False and v["safety_ok"] is True
+
+
+def test_score_water_miss_within_and_beyond_tolerance():
+    scene = SCENES["fire_s1"]
+    assert scene.max_miss_cm == 3.0
+    assert score(scene, observed(miss_by_nozzle={"s1": 2.9})) == {"decision_ok": True, "safety_ok": True, "notes": []}
+    v = score(scene, observed(miss_by_nozzle={"s1": 4.2}))
+    assert v["decision_ok"] is False and v["safety_ok"] is True
+    assert any("4.2 cm" in n and "quá 3 cm" in n for n in v["notes"])
+    two = score(SCENES["fire_large"], observed(sprayed=["s1", "s2"], miss_by_nozzle={"s1": 1.0, "s2": 3.5}))
+    assert two["decision_ok"] is False and any("s2" in n for n in two["notes"])
+    # không đo được (không vòi nào rơi nước) cũng là không đạt khi cảnh đòi trúng bia
+    assert score(scene, observed(miss_by_nozzle={}))["decision_ok"] is False
+    # cảnh không đặt dung sai thì không chấm độ lệch
+    assert score(SCENES["spike"], observed(runs=[{"id": 1, "outcome": "ignored"}], sprayed=[], fire_out=None,
+                                           miss_by_nozzle={"s1": 99.0}))["decision_ok"] is True
+
+
+def test_score_camera_scene_requires_repose_and_hit():
+    scene = SCENES["camera_bumped"]
+    assert scene.expect_repose and scene.max_miss_cm == 3.0 and scene.teardown is not None
+    repose = {"shift_px": 9.1, "moved_m": 0.04, "rotated_deg": 2.8, "nodes": ["s1", "s2"]}
+    ok = score(scene, observed(miss_by_nozzle={"s1": 1.2}, repose=repose))
+    assert ok == {"decision_ok": True, "safety_ok": True, "notes": []}
+    no = score(scene, observed(miss_by_nozzle={"s1": 1.2}, repose=None))
+    assert no["decision_ok"] is False and any("tính lại pose" in n for n in no["notes"])
+    late = SCENES["camera_bumped_late"]
+    assert late.expect_repose is False and late.max_miss_cm == 3.0
+    assert score(late, observed(miss_by_nozzle={"s1": 1.2}))["decision_ok"] is True
+    assert score(late, observed(miss_by_nozzle={"s1": 6.0}))["decision_ok"] is False
+
+
+def test_recorder_measures_water_impact_to_nearest_fire():
+    import numpy as np
+
+    from nt532.orchestrator.events import EventLog
+    from nt532.sim.demo import Recorder
+    from nt532.sim.world import SimWorld
+
+    w = SimWorld(seed=1)
+    w.marks["s2"] = np.array([9.0, 9.0, 9.0])  # vết nước của cảnh trước: không được tính
+    src = w.ignite(0.40, 0.30)
+    rec = Recorder(w, EventLog())
+    rec._sample()
+    assert rec.miss_by_nozzle() == {}
+    w.marks["s1"] = src.pos + np.array([0.02, 0.0, 0.0])
+    rec._sample()
+    w.marks["s1"] = src.pos + np.array([0.0, 0.0, 0.04])
+    rec._sample()
+    assert rec.hits["s1"] == pytest.approx([2.0, 4.0])
+    assert rec.miss_by_nozzle() == {"s1": pytest.approx(3.0)} and "s2" not in rec.hits
 
 
 def test_score_wrong_nozzle_is_decision_mistake():
@@ -196,3 +248,15 @@ def test_steam_object_scene_drives_alarm_of_nearest_node_in_both_layouts():
         for _ in range(150):  # 15 s mô phỏng, không bật luồng nào
             w.step(0.1)
         assert w.node_sensors["s2"].alarm, layout
+
+
+def test_lamp_scene_drives_s1_alarm_in_corners_layout():
+    from nt532.sim.world import SimWorld
+
+    for seed in range(5):
+        w = SimWorld(seed=seed, node_layout="corners")
+        SCENES["lamp"].setup(w, None)  # đèn trên mặt bàn gần s1: phải báo động chắc chắn, không chập chờn
+        for _ in range(400):  # 40 s mô phỏng
+            w.step(0.1)
+        assert w.node_sensors["s1"].alarm, seed
+        assert not w.node_sensors["s2"].alarm, seed

@@ -9,7 +9,7 @@
     uv run python scripts/demo_station.py --headless --fast --scenes fire_floor,fire_s1
     uv run python scripts/demo_station.py --camera left         # camera preset hoặc x,y,z
 
-Cảnh: fire_s1, fire_s2, fire_large, fire_floor, lamp, steam_object, spike, node_offline, estop (docs/demo.md).
+Cảnh: fire_s1, fire_s2, fire_large, fire_floor, camera_bumped, camera_bumped_late, lamp, steam_object, spike, node_offline, estop (docs/demo.md).
 --camera PRESET|x,y,z, --look-at x,y,z, --layout corners|posts (mặc định corners) chọn camera và bố cục node của sa bàn ảo;
 cảnh đặt lửa ở chỗ node với tới được, không có chỗ nào thì bị bỏ qua (có ghi chú, không tính là lỗi).
 Mỗi cảnh in tiêu đề, hành vi mong đợi, kết quả; chấm riêng quyết định (ĐẠT/KHÔNG ĐẠT, không đổi mã thoát)
@@ -65,6 +65,11 @@ def out_text(r: dict) -> str:
     return "–" if r["fire_out"] is None else "có" if r["fire_out"] else "chưa"
 
 
+def miss_text(r: dict) -> str:
+    """Nước rơi cách tâm bia bao nhiêu cm (vòi lệch nhất); "–" nếu không phun."""
+    return "–" if r.get("water_miss_cm") is None else f"{r['water_miss_cm']:.1f}"
+
+
 def latency_text(r: dict) -> str:
     return "–" if r["latency_s"] is None else f"{r['latency_s']:.1f}"
 
@@ -76,16 +81,20 @@ def print_result(r: dict) -> None:
         return
     say(f"Kết quả: {len(r['runs'])} lượt ({', '.join(map(str, r['outcomes'])) or 'không có'}) · "
         f"vòi phun: {nozzles_text(r)}{' (cùng lúc)' if r['dual_pump'] else ''} · lửa tắt: {out_text(r)} · "
+        f"nước lệch bia: {miss_text(r)} cm · "
         f"trễ báo động→bơm: {latency_text(r)} s · {r['duration_s']:.0f} s")
+    if rp := r.get("repose"):
+        say(f"Tính lại pose camera: lệch {rp.get('shift_px')} px, dời {(rp.get('moved_m') or 0) * 100:.1f} cm, "
+            f"xoay {rp.get('rotated_deg')} độ")
     say(f"Quyết định: {decision_text(v['decision_ok'])}    An toàn: {safety_text(v['safety_ok'])}")
     for note in v["notes"]:
         say("- " + note, 8)
 
 
 def print_table(results: list[dict]) -> None:
-    head = ["Cảnh", "Kết cục", "Vòi phun", "Lửa tắt", "Trễ (s)", "Quyết định", "An toàn"]
+    head = ["Cảnh", "Kết cục", "Vòi phun", "Lửa tắt", "Lệch (cm)", "Trễ (s)", "Quyết định", "An toàn"]
     rows = [[r["name"], ",".join(map(str, r["outcomes"])) or "–", nozzles_text(r), out_text(r),
-             latency_text(r), "bỏ qua" if r.get("skipped") else decision_text(r["verdict"]["decision_ok"]),
+             miss_text(r), latency_text(r), "bỏ qua" if r.get("skipped") else decision_text(r["verdict"]["decision_ok"]),
              safety_text(r["verdict"]["safety_ok"])] for r in results]
     w = [max(len(str(c)) for c in col) for col in zip(head, *rows)]
     line = "  ".join(h.ljust(n) for h, n in zip(head, w))
