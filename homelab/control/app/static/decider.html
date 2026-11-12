@@ -1,0 +1,147 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>NT532 · Bộ quyết định</title>
+  <meta name="theme-color" content="#0F1419">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%230F1419'/%3E%3Cpath d='M16 5c1 5 7 8 7 14a7 7 0 0 1-14 0c0-3 2-5 3-7 1 2 2 3 3 3 1-3 0-6 1-10z' fill='%23FF6B35'/%3E%3C/svg%3E">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&family=Be+Vietnam+Pro:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+  <div class="sticky-top">
+    <header class="topbar sub">
+      <div class="logo">NT<span>532</span></div>
+      <div class="who">
+        <span class="pi-status" title="Kết nối tới Pi"><span class="dot" id="pi-dot"></span><span class="label" id="pi-label">Pi</span></span>
+        <span class="user mono" id="user"></span>
+        <form method="post" action="/logout"><button class="linkbtn" type="submit">Đăng xuất</button></form>
+      </div>
+    </header>
+    <nav class="mainnav" aria-label="Điều hướng">
+      <a href="/">Tổng quan</a><a href="/history">Nhật ký</a><a href="/runs">Lượt</a><a href="/decider" aria-current="page">Bộ quyết định</a><span class="soon" aria-disabled="true">Cài đặt <small>sắp có</small></span>
+    </nav>
+  <div id="offline-bar" class="offline-bar" role="alert" hidden></div>
+  </div>
+
+  <main class="page dec-page">
+    <h1 class="dec-title">Bộ quyết định</h1>
+
+    <div class="dec-grid">
+      <section class="panel" aria-labelledby="pi-h">
+        <span class="eyebrow" id="pi-h">Đang dùng trên Pi</span>
+        <div class="kv">
+          <div class="big" id="cur-name">--</div>
+          <div class="err" id="cur-err"></div>
+          <div class="last" id="cur-last">Chưa có quyết định nào.</div>
+        </div>
+
+        <form id="switch-form" class="dec-form" autocomplete="off">
+          <fieldset class="dec-choices">
+            <legend class="label">Chọn bộ quyết định</legend>
+
+            <label class="dec-card"><input type="radio" name="kind" value="rules">
+              <span class="dec-card-body"><b>Luật (rules)</b><small>Chạy ngay trên Pi, không phụ thuộc mạng. Luôn là phương án dự phòng.</small></span></label>
+
+            <label class="dec-card"><input type="radio" name="kind" value="hybrid">
+              <span class="dec-card-body"><b>Lai (hybrid)</b><small>Luật quyết định, mô hình Jev chỉ can thiệp khi đủ tự tin.</small>
+                <span class="dec-fields" data-for="hybrid">
+                  <label>Run <input type="text" id="f-run-h" value="jev2" maxlength="40"></label>
+                  <label>tau <input type="number" id="f-tau" value="0.7" min="0" max="1" step="0.05"></label>
+                  <label>Giai đoạn <input type="text" id="f-stages" value="verify" maxlength="60"></label>
+                </span></span></label>
+
+            <label class="dec-card"><input type="radio" name="kind" value="jev">
+              <span class="dec-card-body"><b>Jev trên Pi (chậm)</b><small>Chạy mô hình ngay trên Raspberry Pi; mỗi quyết định mất nhiều giây.</small>
+                <span class="dec-fields" data-for="jev">
+                  <label>Run <input type="text" id="f-run-j" value="jev2" maxlength="40"></label>
+                </span></span></label>
+
+            <label class="dec-card"><input type="radio" name="kind" value="remote-hub">
+              <span class="dec-card-body"><b>Jev qua homelab (Colab GPU)</b><small>Pi gọi hub này, hub chuyển cho worker GPU trên Colab. Mất worker thì Pi tự dùng luật.</small>
+                <span class="dec-hint" id="hub-hint"></span></span></label>
+
+            <label class="dec-card"><input type="radio" name="kind" value="remote-url">
+              <span class="dec-card-body"><b>Remote URL tùy chọn</b><small>Trỏ Pi vào một máy chủ quyết định khác (vd laptop chạy serve_decider.py).</small>
+                <span class="dec-fields" data-for="remote-url">
+                  <label class="wide">URL <input type="text" id="f-url" placeholder="http://192.168.1.20:8800" inputmode="url" spellcheck="false"></label>
+                </span></span></label>
+          </fieldset>
+          <div class="form-row">
+            <button class="btn water" type="submit" id="apply">Áp dụng</button>
+            <span class="dec-msg" id="apply-msg" role="status" aria-live="polite"></span>
+          </div>
+        </form>
+      </section>
+
+      <section class="panel" aria-labelledby="w-h">
+        <span class="eyebrow" id="w-h">Worker GPU</span>
+        <div class="dec-state">
+          <span class="dot" id="w-dot"></span>
+          <span class="big" id="w-state">--</span>
+        </div>
+        <dl class="dec-dl" id="w-info">
+          <div><dt>GPU</dt><dd id="w-gpu">--</dd></div>
+          <div><dt>Bộ quyết định / run</dt><dd id="w-run">--</dd></div>
+          <div><dt>Đã nối được</dt><dd id="w-up" class="mono">--</dd></div>
+          <div><dt>Số yêu cầu</dt><dd id="w-req" class="mono">--</dd></div>
+          <div><dt>Độ trễ mô hình gần nhất</dt><dd id="w-lat" class="mono">--</dd></div>
+          <div><dt>Khứ hồi gần nhất</dt><dd id="w-rt" class="mono">--</dd></div>
+          <div class="wide"><dt>Lỗi gần nhất</dt><dd id="w-err">--</dd></div>
+        </dl>
+        <div class="form-row">
+          <button class="btn" type="button" id="btn-test">Thử một quyết định</button>
+          <button class="btn" type="button" id="btn-off">Tắt worker</button>
+        </div>
+        <div class="dec-test" id="test-out" role="status" aria-live="polite"></div>
+
+        <details class="dec-how">
+          <summary>Cách bật worker trên Colab</summary>
+          <ol>
+            <li>Mở Colab, chọn runtime GPU (L4 hoặc A100).</li>
+            <li>Cách 1: mở <code>homelab/colab/colab_worker.ipynb</code>, chạy lần lượt ô cấu hình (nhập token bằng getpass), ô cài đặt, ô xem log.</li>
+            <li>Cách 2: dùng Colab CLI (kích hoạt <code>colab_env\Scripts\activate</code> trước):
+<pre>colab new --gpu L4
+colab upload homelab/colab/bootstrap.sh /content/bootstrap.sh
+colab exec "NT532_REPO_URL=... NT532_BRANCH=... NT532_HUB_WS=&lt;URL bên dưới&gt; \
+  NT532_WORKER_TOKEN=... NT532_JEV_RUN=jev2 NT532_WEIGHTS_URL=... bash /content/bootstrap.sh"
+colab exec "tail -n 50 /content/worker.log"</pre></li>
+            <li>Đợi trạng thái ở trên chuyển sang "Sẵn sàng", rồi bấm "Thử một quyết định".</li>
+          </ol>
+          <div class="dec-ws">
+            <span class="label">URL WebSocket cho <code>NT532_HUB_WS</code></span>
+            <div class="form-row">
+              <input type="text" id="ws-url" readonly aria-label="URL WebSocket của hub">
+              <button class="btn" type="button" id="ws-copy">Sao chép</button>
+            </div>
+          </div>
+          <p class="dec-note">Không dán token vào notebook lưu công khai. Phiên Colab có thể bị thu hồi; worker không tự khởi động lại.</p>
+        </details>
+      </section>
+    </div>
+
+    <section class="panel" aria-labelledby="ev-h">
+      <span class="eyebrow" id="ev-h">Sự kiện của hub</span>
+      <ul class="loglist dec-events" id="hub-events"></ul>
+    </section>
+  </main>
+
+  <div class="toasts" id="toasts" role="status" aria-live="polite"></div>
+
+  <dialog id="confirm-dialog" aria-labelledby="confirm-title">
+    <form method="dialog">
+      <h2 id="confirm-title">Đang có lượt chạy</h2>
+      <p>Trạm đang xử lý một lượt. Đổi bộ quyết định ngay bây giờ có thể làm các quyết định còn lại của lượt này khác đi. Vẫn đổi?</p>
+      <div class="form-row">
+        <button class="btn" value="cancel">Hủy</button>
+        <button class="btn water" value="ok" id="confirm-ok">Vẫn đổi</button>
+      </div>
+    </form>
+  </dialog>
+
+  <script type="module" src="/static/js/decider.js"></script>
+</body>
+</html>

@@ -1,0 +1,12 @@
+services:
+  control:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      # Caddy ở container khác: tin header X-Forwarded-For để giới hạn đăng nhập theo IP thật
+      FORWARDED_ALLOW_IPS: "*"
+    volumes:
+      - ./data:/app/data
+    ports:
+      - "8800:8800"

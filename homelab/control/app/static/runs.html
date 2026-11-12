@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>NT532 · Lượt</title>
+  <meta name="theme-color" content="#0F1419">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%230F1419'/%3E%3Cpath d='M16 5c1 5 7 8 7 14a7 7 0 0 1-14 0c0-3 2-5 3-7 1 2 2 3 3 3 1-3 0-6 1-10z' fill='%23FF6B35'/%3E%3C/svg%3E">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&family=Be+Vietnam+Pro:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+  <div class="sticky-top">
+    <header class="topbar sub">
+      <div class="logo">NT<span>532</span></div>
+      <div class="who">
+        <span class="pi-status" title="Kết nối tới Pi"><span class="dot" id="pi-dot"></span><span class="label" id="pi-label">Pi</span></span>
+        <span class="user mono" id="user"></span>
+        <form method="post" action="/logout"><button class="linkbtn" type="submit">Đăng xuất</button></form>
+      </div>
+    </header>
+    <nav class="mainnav" aria-label="Điều hướng">
+      <a href="/">Tổng quan</a><a href="/history">Nhật ký</a><a href="/runs" aria-current="page">Lượt</a><a href="/decider">Bộ quyết định</a><span class="soon" aria-disabled="true">Cài đặt <small>sắp có</small></span>
+    </nav>
+  </div>
+
+  <main class="page">
+    <h1 class="page-h">Lượt xử lý</h1>
+
+    <section class="panel filter-panel" aria-label="Bộ lọc">
+      <div class="frow">
+        <div class="fld"><span class="label" id="range-label">Khoảng thời gian</span><div class="filters nomb" id="f-range" role="group" aria-labelledby="range-label"></div></div>
+        <label class="fld"><span class="label">Kết quả</span>
+          <select id="f-outcome">
+            <option value="">Tất cả</option><option value="extinguished">Dập được</option><option value="ignored">Bỏ qua</option>
+            <option value="alarm_only">Chỉ báo động</option><option value="human">Gọi người</option><option value="fault">Lỗi</option>
+            <option value="stopped">Dừng</option><option value="running">Đang chạy</option>
+          </select></label>
+      </div>
+      <div class="frow custom-range" id="custom-range" hidden>
+        <label class="fld"><span class="label">Từ</span><input id="f-from" type="datetime-local"></label>
+        <label class="fld"><span class="label">Đến</span><input id="f-to" type="datetime-local"></label>
+        <button class="btn water" id="f-apply" type="button">Áp dụng</button>
+      </div>
+    </section>
+
+    <div class="tiles" id="tiles" aria-label="Tổng hợp"></div>
+
+    <section class="panel" aria-label="Danh sách lượt">
+      <div class="panel-head">
+        <span class="eyebrow">Các lượt, mới nhất trước</span>
+        <span class="count mono" id="count"></span>
+      </div>
+      <div class="runs-head" aria-hidden="true"><span>Bắt đầu</span><span>Node</span><span>Mục tiêu</span><span>Vòi</span><span>Bộ quyết định</span><span>Kết quả</span><span>Lần</span><span>Sai số</span></div>
+      <ul class="runs" id="runs"></ul>
+    </section>
+  </main>
+  <div class="toasts" id="toasts" role="status" aria-live="polite"></div>
+  <script type="module" src="/static/js/runs.js"></script>
+</body>
+</html>

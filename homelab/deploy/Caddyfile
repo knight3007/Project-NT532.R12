@@ -1,0 +1,56 @@
+# Caddy cho NT532. {$DOMAIN} và {$ACME_EMAIL} lấy từ biến môi trường của container.
+{
+	# Email đăng ký Let's Encrypt (nhận cảnh báo hết hạn). Để trống thì Caddy vẫn chạy.
+	email {$ACME_EMAIL:}
+}
+
+{$DOMAIN} {
+	# Tự động lấy chứng chỉ Let's Encrypt và chuyển HTTP -> HTTPS.
+	# Muốn ép email cho riêng site này, bỏ comment:
+	# tls {$ACME_EMAIL}
+
+	# Không dùng file_server nên không có liệt kê thư mục.
+
+	log {
+		output stdout
+		format console
+	}
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		Permissions-Policy "camera=(), microphone=(), geolocation=()"
+		X-Frame-Options "DENY"
+		-Server
+	}
+
+	# Nén gzip, trừ luồng MJPEG và SSE (nén làm đệm dữ liệu, mất realtime)
+	@compressible {
+		not path /camera/* /api/stream
+	}
+	encode @compressible gzip
+
+	# Luồng thời gian thực: tắt đệm, timeout dài
+	@streaming path /camera/* /api/stream
+	handle @streaming {
+		reverse_proxy control:8800 {
+			flush_interval -1
+			transport http {
+				read_timeout 0
+				write_timeout 0
+				dial_timeout 10s
+			}
+		}
+	}
+
+	# Còn lại (gồm WebSocket của Colab worker, Caddy tự chuyển tiếp Upgrade)
+	handle {
+		reverse_proxy control:8800 {
+			transport http {
+				read_timeout 1h
+				dial_timeout 10s
+			}
+		}
+	}
+}
