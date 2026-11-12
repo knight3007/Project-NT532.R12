@@ -249,12 +249,21 @@ class Orchestrator:
         return True
 
     def _health_check(self) -> None:
-        if self.vision.state is None:
+        if self.vision.state is None and self.vision.reference_mode != "auto":
             return
         with self._health_lock:
             self._health_check_locked()
 
     def _health_check_locked(self) -> None:
+        if self.vision.state is None and self.vision.reference_mode == "auto":
+            try:
+                state = self.vision.commission(self.hub.frames(5))
+            except Exception as e:  # noqa: BLE001
+                self.events.emit("vision", f"auto reference map chưa sẵn sàng: {e}", level="warn")
+                return
+            self.pose_time = {n: self.clock() for n in state.nodes}
+            self.events.emit("vision", f"auto reference map: {sorted(state.nodes)}")
+            return
         try:
             h = self.vision.check(self.hub.frames(5))
         except Exception as e:  # noqa: BLE001

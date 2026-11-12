@@ -15,6 +15,22 @@ vision = Vision.from_site(site)   # nạp calibration/camera.yaml và calibratio
 
 `from_site` báo lỗi nếu chưa có `calibration/camera.yaml` (chưa hiệu chuẩn webcam). Thiếu file commissioning thì không lỗi: `vision.blockers()` sẽ trả `["chưa commissioning"]`.
 
+## Auto reference (thử nghiệm offline)
+
+Đặt `vision.reference_mode: auto` để dựng hệ tọa độ theo ID 2 từ tag 0–3 trong ảnh. Cần ID 2 và ít nhất hai reference khác, nằm phẳng trên cùng mặt bàn. X/Y theo cạnh của ID 2; Z hướng lên, đơn vị mét. `vision.commission(frames)` đo lại reference, camera và node 21/22. `vision.check(frames)` dựng bản đồ mới từ từng frame; nếu thiếu anchor hoặc hình học không đạt, `blockers()` chặn định vị. Auto mode không nạp hoặc ghi file commissioning cũ; `save()` sẽ báo lỗi.
+
+`vision.localize_table((u, v))` định vị pixel bất kỳ trên mặt bàn, độc lập với YOLO. `vision.targets(frame)` trong auto mode trả giao điểm vùng lửa với mặt bàn, nên Z=0. Bảng đứng và độ cao ngọn lửa không thể suy ra chỉ từ các reference tag trên bàn. Vùng nhận nằm trong bao lồi reference và mở rộng 0,20 m (có thể chỉnh `vision.auto_extrapolation_m`). Xem [đặc tả và giới hạn](dynamic-reference-mapping.md).
+
+Lệnh kiểm tra headless trên Pi từ thư mục `pi/`:
+
+```bash
+uv run --no-sync python scripts/dynamic_map.py --image ../data/frame.jpg --pixel 640,360 --json ../data/map.json --debug ../data/map-debug.jpg
+uv run --no-sync python scripts/dynamic_map.py --source rtsp://127.0.0.1:8554/cam/stream --frames 15 --json ../data/map.json
+uv run --no-sync python scripts/dynamic_map.py --image ../data/frame.jpg --yolo --weights ../models/fire-n.pt --json ../data/fire-map.json
+```
+
+CLI đọc `camera.intrinsics` từ site, hoặc nhận `--intrinsics /path/camera.yaml`; không sửa calibration, commissioning hay site. JSON chứa reference map, camera pose, pose node, sai số metric/chiếu lại, pixel và tùy chọn fire targets cùng PASS/FAIL. Ảnh debug được ghi bằng `--debug`; không cần màn hình đồ họa.
+
 YOLO chỉ được nạp ở lần gọi `detect` hoặc `targets` đầu tiên, mất vài giây. Nên gọi thử một lần lúc khởi động.
 
 ## Đọc ảnh

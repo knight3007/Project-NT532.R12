@@ -1,5 +1,7 @@
 # Triển khai phần thị giác lên Raspberry Pi 5
 
+Trước khi bật `vision.reference_mode: auto` trên Pi, dùng CLI headless trong [Vision API](vision-api.md#auto-reference-thử-nghiệm-offline) để kiểm tra ảnh thật, intrinsics và chất lượng bản đồ. Mode này chỉ định vị mặt bàn theo ID 2; bảng đứng cần một bước hiệu chuẩn hình học riêng. Kết quả CLI không tự ghi đè `calibration/camera.yaml` hay `calibration/commissioning.yaml`.
+
 Code thị giác đã chạy và có test trên laptop. Các bước dưới đây đưa nó lên Pi rồi đo những con số mà plan cần: thời gian suy luận và tải của Pi.
 
 ## 1. Chuẩn bị trên laptop
