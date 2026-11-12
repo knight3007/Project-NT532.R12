@@ -1,0 +1,26 @@
+.........s.......................................FFFF...FF.............. [ 73%]
+...F......................                                               [100%]
+================================== FAILURES ===================================
+E   FileNotFoundError: [Errno 2] No such file or directory: 'D:\\IOT Hien Dai\\Project\\NT532-DYNAMIC-ROBUST\\.worktrees\\aiming-audit\\data\\sim\\commissioning.yaml'
+C:\Users\dotha\anaconda3\Lib\pathlib\_local.py:537: FileNotFoundError: [Errno 2] No such file or directory: 'D:\\IOT Hien Dai\\Project\\NT532-DYNAMIC-ROBUST\\.worktrees\\aiming-audit\\data\\sim\\commissioning.yaml'
+E   FileNotFoundError: [Errno 2] No such file or directory: 'D:\\IOT Hien Dai\\Project\\NT532-DYNAMIC-ROBUST\\.worktrees\\aiming-audit\\data\\sim\\commissioning.yaml'
+C:\Users\dotha\anaconda3\Lib\pathlib\_local.py:537: FileNotFoundError: [Errno 2] No such file or directory: 'D:\\IOT Hien Dai\\Project\\NT532-DYNAMIC-ROBUST\\.worktrees\\aiming-audit\\data\\sim\\commissioning.yaml'
+E   FileNotFoundError: [Errno 2] No such file or directory: 'D:\\IOT Hien Dai\\Project\\NT532-DYNAMIC-ROBUST\\.worktrees\\aiming-audit\\data\\sim\\commissioning.yaml'
+C:\Users\dotha\anaconda3\Lib\pathlib\_local.py:537: FileNotFoundError: [Errno 2] No such file or directory: 'D:\\IOT Hien Dai\\Project\\NT532-DYNAMIC-ROBUST\\.worktrees\\aiming-audit\\data\\sim\\commissioning.yaml'
+E   FileNotFoundError: [Errno 2] No such file or directory: 'D:\\IOT Hien Dai\\Project\\NT532-DYNAMIC-ROBUST\\.worktrees\\aiming-audit\\data\\sim\\commissioning.yaml'
+C:\Users\dotha\anaconda3\Lib\pathlib\_local.py:537: FileNotFoundError: [Errno 2] No such file or directory: 'D:\\IOT Hien Dai\\Project\\NT532-DYNAMIC-ROBUST\\.worktrees\\aiming-audit\\data\\sim\\commissioning.yaml'
+E   FileNotFoundError: [Errno 2] No such file or directory: 'D:\\IOT Hien Dai\\Project\\NT532-DYNAMIC-ROBUST\\.worktrees\\aiming-audit\\data\\sim\\commissioning.yaml'
+C:\Users\dotha\anaconda3\Lib\pathlib\_local.py:537: FileNotFoundError: [Errno 2] No such file or directory: 'D:\\IOT Hien Dai\\Project\\NT532-DYNAMIC-ROBUST\\.worktrees\\aiming-audit\\data\\sim\\commissioning.yaml'
+E   FileNotFoundError: [Errno 2] No such file or directory: 'D:\\IOT Hien Dai\\Project\\NT532-DYNAMIC-ROBUST\\.worktrees\\aiming-audit\\data\\sim\\commissioning.yaml'
+C:\Users\dotha\anaconda3\Lib\pathlib\_local.py:537: FileNotFoundError: [Errno 2] No such file or directory: 'D:\\IOT Hien Dai\\Project\\NT532-DYNAMIC-ROBUST\\.worktrees\\aiming-audit\\data\\sim\\commissioning.yaml'
+E   FileNotFoundError: [WinError 2] The system cannot find the file specified
+C:\Users\dotha\anaconda3\Lib\subprocess.py:1554: FileNotFoundError: [WinError 2] The system cannot find the file specified
+=========================== short test summary info ===========================
+FAILED tests/test_scenario_3d.py::test_floor_and_wall_sampling - FileNotFound...
+FAILED tests/test_scenario_3d.py::test_truth_surface_and_dist3_use_y - FileNo...
+FAILED tests/test_scenario_3d.py::test_state_lines_state_surface - FileNotFou...
+FAILED tests/test_scenario_3d.py::test_parser_roundtrip_floor_and_wall - File...
+FAILED tests/test_scenario_3d.py::test_reach_tilt_knob_and_facing - FileNotFo...
+FAILED tests/test_scenario_3d.py::test_facing_matches_aiming_yaw_convention
+FAILED tests/test_aim_point.py::test_point_near_centre_is_measured_and_laser_ends_off[coap]
+7 failed, 90 passed, 1 skipped in 119.53s (0:01:59)
