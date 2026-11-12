@@ -63,6 +63,9 @@ camera:
     marker: 0.022
 
 vision:
+  # fixed = tọa độ reference đo sẵn; auto = suy ra bản đồ mặt bàn theo ID 2 từ ảnh hiện tại.
+  # Chỉ bật auto sau khi kiểm tra bằng scripts/dynamic_map.py với camera thật.
+  reference_mode: fixed
   weights: models/fire-n.pt     # Pi dùng bản NCNN: models/fire-n_ncnn_model
   detect_conf: 0.35
   imgsz: 640

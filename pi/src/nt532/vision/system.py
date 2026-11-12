@@ -24,9 +24,10 @@ import yaml
 
 from ..config import REPO_ROOT, load_site
 from .calibration import load_intrinsics
+from .dynamic_mapping import DynamicMap, estimate_reference_maps
 from .localize import localize_surfaces, project
 from .spot import find_spot as _find_spot
-from .tags import median_corners, reprojection_error, solve_camera
+from .tags import detect_tags, median_corners, reprojection_error, solve_camera
 from .tags import tag_poses as _tag_poses
 from .types import Camera, Detection, Intrinsics, TagPose, Target
 
@@ -72,9 +73,13 @@ class Vision:
     ) -> None:
         self.site = site
         self.cfg = site["vision"]
+        self.reference_mode = self.cfg.get("reference_mode", "fixed")
+        if self.reference_mode not in ("fixed", "auto"):
+            raise ValueError("vision.reference_mode must be fixed or auto")
         self.intrinsics = intrinsics
         self._detector = detector
         self.state: Commissioning | None = None
+        self.reference_map: DynamicMap | None = None
         self.stale: set[str] = set()
         node_ids = site["tags"]["nodes"]["ids"]
         self._node_of = {tag_id: name for name, tag_id in node_ids.items()}
@@ -85,7 +90,7 @@ class Vision:
         site = site or load_site()
         vision = cls(site, load_intrinsics(REPO_ROOT / site["camera"]["intrinsics"]), detector)
         path = REPO_ROOT / site["vision"]["commissioning"]
-        if path.exists():
+        if vision.reference_mode == "fixed" and path.exists():
             vision.load(path)
         return vision
 
@@ -95,6 +100,8 @@ class Vision:
     def camera(self) -> Camera:
         if self.state is None:
             raise RuntimeError("chưa commissioning: chưa biết pose camera")
+        if self.reference_mode == "auto" and "camera" in self.stale:
+            raise RuntimeError("auto reference map không tin cậy")
         return self.state.camera
 
     @property
@@ -108,6 +115,12 @@ class Vision:
         ghi vào `missing`. Báo lỗi nếu không thấy đủ 2 tag tham chiếu.
         """
         frames = _frames(frames)
+        if self.reference_mode == "auto":
+            if any(frame.shape[1::-1] != self.intrinsics.size for frame in frames):
+                self.reference_map = None
+                self.stale.add("camera")
+                raise ValueError("image size differs from camera intrinsics calibration")
+            return self.commission_corners([detect_tags(frame) for frame in frames])
         corners, rate = median_corners(frames)
         refs = {i: c for i, c in corners.items() if rate[i] >= self.cfg["min_tag_rate"]}
         camera = solve_camera(refs, self.intrinsics, self.site)
@@ -123,6 +136,34 @@ class Vision:
         self.stale.clear()
         return self.state
 
+    def commission_corners(self, observations: list[dict[int, np.ndarray]]) -> Commissioning:
+        """Build an auto map from independent frame observations; never persist it."""
+        if self.reference_mode != "auto":
+            raise RuntimeError("commission_corners requires auto reference mode")
+        try:
+            mapping = estimate_reference_maps(
+                observations, self.intrinsics, self.site["tags"]["reference"]["size"]
+            )
+        except ValueError:
+            self.reference_map = None
+            self.stale.add("camera")
+            raise
+        rate = {i: sum(i in frame for frame in observations) / len(observations)
+                for i in set().union(*(frame.keys() for frame in observations))}
+        latest = observations[-1]
+        eligible = {i: c for i, c in latest.items()
+                    if rate[i] >= self.cfg["min_tag_rate"]}
+        poses = _tag_poses(eligible, mapping.camera, self.site)
+        nodes = {self._node_of[i]: p for i, p in poses.items()}
+        state = Commissioning(
+            camera=mapping.camera, nodes=nodes, reprojection_px=mapping.reprojection_px,
+            tag_rate=rate, missing=sorted(set(self._node_of.values()) - set(nodes)),
+        )
+        self.reference_map = mapping
+        self.state = state
+        self.stale.clear()
+        return state
+
     def check(self, frames: np.ndarray | list[np.ndarray]) -> Health:
         """So cảnh hiện tại với lúc commissioning; đánh dấu hết hạn phần bị xê dịch.
 
@@ -131,6 +172,17 @@ class Vision:
         `vision.auto_repose_camera`, tính lại pose camera ngay từ các khung này thay vì đánh dấu
         hết hạn; `Health.repose` ghi lại thay đổi. Chưa lưu file: gọi `save()` nếu muốn giữ.
         """
+        if self.reference_mode == "auto":
+            old_nodes = dict(self.nodes)
+            try:
+                self.commission(_frames(frames))
+            except ValueError:
+                self.reference_map = None
+                self.stale.add("camera")
+                return Health(None, {}, sorted(self.stale))
+            moved = {name: float(np.linalg.norm(pose.position - old_nodes[name].position))
+                     for name, pose in self.nodes.items() if name in old_nodes}
+            return Health(None, moved, [], None)
         corners, rate = median_corners(_frames(frames))
         refs_seen = sum(i in corners for i in self._reference_ids())
         shift = reprojection_error(corners, self.camera, self.site) if refs_seen >= 2 else None
@@ -159,7 +211,8 @@ class Vision:
             return ["chưa commissioning"]
         reasons = []
         if "camera" in self.stale:
-            reasons.append("camera bị xê dịch, cần commissioning lại")
+            reasons.append("auto reference map không tin cậy" if self.reference_mode == "auto"
+                           else "camera bị xê dịch, cần commissioning lại")
         if node is not None:
             if node not in self.nodes:
                 reasons.append(f"không có pose của node {node}")
@@ -175,7 +228,7 @@ class Vision:
         Cắt vùng bảng trước khi đưa vào YOLO giúp thẻ bia nhỏ chiếm nhiều pixel hơn sau khi
         ảnh bị thu về cỡ `imgsz`. Tọa độ trả về luôn tính trên ảnh gốc.
         """
-        if self.state is None:
+        if self.state is None or self.reference_mode == "auto":
             return self._detect(frame)
         x0, y0, x1, y1 = self.target_roi(frame.shape)
         found = self._detect(frame[y0:y1, x0:x1])
@@ -192,9 +245,25 @@ class Vision:
 
     def localize_surface(self, pixel: tuple[float, float]) -> tuple[np.ndarray, str] | None:
         """Như `localize` nhưng kèm tên mặt: (điểm, "wall" | "floor"), hoặc None."""
+        if self.reference_mode == "auto":
+            point = self.localize_table(pixel)
+            return None if point is None else (point, "floor")
         return localize_surfaces(
             pixel, self.camera, self.site["board"], self._floor(), self.cfg["board_margin_m"]
         )
+
+    def localize_table(self, pixel: tuple[float, float]) -> np.ndarray | None:
+        """Independent of YOLO: intersect one pixel with the current ID 2 table plane."""
+        if self.reference_mode != "auto" or self.reference_map is None or self.blockers():
+            return None
+        point = self.reference_map.table_point(pixel)
+        return point if point is not None and self._in_auto_area(point) else None
+
+    def _in_auto_area(self, point: np.ndarray) -> bool:
+        refs = self.reference_map.references
+        hull = cv2.convexHull(np.array([p[:2] for p in refs.values()], np.float32))
+        margin = self.cfg.get("auto_extrapolation_m", 0.20)
+        return cv2.pointPolygonTest(hull, tuple(map(float, point[:2])), True) >= -margin
 
     def localize_detection(self, d: Detection) -> tuple[np.ndarray, str] | None:
         """Vị trí sa bàn của một hộp lửa, kèm mặt.
@@ -230,6 +299,8 @@ class Vision:
 
         Có `sensor` thì chỉ giữ bia cách sensor đó không quá `sensor_match_radius_x` theo X.
         """
+        if self.reference_mode == "auto" and self.blockers():
+            return []
         radius = self.site["targeting"]["sensor_match_radius_x"]
         if sensor is not None and sensor not in self.nodes:
             raise ValueError(f"không có pose của sensor {sensor}")
@@ -261,6 +332,10 @@ class Vision:
 
     def in_target_area(self, point: np.ndarray) -> bool:
         """Điểm nằm trên bảng đứng hoặc trên nền (trong lề `board_margin_m`)."""
+        if self.reference_mode == "auto":
+            return (self.reference_map is not None and not self.blockers()
+                    and abs(float(point[2])) <= self.cfg["board_margin_m"]
+                    and self._in_auto_area(point))
         m = self.cfg["board_margin_m"]
         x, y, z = (float(c) for c in point)
         board = self.site["board"]
@@ -288,12 +363,20 @@ class Vision:
 
     def board_polygon(self, per_edge: int = 12) -> np.ndarray:
         """Viền bảng bia đứng chiếu lên ảnh, (N, 2) pixel. Lấy nhiều điểm mỗi cạnh vì méo ống kính."""
+        if self.reference_mode == "auto":
+            return np.empty((0, 2))  # board pose is unknown in the ID 2 frame
         board = self.site["board"]
         w, h, y = board["width"], board["height"], board["plane_y"]
         return self._outline([[0, y, 0], [w, y, 0], [w, y, h], [0, y, h]], per_edge)
 
     def floor_polygon(self, per_edge: int = 12) -> np.ndarray:
         """Viền vùng nền chiếu lên ảnh, (N, 2) pixel; mảng rỗng (0, 2) nếu không có nền."""
+        if self.reference_mode == "auto":
+            if self.reference_map is None or self.blockers():
+                return np.empty((0, 2))
+            refs = np.array([p[:2] for p in self.reference_map.references.values()], np.float32)
+            hull = cv2.convexHull(refs).reshape(-1, 2)
+            return np.array([project((x, y, 0), self.camera) for x, y in hull])
         floor = self._floor()
         if floor is None:
             return np.empty((0, 2))
@@ -302,6 +385,8 @@ class Vision:
 
     def target_roi(self, shape: tuple[int, ...], pad: float = 0.05) -> tuple[int, int, int, int]:
         """Hình chữ nhật bao cả bảng đứng lẫn nền trên ảnh, nới `pad` mỗi phía: (x0, y0, x1, y1)."""
+        if self.reference_mode == "auto":
+            return 0, 0, shape[1], shape[0]
         poly = np.concatenate([self.board_polygon(), self.floor_polygon()])
         (x0, y0), (x1, y1) = poly.min(axis=0), poly.max(axis=0)
         dx, dy = (x1 - x0) * pad, (y1 - y0) * pad
@@ -319,6 +404,8 @@ class Vision:
     # --- lưu và nạp -------------------------------------------------------------------------
 
     def save(self, path: str | Path | None = None) -> Path:
+        if self.reference_mode == "auto":
+            raise RuntimeError("auto reference map is transient; do not save commissioning")
         if self.state is None:
             raise RuntimeError("chưa commissioning, không có gì để lưu")
         state = self.state

@@ -116,8 +116,9 @@ class Dashboard:
 
     def annotate(self, img: np.ndarray) -> np.ndarray:
         vision = self.st.vision
-        if vision.state is None:
-            cv2.putText(img, "chua commissioning", (12, 30), 0, 0.8, RED, 2)
+        if vision.state is None or (vision.reference_mode == "auto" and vision.blockers()):
+            message = "auto map invalid" if vision.state is not None else "chua commissioning"
+            cv2.putText(img, message, (12, 30), 0, 0.8, RED, 2)
             return img
         cam, plane_y = vision.camera, self.st.site["board"]["plane_y"]
 
