@@ -1,7 +1,7 @@
 """Đo độ trễ stream điện thoại → Pi bằng laser của một node, in giá trị để điền camera.stream.latency_s.
 
     uv run python scripts/stream_latency.py                              # theo camera.stream.url, node s1
-    uv run python scripts/stream_latency.py --source rtsp://127.0.0.1:8554/cam --node s1
+    uv run python scripts/stream_latency.py --source rtsp://127.0.0.1:8554/cam/stream --node s1
     uv run python scripts/stream_latency.py --trials 10 --pan 5 --tilt -3 --threshold 30
 
 Mỗi lượt: bật laser, đo từ lúc gửi /fire tới khung đầu tiên trong stream có thay đổi so với ảnh nền.

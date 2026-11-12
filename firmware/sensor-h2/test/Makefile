@@ -7,7 +7,7 @@ CORE := ../main/core
 CFLAGS += -std=c11 -Wall -Wextra -Werror -Wshadow -Wconversion -O1 -g -I$(CORE)
 # ASan không chạy được trong PRoot (không mmap được shadow memory); chỉ dùng UBSan. Máy thường: make SAN='-fsanitize=address,undefined'
 SAN ?= -fsanitize=undefined -fno-sanitize-recover=undefined
-SRCS := test_main.c test_actuator.c test_alarm.c test_proto.c $(CORE)/actuator.c $(CORE)/alarm.c $(CORE)/proto.c
+SRCS := test_main.c test_actuator.c test_alarm.c test_proto.c test_servo_map.c $(CORE)/actuator.c $(CORE)/alarm.c $(CORE)/proto.c $(CORE)/servo_map.c
 
 .PHONY: all test clean
 all test: test_run

@@ -153,3 +153,6 @@ class StreamCapture:
         self._halt.set()
         with self._cv:
             self._cv.notify_all()
+
+        if threading.current_thread() is not self._thread:
+            self._thread.join(timeout=self.timeout_s + 2)
