@@ -7,6 +7,7 @@
 
 import argparse
 import json
+import re
 from pathlib import Path
 
 import cv2
@@ -15,7 +16,9 @@ import numpy as np
 from nt532.config import REPO_ROOT, load_site
 from nt532.vision.calibration import load_intrinsics
 from nt532.vision.camera import open_camera, read_frames
+from nt532.vision.dynamic_mapping import estimate_reference_map
 from nt532.vision.system import Vision
+from nt532.vision.tags import _square, detect_tags
 
 
 def _pair(value: str) -> tuple[float, float]:
@@ -28,6 +31,53 @@ def _pair(value: str) -> tuple[float, float]:
 
 def _xyz(point: np.ndarray) -> list[float]:
     return [round(float(v), 5) for v in point]
+
+
+def _quality(quality: dict[int, dict[str, float]]) -> dict[str, dict[str, float]]:
+    return {str(i): {name: round(value, 5) for name, value in q.items()}
+            for i, q in sorted(quality.items())}
+
+
+def _diagnose(observations, intrinsics, size):
+    results = []
+    rejected = {}
+    for index, corners in enumerate(observations, 1):
+        reference_ids = sorted(set(corners) & set(range(4)))
+        pixel_quality = {}
+        for tag_id in reference_ids:
+            edges = np.linalg.norm(np.roll(corners[tag_id], -1, axis=0) - corners[tag_id],
+                                   axis=1)
+            pixel_quality[str(tag_id)] = {"min_edge_px": round(float(edges.min()), 2),
+                                          "max_edge_px": round(float(edges.max()), 2)}
+        entry = {"frame": index, "detected_tags": sorted(corners),
+                 "reference_tags": reference_ids, "pixel_quality": pixel_quality}
+        if 2 in corners:
+            _, rotations, translations, errors = cv2.solvePnPGeneric(
+                _square(size), corners[2], intrinsics.K, intrinsics.dist,
+                flags=cv2.SOLVEPNP_IPPE_SQUARE,
+            )
+            entry["anchor_pose_candidates"] = [
+                {"reprojection_px": round(float(error[0]), 3),
+                 "camera_height_m": round(float((
+                     -cv2.Rodrigues(rotation)[0].T @ translation.reshape(3))[2]), 5)}
+                for rotation, translation, error in zip(rotations, translations, errors)
+            ]
+        try:
+            mapping = estimate_reference_map(corners, intrinsics, size)
+            entry.update(status="PASS", metric_error_m=round(mapping.metric_error_m, 5),
+                         reprojection_px=round(mapping.reprojection_px, 3),
+                         per_tag_quality=_quality(mapping.tag_quality))
+        except ValueError as exc:
+            entry.update(status="FAIL", reason=str(exc))
+            match = re.search(r"\bID (\d+)\b", str(exc))
+            if match:
+                rejected[match.group(1)] = str(exc)
+        results.append(entry)
+    all_ids = sorted(set().union(*(set(c) for c in observations)))
+    rates = {str(i): round(sum(i in frame for frame in observations) / len(observations), 3)
+             for i in all_ids}
+    return {"detection_rate": rates, "frame_results": results, "used_tags": [],
+            "rejected_tags": rejected, "per_tag_quality": {}}
 
 
 def _debug_image(frame: np.ndarray, vision: Vision, pixel, targets, status: str) -> np.ndarray:
@@ -59,6 +109,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     source = parser.add_mutually_exclusive_group(required=True)
     source.add_argument("--image", type=Path, help="single image file")
+    source.add_argument("--image-dir", type=Path, help="all JPG/PNG frames in a directory")
     source.add_argument("--source", help="RTSP URL or camera source accepted by open_camera")
     parser.add_argument("--site", type=Path, help="site YAML; default config/site.yaml")
     parser.add_argument("--intrinsics", type=Path, help="camera YAML; default site camera.intrinsics")
@@ -89,6 +140,15 @@ def main(argv: list[str] | None = None) -> int:
         if frame is None:
             raise SystemExit(f"cannot read image {args.image}")
         images = [frame]
+    elif args.image_dir is not None:
+        paths = sorted(p for p in args.image_dir.iterdir()
+                       if p.is_file() and p.suffix.lower() in (".jpg", ".jpeg", ".png"))
+        if not paths:
+            raise SystemExit(f"no images in {args.image_dir}")
+        images = [cv2.imread(str(path)) for path in paths]
+        if any(image is None for image in images):
+            raise SystemExit("cannot read one or more images in directory")
+        frame = images[-1]
     else:
         cap = open_camera(site["camera"], args.source)
         try:
@@ -96,21 +156,32 @@ def main(argv: list[str] | None = None) -> int:
         finally:
             cap.release()
         frame = images[-1]
-    if frame.shape[1::-1] != intrinsics.size:
-        raise SystemExit(f"image size {frame.shape[1::-1]} differs from calibration {intrinsics.size}")
-    result = {"status": "FAIL", "mode": "auto", "anchor_id": 2, "unit": "m"}
+    if any(image.shape[1::-1] != intrinsics.size for image in images):
+        raise SystemExit(f"image size differs from calibration {intrinsics.size}")
+    observations = [detect_tags(image) for image in images]
+    size = site["tags"]["reference"]["size"]
+    result = {"status": "FAIL", "mode": "auto", "anchor_id": 2, "unit": "m",
+              "diagnostics": _diagnose(observations, intrinsics, size)}
     targets = []
     try:
-        state = vision.commission(images)
+        state = vision.commission_corners(observations)
         mapping = vision.reference_map
+        result["diagnostics"]["used_tags"] = sorted(mapping.references)
+        result["diagnostics"]["per_tag_quality"] = _quality(mapping.tag_quality)
         result["references"] = {str(i): _xyz(p) for i, p in sorted(mapping.references.items())}
         result["missing_references"] = sorted(set(range(4)) - set(mapping.references))
         result["camera"] = {"position": _xyz(state.camera.position),
                             "R": state.camera.R.tolist(), "t": _xyz(state.camera.t)}
         result["nodes"] = {name: _xyz(pose.position) for name, pose in state.nodes.items()}
-        result["quality"] = {"anchor_reprojection_px": round(mapping.reprojection_px, 3),
+        result["quality"] = {"anchor_reprojection_px": round(mapping.anchor_reprojection_px, 3),
+                             "joint_reprojection_px": round(mapping.reprojection_px, 3),
                              "metric_error_m": round(mapping.metric_error_m, 5),
+                             "initial_metric_error_m": round(mapping.initial_metric_error_m, 5),
                              "pose_ambiguity_m": round(mapping.ambiguity_m, 5),
+                             "reference_hull_area_m2": round(mapping.hull_area_m2, 5),
+                             "stability_m": round(mapping.stability_m, 5),
+                             "holdout_m": (None if mapping.holdout_m is None else
+                                           round(mapping.holdout_m, 5)),
                              "frames_used": mapping.frames_used}
         if args.pixel is not None:
             point = vision.localize_table(args.pixel)
