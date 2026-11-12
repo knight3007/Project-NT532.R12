@@ -41,3 +41,4 @@ extern int g_checks, g_fails;
 void test_actuator(void);
 void test_alarm(void);
 void test_proto(int verbose);
+void test_servo_map(void);

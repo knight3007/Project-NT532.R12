@@ -67,6 +67,10 @@ def main() -> None:
     node_ids = site["tags"]["nodes"]["ids"]
     print("\n".join(commissioning_report(state, node_ids, cfg["camera_shift_px"])))
     ok = not state.missing and state.reprojection_px <= cfg["camera_shift_px"]
+    if vision.reference_mode == "auto":
+        print("Auto reference map chỉ giữ trong bộ nhớ; không ghi commissioning. "
+              "Dùng scripts/dynamic_map.py để xuất JSON và ảnh debug.")
+        sys.exit(0 if ok else 1)
     if ok or args.force:
         print(f"Đã lưu {vision.save().relative_to(REPO_ROOT)}")
         if args.source == "sim":

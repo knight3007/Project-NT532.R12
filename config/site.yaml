@@ -50,7 +50,7 @@ camera:
   # Camera điện thoại: điện thoại đẩy RTMP lên mediamtx trên Pi, Pi đọc lại RTSP. url null là dùng webcam
   # (index ở trên). Xem docs/camera-dien-thoai.md. Độ phân giải, lấy nét, phơi sáng chỉnh trên ứng dụng.
   stream:
-    url: null                  # ví dụ "rtsp://127.0.0.1:8554/cam"
+    url: null                  # ví dụ "rtsp://127.0.0.1:8554/cam/stream"
     latency_s: 0.8             # độ trễ điện thoại → Pi; đo bằng scripts/stream_latency.py
     reconnect_s: 2.0
     timeout_s: 5.0
@@ -63,6 +63,9 @@ camera:
     marker: 0.022
 
 vision:
+  # fixed = tọa độ reference đo sẵn; auto = suy ra bản đồ mặt bàn theo ID 2 từ ảnh hiện tại.
+  # Chỉ bật auto sau khi kiểm tra bằng scripts/dynamic_map.py với camera thật.
+  reference_mode: fixed
   weights: models/fire-n.pt     # Pi dùng bản NCNN: models/fire-n_ncnn_model
   detect_conf: 0.35
   imgsz: 640

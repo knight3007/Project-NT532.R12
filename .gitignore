@@ -23,6 +23,7 @@ runs/
 # Log lúc chạy
 logs/
 *.log
+backups/
 
 # Editor và hệ điều hành
 .vscode/
@@ -37,3 +38,4 @@ weights/
 kaggle/*.zip
 firmware/*/test/test_run
 firmware/sensor-h2/test/libcore.so
+/build-output/

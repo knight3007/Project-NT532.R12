@@ -10,6 +10,7 @@ int main(int argc, char **argv)
     test_actuator();
     test_alarm();
     test_proto(verbose);
+    test_servo_map();
     if (g_fails) {
         fprintf(stderr, "FAIL: %d/%d\n", g_fails, g_checks);
         return 1;

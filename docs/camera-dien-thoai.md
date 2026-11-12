@@ -5,10 +5,10 @@ Camera sa bàn có thể là điện thoại thay cho webcam. Điện thoại ph
 ## 1. Sơ đồ
 
 ```
-Điện thoại (Larix Broadcaster, Android/iOS)
+Điện thoại (LOLS IRL, Android)
    │ RTMP, Wi-Fi 5 GHz
    ▼
-mediamtx trên Pi 5 (:1935, path cam)
+mediamtx trên Pi 5 (:1935, path cam/stream)
    │ RTSP/TCP, localhost:8554
    ▼
 StreamCapture (nt532/vision/stream.py) → FrameHub → orchestrator
@@ -26,7 +26,7 @@ mkdir -p ~/mediamtx && cd ~/mediamtx
 tar xzf ~/Downloads/mediamtx_*_linux_arm64.tar.gz
 ```
 
-Chạy thử với cấu hình của repo (RTMP :1935, RTSP :8554, path `cam`, tắt HLS/WebRTC/SRT):
+Chạy thử với cấu hình của repo (RTMP :1935, RTSP :8554, path `cam/stream`, tắt HLS/WebRTC/SRT):
 
 ```bash
 ~/mediamtx/mediamtx ~/nt532/pi/deploy/mediamtx.yml
@@ -56,9 +56,9 @@ sudo systemctl enable --now mediamtx
 
 ## 3. Cài ứng dụng trên điện thoại
 
-Dùng Larix Broadcaster (Android, iOS). Thêm kết nối mới:
+Dùng LOLS IRL (Android). Thêm kết nối mới:
 
-- URL: `rtmp://<IP Pi>:1935/cam`.
+- URL: `rtmp://<IP Pi>:1935/cam/stream`.
 - Độ phân giải 1280x720, khớp `camera.width/height` trong `site.yaml`. 30 fps. Bitrate 4–6 Mbps. Khoảng cách keyframe 1 s. Khóa chiều ngang.
 - **Tắt chống rung (EIS/OIS điện tử)**: nó làm méo khung hình, hỏng thông số nội tại và pose tag.
 - Khóa lấy nét và phơi sáng (AF/AE lock), không dùng zoom số.
@@ -71,10 +71,10 @@ Dùng Larix Broadcaster (Android, iOS). Thêm kết nối mới:
 ```yaml
 camera:
   stream:
-    url: "rtsp://127.0.0.1:8554/cam"
+    url: "rtsp://127.0.0.1:8554/cam/stream"
 ```
 
-Đặt xong, `run_station.py` và các script dùng camera tự đọc stream. Cũng có thể truyền thẳng `--source rtsp://127.0.0.1:8554/cam` cho script nào có `--source`.
+Đặt xong, `run_station.py` và các script dùng camera tự đọc stream. Cũng có thể truyền thẳng `--source rtsp://127.0.0.1:8554/cam/stream` cho script nào có `--source`.
 
 ## 5. Hiệu chuẩn nội tại trên chính stream này
 
@@ -98,8 +98,8 @@ Việc này quan trọng ở bước CORRECT: orchestrator bật laser 700 ms, c
 
 ## 7. Kiểm tra nhanh
 
-- Từ laptop cùng mạng: `ffplay rtsp://<IP Pi>:8554/cam` hoặc mở URL đó bằng VLC.
-- Xem tag và pose qua stream: `uv run --no-sync python scripts/live_tags.py --source rtsp://127.0.0.1:8554/cam`.
+- Từ laptop cùng mạng: `ffplay rtsp://<IP Pi>:8554/cam/stream` hoặc mở URL đó bằng VLC.
+- Xem tag và pose qua stream: `uv run --no-sync python scripts/live_tags.py --source rtsp://127.0.0.1:8554/cam/stream`.
 
 ## 8. Sự cố thường gặp
 

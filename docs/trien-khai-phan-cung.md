@@ -169,9 +169,9 @@ Nối servo, laser, bơm theo bước 0, vẫn **chưa có nước** tới khi l
 ## 7. Camera điện thoại và commissioning (Hùng) - chi tiết [camera-dien-thoai.md](camera-dien-thoai.md)
 
 - [ ] mediamtx chạy: `sudo systemctl status mediamtx` (hoặc `~/mediamtx/mediamtx ~/nt532/pi/deploy/mediamtx.yml`).
-- [ ] Điện thoại (Larix Broadcaster): `rtmp://<IP Pi>:1935/cam`, 1280x720, 30 fps, 4–6 Mbps, keyframe 1 s, khóa ngang, **tắt chống rung**, khóa AF/AE, không zoom, giữ sáng màn hình, cắm sạc. Gắn cứng lên giá.
-- [ ] `config/site.yaml` → `camera.stream.url: "rtsp://127.0.0.1:8554/cam"` (đang `null`). Nếu dùng webcam thay thế: `camera.index`, và `camera.focus` / `camera.exposure` (đang `null`; dò bằng `v4l2-ctl -d /dev/video0 -l`), điện thoại thì không dùng hai khóa này.
-- [ ] Xem được: `ffplay rtsp://<IP Pi>:8554/cam` từ laptop. Camera thấy cả bảng, 4 tag tham chiếu và hai tag node.
+- [ ] Điện thoại (LOLS IRL): `rtmp://<IP Pi>:1935/cam/stream`, 1280x720, 30 fps, 4–6 Mbps, keyframe 1 s, khóa ngang, **tắt chống rung**, khóa AF/AE, không zoom, giữ sáng màn hình, cắm sạc. Gắn cứng lên giá.
+- [ ] `config/site.yaml` → `camera.stream.url: "rtsp://127.0.0.1:8554/cam/stream"` (đang `null`). Nếu dùng webcam thay thế: `camera.index`, và `camera.focus` / `camera.exposure` (đang `null`; dò bằng `v4l2-ctl -d /dev/video0 -l`), điện thoại thì không dùng hai khóa này.
+- [ ] Xem được: `ffplay rtsp://<IP Pi>:8554/cam/stream` từ laptop. Camera thấy cả bảng, 4 tag tham chiếu và hai tag node.
 - [ ] **Đo tâm 4 tag tham chiếu bằng thước**, điền `tags.reference.positions` 0..3 (đang `null`) theo hệ sa bàn (gốc góc trước trái, tag nằm ngửa, mép trên hướng bảng, cạnh song song mép bàn). Cũng đo lại `table.*`, `board.*` nếu số thật khác. Dán tag 21 và 22 lên đế cố định của node s1 và s2 (khớp `tags.nodes.ids`).
 - [ ] **Hiệu chuẩn nội tại trên chính stream** (20–30 ảnh ChArUco, nghiêng nhiều hướng; không đổi độ phân giải hay ống kính sau đó):
 
@@ -188,7 +188,7 @@ Nối servo, laser, bơm theo bước 0, vẫn **chưa có nước** tới khi l
   uv run --no-sync python scripts/commission.py --check  # sau khi ai chạm vào sa bàn
   ```
 
-  **Qua:** mã thoát 0, thấy đủ 4 tag tham chiếu và cả hai node. Mã 1 (thiếu node hoặc sai số quá `vision.camera_shift_px`), mã 2 (không thấy đủ tag tham chiếu). Có màn hình thì xem bằng `uv run --no-sync python scripts/live_tags.py --source rtsp://127.0.0.1:8554/cam` (phím C commissioning, K kiểm tra).
+  **Qua:** mã thoát 0, thấy đủ 4 tag tham chiếu và cả hai node. Mã 1 (thiếu node hoặc sai số quá `vision.camera_shift_px`), mã 2 (không thấy đủ tag tham chiếu). Có màn hình thì xem bằng `uv run --no-sync python scripts/live_tags.py --source rtsp://127.0.0.1:8554/cam/stream` (phím C commissioning, K kiểm tra).
 - [ ] **Độ trễ stream** (cần node s1 đã chạy, laser chiếu vào vùng camera thấy):
 
   ```bash
@@ -258,7 +258,7 @@ Ghi số thật, kể cả khi không đạt. Thêm `--headless` khi chạy trê
 | Tia nước lệch khỏi điểm laser | `water_tilt_deg` chưa đo, mực nước trong bình đổi, vòi lỏng | Đo lại bước 6, cố định vòi, giữ mực nước |
 | `/fire` bị `rejected` | Chưa có `/hb`, hoặc `/aim` cùng id chưa `reached`, hoặc id nhỏ hơn `/stop` đã nhận | Gửi `/hb` liên tục; id tăng dần; xem `err` trong `/status` |
 | Bơm hoặc laser không tắt sau khi rút Pi | Điện trở kéo xuống thiếu; MOSFET không đủ mức logic; lỗi firmware | **Ngắt nguồn bơm ngay.** Đo cổng MOSFET khi H2 chưa chạy; checklist an toàn mục 15 |
-| Stream rớt, "lỗi camera" trên dashboard | Điện thoại ngủ, mất Wi-Fi, bitrate quá cao | `camera-dien-thoai.md` mục 8; `ffplay rtsp://<IP Pi>:8554/cam` |
+| Stream rớt, "lỗi camera" trên dashboard | Điện thoại ngủ, mất Wi-Fi, bitrate quá cao | `camera-dien-thoai.md` mục 8; `ffplay rtsp://<IP Pi>:8554/cam/stream` |
 | `uv run` làm mất `ncnn`/torch | `uv run` trơn đồng bộ lại môi trường | Luôn `uv run --no-sync`; cài lại `uv pip install ncnn` |
 | `otbr-agent` lỗi `InvalidArguments` | RCP đổi `ttyACM0` thành `ttyACM1` hoặc sai baud | Dùng `/dev/serial/by-id/...`; baud 460800 cho UART của `ot_rcp` |
 | Pi giảm xung, YOLO chậm | Quá nhiệt hoặc thiếu điện | `vcgencmd get_throttled`, cột `throttled` của `log_pi_load.py`; quạt, nguồn 5 V 5 A chính hãng |
