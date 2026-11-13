@@ -9,6 +9,9 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from .dynamic_mapping import estimate_reference_map
+from .localize import project
+from .tags import _square, tag_poses
 from .types import Camera, TagPose
 
 
@@ -61,3 +64,49 @@ class TableFrame:
         """Convert a node tag's centre and full orientation together."""
         return TagPose(pose.tag_id, self.point(pose.position),
                        self.rotation.T @ pose.rotation)
+
+
+def estimate_table_frame(
+    observations: list[dict[int, np.ndarray]], intrinsics, site: dict,
+    reference_size: float, latest_camera: Camera,
+) -> TableFrame:
+    """Require a reliable, stationary ID 22 observation in a mapped batch.
+
+    Earlier frames get their own camera pose so a moving camera cannot appear
+    to move a fixed tag. The caller must first pass the ID 2 solver gate.
+    """
+    if not observations or 22 not in observations[-1]:
+        raise ValueError("ID 22 missing from latest frame")
+    frames = []
+    size = site["tags"]["nodes"]["size"]
+    for index, corners in enumerate(observations):
+        if 22 not in corners:
+            continue
+        quad = np.asarray(corners[22], dtype=float)
+        if quad.shape != (4, 2) or not np.isfinite(quad).all():
+            raise ValueError("ID 22 corners are invalid")
+        edges = np.linalg.norm(np.roll(quad, -1, axis=0) - quad, axis=1)
+        if edges.min() < 12:
+            raise ValueError("ID 22 is too small in image")
+        camera = (latest_camera if index == len(observations) - 1 else
+                  estimate_reference_map(corners, intrinsics, reference_size).camera)
+        pose = tag_poses({22: quad}, camera, site).get(22)
+        if pose is None:
+            raise ValueError("ID 22 pose could not be solved")
+        frame = TableFrame.from_tag(pose)
+        projected = np.array([project(pose.to_world(p), camera) for p in _square(size)])
+        if np.linalg.norm(projected - quad, axis=1).max() > 3:
+            raise ValueError("ID 22 reprojection is unreliable")
+        frames.append(frame)
+    minimum = max(1, int(np.ceil(site.get("vision", {}).get("min_tag_rate", 0.6)
+                                 * len(observations))))
+    if len(frames) < minimum:
+        raise ValueError("ID 22 detection rate is unreliable")
+    latest = frames[-1]
+    for frame in frames[:-1]:
+        shift = np.linalg.norm(frame.origin - latest.origin)
+        heading = np.rad2deg(np.arccos(np.clip(
+            np.dot(frame.rotation[:, 0], latest.rotation[:, 0]), -1., 1.)))
+        if shift > 0.025 or heading > 5:
+            raise ValueError("ID 22 pose is unstable across frames")
+    return latest
