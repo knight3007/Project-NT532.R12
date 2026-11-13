@@ -8,6 +8,11 @@ int main(void)
     control_state_t state;
     control_init(&state);
     assert(!state.armed && !state.pwm_active && !state.laser_on);
+    char status[256];
+    assert(control_pantilt_status_json(&state, status, sizeof(status)));
+    assert(strcmp(status, "{\"armed\":false,\"pwm_active\":false,\"pan_us\":null,\"tilt_us\":null,"
+                          "\"target_pan_us\":1500,\"target_tilt_us\":1500,\"pan_min_us\":500,"
+                          "\"pan_max_us\":2500,\"tilt_min_us\":600,\"tilt_max_us\":2500}") == 0);
     assert(control_laser_request(&state, "ON", 2, 100) == CONTROL_FORBIDDEN);
     assert(control_pantilt(&state, "ARM", 3, 100) == CONTROL_FORBIDDEN);
 
@@ -24,6 +29,9 @@ int main(void)
     assert(state.home_requested && !state.pwm_active);
     assert(control_pwm_started(&state));
     assert(state.pwm_active && state.pan_us == 1500 && state.tilt_us == 1500);
+    assert(control_pantilt_status_json(&state, status, sizeof(status)));
+    assert(strstr(status, "\"pan_us\":1500,\"tilt_us\":1500") != NULL);
+    assert(!control_pantilt_status_json(&state, status, 8));
     assert(control_laser_request(&state, "invalid", 7, 100) == CONTROL_BAD_REQUEST);
     assert(!state.laser_on);
     assert(control_laser_request(&state, "ON", 2, 100) == CONTROL_OK);
@@ -39,8 +47,17 @@ int main(void)
     assert(control_next_step(&state, &pan, &tilt));
     assert(pan == 1500 && tilt == 1500);
 
+    const char *valid[] = {
+        "500,1500", "2500,1500", "1500,600", "1500,2500", "500,600", "2500,2500",
+        "1299,1500", "1500,1701"
+    };
+    for (size_t i = 0; i < sizeof(valid) / sizeof(valid[0]); ++i) {
+        assert(control_pantilt(&state, valid[i], strlen(valid[i]), 130) == CONTROL_OK);
+    }
+    assert(state.target_pan_us == 1500 && state.target_tilt_us == 1701);
+
     const char *invalid[] = {
-        "", "0,0", "1299,1500", "1701,1500", "1500,1299", "1500,1701",
+        "", "0,0", "499,1500", "2501,1500", "1500,599", "1500,2501",
         "-1500,1500", "1500,1500x", "1500,1500,1500", "9999999999,1500",
         "1500 ,1500", "1500\n,1500"
     };
@@ -49,6 +66,22 @@ int main(void)
         assert(control_pantilt(&state, invalid[i], strlen(invalid[i]), 130) == CONTROL_BAD_REQUEST);
         assert(state.target_pan_us == target_pan && state.target_tilt_us == target_tilt);
     }
+
+    assert(control_pantilt(&state, "500,600", 7, 140) == CONTROL_OK);
+    for (int i = 0; i < 50; ++i) {
+        int previous_pan = state.pan_us, previous_tilt = state.tilt_us;
+        assert(control_next_step(&state, &pan, &tilt));
+        assert(previous_pan - pan >= 0 && previous_pan - pan <= CONTROL_STEP_US);
+        assert(previous_tilt - tilt >= 0 && previous_tilt - tilt <= CONTROL_STEP_US);
+    }
+    assert(state.pan_us == 500 && state.tilt_us == 600);
+    assert(control_pantilt(&state, "2500,2500", 9, 150) == CONTROL_OK);
+    assert(control_next_step(&state, &pan, &tilt));
+    assert(pan == 520 && tilt == 620);
+    assert(control_pantilt(&state, "HOME", 4, 160) == CONTROL_OK);
+    assert(state.target_pan_us == 1500 && state.target_tilt_us == 1500);
+    assert(control_next_step(&state, &pan, &tilt));
+    assert(pan == 540 && tilt == 640);
 
     assert(control_laser_request(&state, "ON", 2, 200) == CONTROL_OK);
     assert(state.laser_on);

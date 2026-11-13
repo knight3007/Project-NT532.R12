@@ -241,16 +241,10 @@ static void on_request(void *context, otMessage *request, const otMessageInfo *p
         }
     } else if (result == OT_COAP_CODE_CONTENT && resource == RESOURCE_PANTILT) {
         control_state_t control = control_snapshot();
-        char pan[16] = "null", tilt[16] = "null";
-        if (control.pwm_active) {
-            snprintf(pan, sizeof(pan), "%d", control.pan_us);
-            snprintf(tilt, sizeof(tilt), "%d", control.tilt_us);
+        if (!control_pantilt_status_json(&control, body, sizeof(body))) {
+            result = OT_COAP_CODE_INTERNAL_ERROR;
+            body[0] = '\0';
         }
-        snprintf(body, sizeof(body),
-                 "{\"armed\":%s,\"pwm_active\":%s,\"pan_us\":%s,\"tilt_us\":%s,\"target_pan_us\":%d,\"target_tilt_us\":%d,\"test_min_us\":%d,\"test_max_us\":%d}",
-                 control.armed ? "true" : "false", control.pwm_active ? "true" : "false",
-                 pan, tilt, control.target_pan_us, control.target_tilt_us,
-                 CONTROL_TEST_MIN_US, CONTROL_TEST_MAX_US);
     } else if (result == OT_COAP_CODE_CONTENT && resource == RESOURCE_LASER) {
         control_state_t control = control_snapshot();
         snprintf(body, sizeof(body),

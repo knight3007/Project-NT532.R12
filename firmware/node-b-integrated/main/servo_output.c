@@ -8,6 +8,7 @@
 #include "esp_log.h"
 #include "esp_rom_gpio.h"
 #include "soc/gpio_sig_map.h"
+#include "integrated_control.h"
 
 enum { SERVO_HZ = 50, SERVO_PERIOD_US = 20000, SERVO_RES_BITS = 14 };
 static bool s_started;
@@ -75,7 +76,8 @@ void servo_output_stop(void)
 
 esp_err_t servo_output_set_us(int pan_us, int tilt_us)
 {
-    if (!s_started || pan_us < 500 || pan_us > 2500 || tilt_us < 600 || tilt_us > 2500)
+    if (!s_started || pan_us < CONTROL_PAN_CAL_MIN_US || pan_us > CONTROL_PAN_CAL_MAX_US ||
+        tilt_us < CONTROL_TILT_CAL_MIN_US || tilt_us > CONTROL_TILT_CAL_MAX_US)
         return ESP_ERR_INVALID_ARG;
     // Only the servo task writes LEDC; these APIs do not require the fade service.
     esp_err_t error = ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0,
@@ -121,7 +123,7 @@ esp_err_t servo_output_start_home(void)
         else s_tilt_configured = true;
     }
     s_started = true;
-    error = servo_output_set_us(1500, 1500);
+    error = servo_output_set_us(CONTROL_HOME_US, CONTROL_HOME_US);
     if (error != ESP_OK) servo_output_stop();
     return error;
 }
