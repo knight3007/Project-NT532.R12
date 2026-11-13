@@ -98,6 +98,11 @@ def _debug_image(frame: np.ndarray, pixel, targets, result: dict, camera) -> np.
         cv2.putText(image, f"ID {tag_id}: {position[0]:.3f},{position[1]:.3f}",
                     (round(u) + 8, round(v) - 8), cv2.FONT_HERSHEY_SIMPLEX, 0.45,
                     (255, 150, 0), 1)
+    for name, xyz in result["nodes"].items():
+        u, v = project(np.asarray(xyz), camera)
+        cv2.putText(image, f"{name}: {xyz[0]:.3f},{xyz[1]:.3f},{xyz[2]:.3f}",
+                    (round(u) + 8, round(v) - 8), cv2.FONT_HERSHEY_SIMPLEX, 0.45,
+                    (0, 120, 200), 1)
     if pixel is not None:
         cv2.drawMarker(image, tuple(map(round, pixel)), (0, 255, 255), cv2.MARKER_CROSS, 24, 2)
     for target in targets:

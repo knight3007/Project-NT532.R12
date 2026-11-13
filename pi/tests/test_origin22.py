@@ -1,5 +1,6 @@
 """Ground-truth checks for the optional tabletop frame and laser geometry."""
 
+import importlib
 import importlib.util
 import json
 from pathlib import Path
@@ -7,14 +8,15 @@ from pathlib import Path
 import cv2
 import numpy as np
 import pytest
-from test_dynamic_mapping import LAYOUTS
+from test_dynamic_mapping import LAYOUTS, corners_for
 from test_dynamic_mapping import camera as scene_camera
 
 from nt532.sim.render import render_quad, tag_quad
 from nt532.vision.calibration import save_intrinsics
-from nt532.vision.localize import project
+from nt532.vision.localize import pixel_ray, project
 from nt532.vision.table_frame import TableFrame, estimate_table_frame
-from nt532.vision.types import Camera, Intrinsics, TagPose
+from nt532.vision.tags import _square
+from nt532.vision.types import Camera, Detection, Intrinsics, TagPose
 
 
 def _pose(tag_id=22, xy=(0.4, 0.2), yaw_deg=90, tilt_deg=0):
@@ -56,6 +58,9 @@ def test_camera_projected_pixels_are_invariant_after_frame_conversion():
     assert converted.position == pytest.approx(frame.point(camera.position))
     assert project(frame.point(point), converted) == pytest.approx(project(point, camera))
     assert converted.R @ frame.point(point) + converted.t == pytest.approx(camera.R @ point + camera.t)
+    origin, direction = pixel_ray(project(frame.point(point), converted), converted)
+    hit = origin - origin[2] / direction[2] * direction
+    assert hit == pytest.approx(frame.point(point), abs=1e-9)
 
 
 @pytest.mark.parametrize("pose", [
@@ -87,7 +92,7 @@ def _cli():
     return module
 
 
-def test_cli_id22_converts_every_coordinate_and_debug(tmp_path, capsys):
+def test_cli_id22_converts_every_coordinate_and_debug(tmp_path, capsys, monkeypatch):
     intr = Intrinsics(np.array([[1050., 0, 640], [0, 1030., 360], [0, 0, 1.]]),
                       np.zeros(5), (1280, 720))
     image = tmp_path / "scene.png"
@@ -96,8 +101,12 @@ def test_cli_id22_converts_every_coordinate_and_debug(tmp_path, capsys):
     cv2.imwrite(str(image), _scene(intr))
     save_intrinsics(calibration, intr, 0.1, 10)
     uv = project(np.array([0.3, 0.2, 0.]), scene_camera(intr))
+    detection_module = importlib.import_module("nt532.vision.detect")
+    monkeypatch.setattr(detection_module, "detect", lambda *args: [
+        Detection(*uv, 30, 24, 0.9)])
     args = ["--image", str(image), "--intrinsics", str(calibration),
-            "--world-origin", "22", "--pixel", f"{uv[0]},{uv[1]}", "--debug", str(debug)]
+            "--world-origin", "22", "--pixel", f"{uv[0]},{uv[1]}",
+            "--yolo", "--debug", str(debug)]
     assert _cli().main(args) == 0
     data = json.loads(capsys.readouterr().out)
     assert data["status"] == "PASS"
@@ -106,6 +115,8 @@ def test_cli_id22_converts_every_coordinate_and_debug(tmp_path, capsys):
     assert data["nodes"]["s2"] == pytest.approx([0, 0, 0], abs=0.01)
     assert data["nodes"]["s1"] == pytest.approx([0, 0.27, 0], abs=0.015)
     assert data["pixel"]["xyz"] == pytest.approx([0.12, 0.15, 0], abs=0.015)
+    assert data["target_anchor"] == "center"
+    assert data["fire_targets"][0]["xyz"] == pytest.approx(data["pixel"]["xyz"], abs=0.001)
     converted = Camera(intr, np.array(data["camera"]["R"]), np.array(data["camera"]["t"]))
     assert project(np.array(data["pixel"]["xyz"]), converted) == pytest.approx(uv, abs=0.05)
     assert debug.exists() and debug.stat().st_size > 0
@@ -125,6 +136,23 @@ def test_cli_id22_missing_tag_blocks_without_coordinates(tmp_path, capsys):
     assert "camera" not in data and "references" not in data and "nodes" not in data
 
 
+def test_cli_explicit_id2_matches_legacy_default(tmp_path, capsys):
+    intr = Intrinsics(np.array([[1050., 0, 640], [0, 1030., 360], [0, 0, 1.]]),
+                      np.zeros(5), (1280, 720))
+    image = tmp_path / "scene.png"
+    calibration = tmp_path / "camera.yaml"
+    cv2.imwrite(str(image), _scene(intr))
+    save_intrinsics(calibration, intr, 0.1, 10)
+    args = ["--image", str(image), "--intrinsics", str(calibration)]
+    assert _cli().main(args) == 0
+    default = json.loads(capsys.readouterr().out)
+    assert _cli().main([*args, "--world-origin", "2"]) == 0
+    explicit = json.loads(capsys.readouterr().out)
+    assert explicit == default
+    assert explicit["anchor_id"] == 2
+    assert explicit["coordinate_frame"] == "tag_2_table"
+
+
 def test_operational_frame_rejects_batch_drift():
     intr = Intrinsics(np.array([[1050., 0, 640], [0, 1030., 360], [0, 0, 1.]]),
                       np.zeros(5), (1280, 720))
@@ -134,3 +162,34 @@ def test_operational_frame_rejects_batch_drift():
     with pytest.raises(ValueError, match="unstable"):
         estimate_table_frame(frames, intr, {"tags": {"nodes": {"size": 0.08,
             "ids": {"s1": 21, "s2": 22}}}}, 0.08, scene_camera(intr))
+
+
+def test_operational_frame_accepts_moving_camera_with_static_tag():
+    intr = Intrinsics(np.array([[1050., 0, 640], [0, 1030., 360], [0, 0, 1.]]),
+                      np.zeros(5), (1280, 720))
+    _, bordered_quad = tag_quad(22, 0.08, [0.45, 0.08, 0], yaw_deg=90)
+    tag_world = (bordered_quad - [0.45, 0.08, 0]) / 1.25 + [0.45, 0.08, 0]
+    observations = []
+    for eye in ((0.32, -0.35, 1.0), (0.40, -0.30, 0.9), (0.25, -0.40, 0.8)):
+        cam = scene_camera(intr, eye)
+        corners = corners_for(LAYOUTS["60x40"], cam)
+        corners[22] = np.array([project(p, cam) for p in tag_world])
+        observations.append(corners)
+    site = {"tags": {"nodes": {"size": 0.08, "ids": {"s1": 21, "s2": 22}}}}
+    result = estimate_table_frame(observations, intr, site, 0.08, cam)
+    assert result.origin == pytest.approx([0.45, 0.08, 0], abs=0.01)
+
+
+def test_operational_frame_rejects_tilted_observed_tag():
+    intr = Intrinsics(np.array([[1050., 0, 640], [0, 1030., 360], [0, 0, 1.]]),
+                      np.zeros(5), (1280, 720))
+    cam = scene_camera(intr)
+    corners = corners_for(LAYOUTS["60x40"], cam)
+    angle = np.deg2rad(25)
+    tilted = np.array([[1, 0, 0], [0, np.cos(angle), -np.sin(angle)],
+                       [0, np.sin(angle), np.cos(angle)]])
+    corners[22] = np.array([project(p, cam) for p in
+                            (_square(0.08) @ tilted.T + [0.45, 0.08, 0])])
+    site = {"tags": {"nodes": {"size": 0.08, "ids": {"s1": 21, "s2": 22}}}}
+    with pytest.raises(ValueError, match="square geometry|reprojection"):
+        estimate_table_frame([corners], intr, site, 0.08, cam)

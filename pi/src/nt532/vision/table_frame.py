@@ -9,9 +9,9 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from .dynamic_mapping import estimate_reference_map
+from .dynamic_mapping import DynamicMap, estimate_reference_map
 from .localize import project
-from .tags import _square, tag_poses
+from .tags import _square
 from .types import Camera, TagPose
 
 
@@ -90,9 +90,20 @@ def estimate_table_frame(
             raise ValueError("ID 22 is too small in image")
         camera = (latest_camera if index == len(observations) - 1 else
                   estimate_reference_map(corners, intrinsics, reference_size).camera)
-        pose = tag_poses({22: quad}, camera, site).get(22)
-        if pose is None:
-            raise ValueError("ID 22 pose could not be solved")
+        table = DynamicMap(camera, {}, 0., 0., 0.)
+        points = [table.table_point(tuple(pixel)) for pixel in quad]
+        if any(point is None for point in points):
+            raise ValueError("ID 22 does not intersect the table plane")
+        points = np.stack(points)
+        edges_m = np.linalg.norm(np.roll(points, -1, axis=0) - points, axis=1)
+        diagonals_m = np.linalg.norm(points[:2] - points[2:], axis=1)
+        if (np.max(np.abs(edges_m - size)) > 0.005
+                or np.max(np.abs(diagonals_m - size * np.sqrt(2))) > 0.007):
+            raise ValueError("ID 22 square geometry is unreliable")
+        x = (points[1] - points[0] + points[2] - points[3]) / 2
+        x /= np.linalg.norm(x)
+        y = np.cross([0., 0., 1.], x)
+        pose = TagPose(22, points.mean(axis=0), np.column_stack((x, y, [0., 0., 1.])))
         frame = TableFrame.from_tag(pose)
         projected = np.array([project(pose.to_world(p), camera) for p in _square(size)])
         if np.linalg.norm(projected - quad, axis=1).max() > 3:
