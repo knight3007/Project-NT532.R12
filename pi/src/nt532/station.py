@@ -37,7 +37,7 @@ class Station:
     heartbeat: HeartbeatSender
     world: object | None = None  # SimWorld khi chạy sa bàn ảo
     detector_name: str = ""
-    fake_nodes: dict | None = None  # {tên: FakeNode} khi build_sim(link="coap")
+    fake_nodes: dict | None = None  # {tên: FakeNode} khi build_sim(link="coap" hoặc "coap-integrated")
     decider_url: str | None = None  # cho bộ quyết định remote, để đổi qua lại từ dashboard
     decider_timeout: float = 3.0
     rule_questions: tuple = ()  # câu luôn theo luật ở chế độ lai, giữ khi đổi bộ quyết định từ dashboard
@@ -136,7 +136,9 @@ def build_sim(decider: str = "rules", jev_run: str = "jev2", tau: float = 0.8,
               rule_questions: tuple = (), both_tau: float | None = None,
               device: str = "cpu") -> Station:
     """`link="mem"`: node ảo trong bộ nhớ (SimLink). `"coap"`: mỗi node là một FakeNode chạy lõi C của
-    firmware, lệnh và telemetry đi qua UDP localhost bằng CoapLink thật.
+    firmware, lệnh và telemetry đi qua UDP localhost bằng CoapLink thật. `"coap-integrated"`: mỗi node là một
+    IntegratedFakeNode chạy lõi C của firmware node B tích hợp (hợp đồng /pantilt /laser), Pi nói qua
+    IntegratedLink (không có bơm: lệnh phun bị từ chối).
 
     `camera` (tên preset hoặc (vị trí, điểm nhìn)) và `node_layout` ("corners" mặc định, "posts") chọn camera
     và bố cục node của sa bàn ảo. Trạm tự commissioning lúc khởi động từ ảnh dựng ra nên camera và
@@ -144,8 +146,8 @@ def build_sim(decider: str = "rules", jev_run: str = "jev2", tau: float = 0.8,
     data/sim/commissioning.yaml mà bộ quyết định đọc vị trí node)."""
     from .sim.world import OracleDetector, SimLink, SimWorld
 
-    if link not in ("mem", "coap"):
-        raise ValueError(f"link phải là mem hoặc coap, nhận {link!r}")
+    if link not in ("mem", "coap", "coap-integrated"):
+        raise ValueError(f"link phải là mem, coap hoặc coap-integrated, nhận {link!r}")
 
     events = EventLog(path=log_path)
     world = SimWorld(seed=seed, camera=camera, node_layout=node_layout)
@@ -165,6 +167,8 @@ def build_sim(decider: str = "rules", jev_run: str = "jev2", tau: float = 0.8,
     fakes = None
     if link == "coap":
         link, fakes = _coap_nodes(world, events)
+    elif link == "coap-integrated":
+        link, fakes = _integrated_nodes(world, events)
     else:
         link = SimLink(world)
     st = _wire(site, vision, hub, link,
@@ -215,6 +219,36 @@ def _coap_nodes(world, events):
     try:
         for fn in fakes.values():
             fn.start()
+    except Exception:
+        for fn in fakes.values():
+            fn.stop()
+        link.close()
+        raise
+    return link, fakes
+
+
+def _integrated_nodes(world, events):
+    """IntegratedLink tới một IntegratedFakeNode (lõi C node B tích hợp) cho mỗi node của sa bàn, trên 127.0.0.1."""
+    from .net.fakenode import SimWorldHardware, SimWorldSensors, free_port
+    from .net.integrated_link import IntegratedLink
+    from .net.integrated_node import IntegratedFakeNode
+
+    transports = ["simplesocketserver"]
+    pi_port = free_port()
+    ports = {n: free_port() for n in world.nodes}
+    link = IntegratedLink({n: f"127.0.0.1:{p}" for n, p in ports.items()}, ("127.0.0.1", pi_port),
+                          transports=transports).start()
+    temp, gas = world.limits["temp"], world.limits["gas"]
+    fakes = {}
+    try:
+        for n, port in ports.items():
+            fakes[n] = IntegratedFakeNode(
+                n, ("127.0.0.1", port), f"coap://127.0.0.1:{pi_port}", SimWorldHardware(world, n),
+                SimWorldSensors(world, n), telemetry_s=world.telemetry_period, temp_c=temp, gas=gas,
+                transports=transports,
+                on_event=lambda kind, text, n=n: kind in ("rx", "alarm", "servo", "drop") and
+                events.emit("node", f"{n} {kind} {text}"))
+            fakes[n].start()
     except Exception:
         for fn in fakes.values():
             fn.stop()

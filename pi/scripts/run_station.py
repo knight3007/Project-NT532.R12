@@ -2,6 +2,7 @@
 
     uv run python scripts/run_station.py --source sim                     # sa bàn ảo, luật
     uv run python scripts/run_station.py --source sim --link coap         # node giả (lõi C firmware) qua UDP
+    uv run python scripts/run_station.py --source sim --link coap-integrated  # node giả chạy lõi C node B tích hợp (docs/orchestrator.md)
     uv run python scripts/run_station.py --source sim --decider hybrid    # cần runs/decider/jev/jev2
     uv run python scripts/run_station.py --source sim --decider hybrid --tau 0 --model-stages decide,verify --rule-questions nozzle --nozzle-both-tau 0.7   # mô hình mọi câu trừ nozzle
     uv run python scripts/run_station.py --source sim --decider hybrid --device cuda   # Jev trên GPU
@@ -50,9 +51,10 @@ def main() -> None:
                         "(s1 + s2) khi mô hình trả both với conf >= ngưỡng này; mặc định tắt")
     p.add_argument("--detector", choices=["oracle", "yolo"], default="oracle",
                    help="chỉ cho sa bàn ảo: oracle đọc thẻ thật trong scene, yolo dùng trọng số")
-    p.add_argument("--link", choices=["mem", "coap"], default="mem",
+    p.add_argument("--link", choices=["mem", "coap", "coap-integrated"], default="mem",
                    help="chỉ cho sa bàn ảo: mem là node ảo trong bộ nhớ, coap là node giả chạy lõi C của "
-                        "firmware qua CoAP/UDP localhost")
+                        "firmware qua CoAP/UDP localhost, coap-integrated là node giả chạy lõi C của "
+                        "firmware node B tích hợp (hợp đồng /pantilt /laser, không có bơm)")
     p.add_argument("--host", default="0.0.0.0")
     p.add_argument("--port", type=int, default=8080)
     p.add_argument("--seed", type=int, default=0)
