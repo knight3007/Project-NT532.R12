@@ -11,6 +11,7 @@ enum {
     CONTROL_TILT_CAL_MIN_US = 600,
     CONTROL_TILT_CAL_MAX_US = 2500,
     CONTROL_STEP_US = 20,
+    CONTROL_STEP_PERIOD_MS = 20,
     CONTROL_HB_TIMEOUT_MS = 1500,
 };
 
@@ -29,6 +30,8 @@ typedef struct {
     bool laser_on; // Relay LED simulation command; no physical laser is controlled.
     bool hb_seen;
     uint64_t hb_ms;
+    bool step_seen;
+    uint64_t last_step_ms;
     int pan_us;
     int tilt_us;
     int target_pan_us;
@@ -45,5 +48,5 @@ control_result_t control_pantilt(control_state_t *state, const char *body, size_
 control_result_t control_laser_request(control_state_t *state, const char *body, size_t length,
                                        uint64_t now_ms);
 bool control_pwm_started(control_state_t *state);
-bool control_next_step(control_state_t *state, int *pan_us, int *tilt_us);
+bool control_next_step(control_state_t *state, uint64_t now_ms, int *pan_us, int *tilt_us);
 bool control_pantilt_status_json(const control_state_t *state, char *body, size_t capacity);
