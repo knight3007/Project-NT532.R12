@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>NT532 · Đăng nhập</title>
+  <meta name="theme-color" content="#0F1419">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&family=Be+Vietnam+Pro:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body class="login">
+  <main class="panel login-card">
+    <div class="logo">NT<span>532</span></div>
+    <span class="eyebrow">Trung tâm điều khiển trạm chữa cháy</span>
+    <form method="post" action="/login">
+      <label><span class="label">Tên đăng nhập</span><input type="text" name="username" autocomplete="username" required autofocus></label>
+      <label><span class="label">Mật khẩu</span><input type="password" name="password" autocomplete="current-password" required></label>
+      <p class="msg" id="msg" role="alert"></p>
+      <button class="btn water" type="submit">Đăng nhập</button>
+    </form>
+  </main>
+  <script>
+    const e = new URLSearchParams(location.search).get("e");
+    document.getElementById("msg").textContent =
+      e === "1" ? "Sai tên đăng nhập hoặc mật khẩu." : e === "2" ? "Sai quá nhiều lần. Thử lại sau một phút." : "";
+  </script>
+</body>
+</html>

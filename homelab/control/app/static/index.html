@@ -1,0 +1,143 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>NT532 · Tổng quan</title>
+  <meta name="theme-color" content="#0F1419">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%230F1419'/%3E%3Cpath d='M16 5c1 5 7 8 7 14a7 7 0 0 1-14 0c0-3 2-5 3-7 1 2 2 3 3 3 1-3 0-6 1-10z' fill='%23FF6B35'/%3E%3C/svg%3E">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&family=Be+Vietnam+Pro:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+  <div class="sticky-top">
+  <header class="topbar">
+    <div class="logo">NT<span>532</span></div>
+    <div class="phase-wrap">
+      <div id="phase" class="phase-strip" role="status" aria-live="polite" aria-label="Pha hiện tại của trạm"></div>
+      <div class="run-meta">
+        <span class="label" id="run-label">Chưa có lượt</span>
+        <span class="mono" id="run-time">--:--</span>
+      </div>
+    </div>
+    <div class="who">
+      <span class="pi-status" title="Kết nối tới Pi"><span class="dot" id="pi-dot"></span><span class="label" id="pi-label">Pi</span></span>
+      <span class="user mono" id="user"></span>
+      <form method="post" action="/logout"><button class="linkbtn" type="submit">Đăng xuất</button></form>
+    </div>
+  </header>
+  <nav class="mainnav" aria-label="Điều hướng">
+    <a href="/" aria-current="page">Tổng quan</a><a href="/history">Nhật ký</a><a href="/runs">Lượt</a><a href="/decider">Bộ quyết định</a><span class="soon" aria-disabled="true">Cài đặt <small>sắp có</small></span>
+  </nav>
+  <div id="offline-bar" class="offline-bar" role="alert" hidden></div>
+  </div>
+
+  <main class="page">
+    <div class="grid">
+      <div class="col-main">
+        <section class="panel camera" aria-label="Camera">
+          <div class="frame">
+            <img id="cam" alt="Hình camera của trạm" hidden>
+            <div class="none" id="cam-none"><span>Không có hình</span><small id="cam-hint">Đang chờ kết nối với Pi</small></div>
+            <div class="chips" id="chips"></div>
+          </div>
+        </section>
+        <div class="row-2">
+          <section class="panel" aria-label="Bộ quyết định">
+            <span class="eyebrow">Bộ quyết định</span>
+            <div class="kv">
+              <span class="big" id="dec-name">--</span>
+              <span class="err" id="dec-err"></span>
+              <span class="last" id="dec-last">Chưa có quyết định nào.</span>
+            </div>
+            <form class="form-row" id="dec-form">
+              <select id="dec-kind" aria-label="Loại bộ quyết định">
+                <option value="rules">rules</option>
+                <option value="hybrid">hybrid</option>
+                <option value="jev">jev</option>
+                <option value="remote">remote</option>
+              </select>
+              <input id="dec-tau" type="number" min="0" max="1" step="0.05" value="0.7" aria-label="Ngưỡng tau" title="Ngưỡng tin cậy tau" hidden>
+              <button class="btn water" type="submit">Đổi bộ quyết định</button>
+            </form>
+          </section>
+          <section class="panel" aria-label="Lệnh">
+            <span class="eyebrow">Lệnh</span>
+            <div class="cmd-grid">
+              <div class="cmds-stop"><button class="btn stop" type="button" data-stop>Dừng khẩn cấp</button></div>
+              <div class="switch">
+                <span id="auto-label">Tự động</span>
+                <button role="switch" aria-checked="true" aria-labelledby="auto-label" id="auto-switch" type="button"></button>
+              </div>
+              <div class="form-row">
+                <button class="btn" type="button" id="recommission">Commissioning lại</button>
+                <button class="btn" type="button" id="check-camera">Kiểm tra camera</button>
+              </div>
+              <div class="sim-box" id="sim-box" hidden>
+                <span class="eyebrow">Sa bàn ảo</span>
+                <div class="btns">
+                  <button class="btn" type="button" data-sim='{"cmd":"fire","size":"small"}'>Lửa nhỏ</button>
+                  <button class="btn" type="button" data-sim='{"cmd":"fire_large"}'>Lửa lớn</button>
+                  <button class="btn" type="button" data-sim='{"cmd":"lamp"}'>Đèn</button>
+                  <button class="btn" type="button" data-sim='{"cmd":"object"}'>Vật cam</button>
+                  <button class="btn" type="button" data-sim='{"cmd":"steam"}'>Hơi nước</button>
+                  <button class="btn" type="button" data-sim='{"cmd":"spike"}'>Xung</button>
+                  <button class="btn" type="button" data-sim='{"cmd":"clear"}'>Xóa</button>
+                </div>
+              </div>
+            </div>
+          </section>
+        </div>
+      </div>
+      <aside class="col-side" id="nodes" aria-label="Node cảm biến"></aside>
+    </div>
+
+    <section class="panel log-panel" aria-label="Nhật ký">
+      <span class="eyebrow">Nhật ký</span>
+      <div class="filters" id="filters" role="group" aria-label="Lọc nhật ký"></div>
+      <ul class="loglist" id="log" aria-live="off"></ul>
+    </section>
+  </main>
+
+  <div class="stop-fixed"><button class="btn stop" type="button" data-stop>Dừng khẩn cấp</button></div>
+  <div class="toasts" id="toasts" role="status" aria-live="polite"></div>
+
+  <dialog id="stop-dialog" aria-labelledby="stop-title">
+    <form method="dialog">
+      <h2 id="stop-title">Dừng khẩn cấp?</h2>
+      <p>Trạm sẽ hủy lượt đang chạy và ngừng phun. Có thể bật lại bằng lệnh "Bật tự động".</p>
+      <div class="form-row">
+        <button class="btn" value="cancel">Hủy</button>
+        <button class="btn stop" style="width:auto;min-height:40px;padding:8px 18px" value="ok" id="stop-ok">Dừng ngay</button>
+      </div>
+    </form>
+  </dialog>
+
+  <template id="node-tpl">
+    <section class="panel node">
+      <div class="node-head">
+        <span class="node-name"></span>
+        <span class="pulse" aria-hidden="true">
+          <svg viewBox="0 0 60 18"><path class="beat" d="M0 9H10L13 9L16 3L20 15L23 9H70L73 9L76 3L80 15L83 9H120"/><path class="flat" d="M0 9H60"/></svg>
+          <i class="still"></i>
+        </span>
+        <span class="node-state">--</span>
+      </div>
+      <div class="vals">
+        <div class="val" data-k="temp"><span class="label">Nhiệt độ</span><span class="num mono">--</span><span class="unit">°C</span></div>
+        <div class="val" data-k="gas"><span class="label">Khí gas</span><span class="num mono">--</span><span class="unit">ppm</span></div>
+        <div class="val" data-k="hum"><span class="label">Độ ẩm</span><span class="num mono">--</span><span class="unit">%</span></div>
+      </div>
+      <div class="node-foot">
+        <span>Nhịp tim <span class="mono" data-f="hb">--</span></span>
+        <span>Tư thế cũ <span class="mono" data-f="pose">--</span></span>
+      </div>
+      <ul class="blockers" data-f="blockers"></ul>
+    </section>
+  </template>
+
+  <script type="module" src="/static/app.js"></script>
+</body>
+</html>
