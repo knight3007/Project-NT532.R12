@@ -149,8 +149,8 @@ def build_sim(decider: str = "rules", jev_run: str = "jev2", tau: float = 0.8,
 
     events = EventLog(path=log_path)
     world = SimWorld(seed=seed, camera=camera, node_layout=node_layout, pivot_error_m=pivot_error_m)
-    (REPO_ROOT / site["selfcal"]["file"]).unlink(missing_ok=True)  # sa bàn ảo mới có servo mới: không nạp cal cũ
     site = world.site
+    (REPO_ROOT / site["selfcal"]["file"]).unlink(missing_ok=True)  # sa bàn ảo mới có servo mới: không nạp cal cũ
     site["vision"]["commissioning"] = "data/sim/station_commissioning.yaml"
     if detector == "oracle":
         det = OracleDetector(world, site["vision"]["detect_conf"], seed=seed + 1)
