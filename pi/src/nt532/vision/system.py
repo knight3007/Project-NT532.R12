@@ -76,6 +76,9 @@ class Vision:
         self.reference_mode = self.cfg.get("reference_mode", "fixed")
         if self.reference_mode not in ("fixed", "auto"):
             raise ValueError("vision.reference_mode must be fixed or auto")
+        self.tabletop_anchor = self.cfg.get("tabletop_anchor", "bottom_center")
+        if self.tabletop_anchor not in ("bottom_center", "center"):
+            raise ValueError("vision.tabletop_anchor must be bottom_center or center")
         self.intrinsics = intrinsics
         self._detector = detector
         self.state: Commissioning | None = None
@@ -272,6 +275,8 @@ class Vision:
         thì lấy tâm hộp. Nên tính giao điểm đầu tiên của đáy-giữa hộp; rơi vào nền thì dùng điểm
         đó, ngược lại dùng giao điểm đầu tiên của tâm hộp (thường là bảng).
         """
+        if self.reference_mode == "auto" and self.tabletop_anchor == "center":
+            return self.localize_surface((d.u, d.v))
         bottom = self.localize_surface((d.u, d.v + d.h / 2))
         if bottom is not None and bottom[1] == "floor":
             return bottom
