@@ -10,8 +10,6 @@ enum {
     CONTROL_PAN_CAL_MAX_US = 2500,
     CONTROL_TILT_CAL_MIN_US = 600,
     CONTROL_TILT_CAL_MAX_US = 2500,
-    CONTROL_TEST_MIN_US = 1300,
-    CONTROL_TEST_MAX_US = 1700,
     CONTROL_STEP_US = 20,
     CONTROL_HB_TIMEOUT_MS = 1500,
 };
@@ -48,3 +46,4 @@ control_result_t control_laser_request(control_state_t *state, const char *body,
                                        uint64_t now_ms);
 bool control_pwm_started(control_state_t *state);
 bool control_next_step(control_state_t *state, int *pan_us, int *tilt_us);
+bool control_pantilt_status_json(const control_state_t *state, char *body, size_t capacity);

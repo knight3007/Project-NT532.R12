@@ -95,6 +95,15 @@ int main(void)
     assert(duty[0] == 1229 && duty[1] == 1229); // 1500 us at 50 Hz / 14 bit.
     assert(servo_output_set_us(1300, 1700) == ESP_OK);
     assert(duty[0] == 1065 && duty[1] == 1393);
+    assert(servo_output_set_us(500, 600) == ESP_OK);
+    assert(duty[0] == 410 && duty[1] == 492);
+    assert(servo_output_set_us(2500, 2500) == ESP_OK);
+    assert(duty[0] == 2048 && duty[1] == 2048);
+    assert(servo_output_set_us(499, 1500) == ESP_ERR_INVALID_ARG);
+    assert(servo_output_set_us(2501, 1500) == ESP_ERR_INVALID_ARG);
+    assert(servo_output_set_us(1500, 599) == ESP_ERR_INVALID_ARG);
+    assert(servo_output_set_us(1500, 2501) == ESP_ERR_INVALID_ARG);
+    assert(duty[0] == 2048 && duty[1] == 2048);
     servo_output_stop();
     assert(reset_after_pwm == 0); // STOP must not enable GPIO pull-up after PWM.
     assert(duty[0] == 0 && duty[1] == 0);
