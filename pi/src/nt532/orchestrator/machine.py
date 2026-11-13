@@ -17,8 +17,9 @@ import queue
 import threading
 import time
 from collections import deque
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import Enum
+from typing import ClassVar
 
 import numpy as np
 
@@ -28,7 +29,7 @@ from ..decider.state_text import ACTIONS, BOTH, NOZZLES, VERIFY, nozzles_of
 from ..net.link import LinkError, NodeLink
 from ..net.protocol import Alert
 from ..vision import Vision
-from . import aiming
+from . import aiming, selfcal
 from .events import EventLog
 from .frames import FrameHub
 from .fusion import (
@@ -41,6 +42,7 @@ from .fusion import (
     questions_for,
     verify_obs,
 )
+from .selfcal import NodeCal
 
 
 class Phase(str, Enum):
@@ -97,6 +99,11 @@ class Run:
 
 
 class Orchestrator:
+    # mặc định cấp lớp: tự hiệu chuẩn tắt và chưa có cal (đối tượng dựng tối giản không qua __init__ trong test)
+    selfcal_on = False
+    scfg: ClassVar[dict] = {}
+    cals: ClassVar[dict] = {}
+
     def __init__(self, site: dict, vision: Vision, frames: FrameHub, link: NodeLink, decider,
                  sensors: SensorHistory, events: EventLog, settings: Settings | None = None,
                  clock=time.monotonic) -> None:
@@ -127,6 +134,18 @@ class Orchestrator:
         self._cutoff = float("-inf")
         self._thread: threading.Thread | None = None
         self._halt = threading.Event()
+        # tự hiệu chuẩn vòi (selfcal.py): cal hiện dùng, mẫu (pose tag, góc lệnh, vết laser) gần đây của từng vòi
+        self.scfg = site.get("selfcal", {}) or {}
+        self.selfcal_on = bool(self.scfg.get("enabled", True))
+        saved = selfcal.load_cals(site) if self.selfcal_on else {}
+        self.cals: dict[str, NodeCal] = {n: saved.get(n) or NodeCal.from_site(site, n) for n in NOZZLES}
+        self._cal_state = {n: "ok" if self.cals[n].fitted else "idle" for n in NOZZLES}
+        self._cal_samples = {n: deque(maxlen=60) for n in NOZZLES}
+        self._cal_new = dict.fromkeys(NOZZLES, 0)  # số mẫu CORRECT mới từ lần khớp lại gần nhất
+        self._cal_busy: set[str] = set()  # vòi đang khớp lại ở luồng nền
+        self._cal_pending: dict[str, NodeCal] = {}  # kết quả khớp lại chờ hết lượt để áp dụng
+        self._cal_requests: queue.Queue = queue.Queue()  # yêu cầu quét từ dashboard, chạy ở vòng chính
+        self._startup_sweep_done = False
 
     # --- vào/ra -----------------------------------------------------------------------------
 
@@ -181,6 +200,7 @@ class Orchestrator:
                 "nozzles": {n: {"hb_ms": _num(self.link.hb_age_ms(n)), "pose_s": _num(self.pose_age(n)),
                                 "blockers": self.vision.blockers(n)} for n in NOZZLES},
                 "health": self.last_health,
+                "calib": {n: {**self.cals[n].to_json(), "state": self._cal_state[n]} for n in NOZZLES},
             }
 
     # --- vòng chính -------------------------------------------------------------------------
@@ -191,6 +211,9 @@ class Orchestrator:
             try:
                 t_rx, alert = self._queue.get(timeout=0.5)
             except queue.Empty:
+                self._auto_calibrate()
+                if self._run_calibrations():
+                    continue
                 if self.clock() >= next_health:
                     self._health_check()
                     next_health = self.clock() + self.cfg.health_period_s
@@ -344,6 +367,7 @@ class Orchestrator:
                 self.runs.append(run)
                 self.phase = Phase.IDLE
                 self.overlay["active"] = []
+            self._apply_pending()
             if run.outcome in ("extinguished", "ignored", "alarm_only"):  # đã gọi người thì thôi
                 self._last_end[run.node] = self.clock()
             self.events.emit("phase", "IDLE", phase="IDLE")
@@ -366,8 +390,7 @@ class Orchestrator:
 
         # DECIDE
         self._set(Phase.DECIDE)
-        pivots = {n: self.vision.nodes[n].to_world(aiming.pivot_offset(self.site))
-                  for n in NOZZLES if n in self.vision.nodes}
+        pivots = {n: self.cal(n).pivot_world(self.vision.nodes[n]) for n in NOZZLES if n in self.vision.nodes}
         nozzles = {n: {"hb_ms": self.link.hb_age_ms(n), "pose_s": self.pose_age(n),
                        "reach": self._reach_fn(n, pivots.get(n)), "pivot": pivots.get(n)} for n in NOZZLES}
         node_x = {n: float(p[0]) if (p := self._node_pos(n)) is not None else -1.0 for n in NOZZLES}
@@ -527,10 +550,10 @@ class Orchestrator:
             try:
                 if dual and (why := self._blocked(n, target, pivots)):
                     raise LinkError("; ".join(why))
-                pan, tilt = aiming.angles(pivots[n], aim_points[n], self._yaw(n))
-                # bù tia nước theo khoảng cách ngang (mặt phẳng XY) tới bia, đúng cho cả bảng lẫn nền
-                tilt += aiming.water_tilt(self.site, n, aiming.horizontal_distance(pivots[n], aim_points[n]))
-                cmds[n] = self._aim(n, pan, tilt)
+                # bù tia nước theo khoảng cách ngang (mặt phẳng XY) tới bia, đúng cho cả bảng lẫn nền; cộng vào
+                # tilt hình học trước khi đổi sang góc lệnh (tính cả tilt0 và hệ số servo đã học)
+                water = aiming.water_tilt(self.site, n, aiming.horizontal_distance(pivots[n], aim_points[n]))
+                cmds[n] = self._aim(n, *self._cmd(n, pivots[n], aim_points[n], water))
             except LinkError as e:
                 if not dual:
                     raise
@@ -559,24 +582,34 @@ class Orchestrator:
         self._check()
         return cmd
 
+    def _laser_spot(self, node: str, cmd: int) -> np.ndarray | None:
+        """Bật laser của `node` (đã ngắm xong lệnh `cmd`) và đo vết trên bảng/nền bằng cặp khung tắt/bật;
+        None nếu không thấy vết."""
+        off = self.hub.fresh()
+        self.link.fire(node, cmd, "laser", self.cfg.laser_ms)
+        self._sleep(0.15)  # chờ laser bật và khung mới
+        on = self.hub.fresh()
+        spot = self.vision.find_spot(on, off)
+        self.link.wait(cmd, ("done", "fault"), self.cfg.laser_ms / 1000 + 1)
+        if spot is None:
+            self.events.emit("vision", "không thấy vết laser", level="warn")
+        return spot
+
     def _aim_and_correct(self, run, node, pivot, target, aim_point, dual=False):
         """AIM rồi CORRECT bằng vết laser; trả (điểm ngắm đã bù, độ lệch đo được cuối cùng cm).
         `dual`: lượt hai vòi, ghi tên vòi vào pha và dòng sự kiện."""
         self._set(Phase.AIM, node if dual else "", active=[node])
-        cmd = self._aim(node, *aiming.angles(pivot, aim_point, self._yaw(node)))
+        ang = self._cmd(node, pivot, aim_point)
+        cmd = self._aim(node, *ang)
         self._set(Phase.CORRECT, node if dual else "", active=[node])
         miss_cm = None
         for i in range(self.tcfg["correct_max_iters"]):
-            off = self.hub.fresh()
-            self.link.fire(node, cmd, "laser", self.cfg.laser_ms)
-            self._sleep(0.15)  # chờ laser bật và khung mới
-            on = self.hub.fresh()
-            spot = self.vision.find_spot(on, off)
-            self.link.wait(cmd, ("done", "fault"), self.cfg.laser_ms / 1000 + 1)
+            tag = self._tag(node)
+            spot = self._laser_spot(node, cmd)
             if spot is None:
-                self.events.emit("vision", "không thấy vết laser", level="warn")
                 run.shots.append({"round": i + 1, "miss_cm": None, "nozzle": node})
                 break
+            self._learn(node, tag, ang, spot)
             miss = np.asarray(target, float) - spot
             miss_cm = float(np.linalg.norm(miss) * 100)  # 3D: bia và vết đều nằm trên bảng hoặc nền
             run.shots.append({"round": i + 1, "miss_cm": round(miss_cm, 2), "nozzle": node})
@@ -585,9 +618,199 @@ class Orchestrator:
             if miss_cm < self.tcfg["correct_done_m"] * 100 or i == self.tcfg["correct_max_iters"] - 1:
                 break
             aim_point = aim_point + miss * self._plane_mask(target)
-            cmd = self._aim(node, *aiming.angles(pivot, aim_point, self._yaw(node)))
+            ang = self._cmd(node, pivot, aim_point)
+            cmd = self._aim(node, *ang)
         self._mark("aims", node, aim_point)
         return aim_point, miss_cm
+
+    # --- tự hiệu chuẩn vòi ------------------------------------------------------------------
+
+    def cal(self, node: str) -> NodeCal:
+        """Cal đang dùng của `node`, hướng đầu lấy theo `yaw_deg` hiện tại của site (nếu có)."""
+        cfg = (self.site["actuator"].get("nodes", {}) or {}).get(node) or {}
+        yaw = cfg.get("yaw_deg")
+        base = self.cals.get(node) or NodeCal.from_site(self.site, node)
+        return replace(base, heading_deg=None if yaw is None else float(yaw))
+
+    def _tag(self, node: str):
+        return getattr(self.vision, "nodes", {}).get(node)
+
+    def _cmd(self, node: str, pivot, point, extra_tilt: float = 0.0) -> tuple[float, float]:
+        """Góc lệnh (pan, tilt) để vòi `node` chiếu tới `point`, theo cal đã học (không có pose tag thì theo
+        hình học thuần như trước)."""
+        tag = self._tag(node)
+        if tag is None:
+            pan, tilt = aiming.angles(pivot, point, self._yaw(node))
+            return pan, tilt + extra_tilt
+        return selfcal.command_for(self.cal(node), tag, point, extra_tilt)
+
+    def _learn(self, node: str, tag, ang, spot) -> None:
+        """Ghi một vết laser của CORRECT làm mẫu; đủ `refit_every` mẫu mới thì khớp lại ở luồng nền."""
+        if not (self.selfcal_on and self.scfg.get("learn_from_correct", True)) or tag is None:
+            return
+        self._cal_samples[node].append((tag, float(ang[0]), float(ang[1]), np.asarray(spot, float).copy()))
+        self._cal_new[node] += 1
+        if self._cal_new[node] >= int(self.scfg.get("refit_every", 4)) and node not in self._cal_busy:
+            self._cal_new[node] = 0
+            self._cal_busy.add(node)
+            threading.Thread(target=self._refit, args=(node, list(self._cal_samples[node])), daemon=True,
+                             name=f"selfcal-{node}").start()
+
+    def _refit(self, node: str, samples: list) -> None:
+        try:
+            cal = selfcal.fit(samples, NodeCal.from_site(self.site, node), self.site,
+                              baseline=self.cals[node])
+            if cal.fitted:
+                self._offer_cal(node, cal, "CORRECT")
+        except Exception as e:  # noqa: BLE001 - học nền hỏng không được ảnh hưởng lượt phun
+            self.events.emit("calib", f"{node}: khớp lại lỗi {type(e).__name__}: {e}", level="warn", node=node)
+        finally:
+            self._cal_busy.discard(node)
+
+    def _offer_cal(self, node: str, cal: NodeCal, source: str) -> None:
+        """Áp dụng cal mới ngay nếu trạm rảnh, không thì để tới hết lượt (đổi cal giữa lượt làm điểm ngắm đã
+        bù của lượt đó sai)."""
+        with self._lock:
+            if self.phase != Phase.IDLE or self._cal_state[node] == "sweeping":
+                self._cal_pending[node] = cal
+                return
+        self._apply_cal(node, cal, source)
+
+    def _apply_pending(self) -> None:
+        for node, cal in list(self._cal_pending.items()):
+            del self._cal_pending[node]
+            self._apply_cal(node, cal, "CORRECT")
+
+    def _apply_cal(self, node: str, cal: NodeCal, source: str) -> None:
+        old = self.cals[node]
+        prior = NodeCal.from_site(self.site, node)
+        self.cals[node] = cal
+        self._cal_state[node] = "ok"
+        d_prior = (np.array(cal.pivot) - np.array(prior.pivot)) * 100
+        try:
+            selfcal.save_cals(self.site, self.cals)
+            saved = ""
+        except OSError as e:
+            saved = f", lưu file lỗi: {e}"
+        moved = float(np.linalg.norm((np.array(cal.pivot) - np.array(old.pivot)) * 100))
+        if (source == "CORRECT" and moved < 0.5 and abs(cal.yaw0_deg - old.yaw0_deg) < 0.2
+                and abs(cal.tilt0_deg - old.tilt0_deg) < 0.2):
+            return  # đổi không đáng kể: không làm đầy nhật ký
+        self.events.emit(
+            "calib", f"{node} ({source}): rms {cal.rms_before_cm:.2f} -> {cal.rms_cm:.2f} cm với {cal.n_samples} mẫu, "
+                     f"yaw0 {cal.yaw0_deg:+.2f}, tilt0 {cal.tilt0_deg:+.2f} độ, hệ số pan {cal.pan_gain:.3f} "
+                     f"tilt {cal.tilt_gain:.3f}, pivot so với prior {d_prior[0]:+.1f}, {d_prior[1]:+.1f}, "
+                     f"{d_prior[2]:+.1f} cm ({np.linalg.norm(d_prior):.1f} cm); {cal.note}{saved}",
+            node=node, stage="result", source=source, rms_before_cm=cal.rms_before_cm, rms_cm=cal.rms_cm,
+            n_samples=cal.n_samples, pivot=list(cal.pivot), pivot_delta_cm=[round(float(v), 2) for v in d_prior],
+            yaw0_deg=cal.yaw0_deg, tilt0_deg=cal.tilt0_deg)
+
+    def request_calibration(self, nodes: list[str]) -> None:
+        """Xếp yêu cầu quét hiệu chuẩn; vòng chính chạy khi trạm rảnh và không có cảnh báo chờ."""
+        for n in nodes:
+            self._cal_requests.put(n)
+
+    def _auto_calibrate(self) -> None:
+        """Một lần sau commissioning, lúc rảnh: xếp yêu cầu quét cho mọi vòi."""
+        if (self._startup_sweep_done or not self.selfcal_on or not self.scfg.get("startup_sweep", True)
+                or not self.enabled or self.vision.state is None):
+            return
+        self._startup_sweep_done = True
+        self.request_calibration(list(NOZZLES))
+
+    def _run_calibrations(self) -> bool:
+        """Chạy các yêu cầu quét đang chờ (ở luồng orchestrator); True nếu đã chạy gì đó."""
+        ran = False
+        while self._queue.empty() and not self._halt.is_set():
+            try:
+                node = self._cal_requests.get_nowait()
+            except queue.Empty:
+                break
+            self.calibrate(node)
+            ran = True
+        return ran
+
+    def _not_ready(self, node: str) -> list[str]:
+        reasons = list(self.vision.blockers(node))
+        if not reasons and self.pose_age(node) > POSE_MAX_S:
+            reasons.append(f"pose của {node} quá cũ")
+        if self.link.hb_age_ms(node) > HB_MAX_MS:
+            reasons.append(f"mất heartbeat {node}")
+        if self._tag(node) is None:
+            reasons.append(f"chưa có pose của {node}")
+        return reasons
+
+    def calibrate(self, node: str) -> dict:
+        """Quét hiệu chuẩn một vòi: bắn laser tới vài góc, đo vết, khớp và lưu. Chỉ chạy lúc IDLE, orchestrator
+        bật, vòi sẵn sàng; nhường (bỏ quét) khi có cảnh báo hoặc dừng khẩn cấp. Trả {"ok", "reason", ...}.
+        Gọi từ luồng orchestrator (qua `request_calibration`) hoặc khi orchestrator không chạy."""
+        res: dict = {"node": node, "ok": False}
+
+        def fail(why: str) -> dict:
+            if self._cal_state.get(node) == "sweeping":
+                self._cal_state[node] = "failed"
+            self.events.emit("calib", f"{node}: không hiệu chuẩn được: {why}", level="warn", node=node,
+                             stage="failed", reason=why)
+            return {**res, "reason": why}
+
+        if node not in NOZZLES:
+            return fail(f"không có vòi {node!r}")
+        if not self.selfcal_on:
+            return fail("tự hiệu chuẩn đang tắt (selfcal.enabled)")
+        if not self.enabled:
+            return fail("orchestrator đang tắt")
+        with self._lock:
+            if self.phase != Phase.IDLE or self._cal_state[node] == "sweeping" or not self._queue.empty():
+                return fail("trạm đang bận hoặc có cảnh báo chờ")
+            self._cal_state[node] = "sweeping"
+        try:
+            if why := self._not_ready(node):
+                return fail("; ".join(why))
+            self._abort.clear()
+            tag = self._tag(node)
+            cmds = selfcal.sweep_commands(self.cal(node), tag, self.site, aiming.limits(self.site, node),
+                                          int(self.scfg.get("sweep_points", 8)))
+            if len(cmds) < 3:
+                return fail(f"chỉ chọn được {len(cmds)} góc quét trong vùng nhìn thấy")
+            self.events.emit("calib", f"{node}: bắt đầu quét {len(cmds)} góc", node=node, stage="start",
+                             points=len(cmds))
+            samples = []
+            for k, (pan, tilt) in enumerate(cmds, 1):
+                if not self._queue.empty():
+                    return fail("có cảnh báo, nhường cho xử lý cháy")
+                tag = self._tag(node)
+                cmd = self._aim(node, pan, tilt)
+                spot = self._laser_spot(node, cmd)
+                if spot is None:
+                    self.events.emit("calib", f"{node}: góc {k}/{len(cmds)} không thấy vết", level="warn",
+                                     node=node, stage="shot", index=k, miss_cm=None)
+                    continue
+                samples.append((tag, pan, tilt, spot))
+                pred = selfcal.predict_spot(self.cal(node), tag, pan, tilt, selfcal.surfaces_of(self.site), 0.1)
+                miss = None if pred is None else round(float(np.linalg.norm(pred - spot)) * 100, 2)
+                self.events.emit("calib", f"{node}: góc {k}/{len(cmds)} ({pan:+.1f}, {tilt:+.1f}) vết "
+                                 f"({spot[0]:.3f}, {spot[1]:.3f}, {spot[2]:.3f})"
+                                 + ("" if miss is None else f", lệch dự đoán {miss:.1f} cm"),
+                                 node=node, stage="shot", index=k, miss_cm=miss)
+            if len(samples) < 3:
+                return fail(f"chỉ thấy {len(samples)} vết laser")
+            self._cal_samples[node].clear()  # quét mới thay mẫu cũ (vòi có thể đã dời)
+            self._cal_samples[node].extend(samples)
+            self._cal_new[node] = 0
+            cal = selfcal.fit(samples, NodeCal.from_site(self.site, node), self.site, baseline=self.cals[node])
+            if not cal.fitted:
+                return fail(cal.note)
+            self._apply_cal(node, cal, "quét")
+            return {**res, "ok": True, "rms_before_cm": cal.rms_before_cm, "rms_cm": cal.rms_cm,
+                    "n_samples": cal.n_samples, "note": cal.note}
+        except Abort as e:
+            return fail(str(e))
+        except (LinkError, TimeoutError) as e:
+            return fail(str(e))
+        finally:
+            if self._cal_state[node] == "sweeping":
+                self._cal_state[node] = "ok" if self.cals[node].fitted else "idle"
+            self.link.stop(node)
 
     # --- tiện ích ---------------------------------------------------------------------------
 
@@ -611,7 +834,9 @@ class Orchestrator:
     def _reach_fn(self, node, pivot):
         if pivot is None:
             return lambda x, z, y=None: False
-        return lambda x, z, y=None: aiming.reachable(self.site, node, pivot, x, z, y, self._yaw(node))
+        lim = aiming.limits(self.site, node)
+        plane_y = self.site["board"]["plane_y"]
+        return lambda x, z, y=None: lim.ok(*self._cmd(node, pivot, (x, plane_y if y is None else y, z)))
 
     def _blocked(self, node: str, target, pivots: dict) -> list[str]:
         reasons = list(self.vision.blockers(node))
@@ -621,7 +846,7 @@ class Orchestrator:
             reasons.append(f"mất heartbeat {node}")
         if not self.vision.on_board(np.asarray(target)):
             reasons.append("mục tiêu ngoài vùng bia")
-        if node in pivots and not aiming.reachable_point(self.site, node, pivots[node], target, self._yaw(node)):
+        if node in pivots and not aiming.limits(self.site, node).ok(*self._cmd(node, pivots[node], target)):
             reasons.append(f"{node} không với tới bia")
         return reasons
 

@@ -96,6 +96,11 @@ actuator:
     # yaw_deg: hướng pan = 0 của node (độ, ngược chiều kim đồng hồ nhìn từ trên so với +Y; node ở góc trước
     # nhìn chéo vào (0,6; 0,8) thì -36,87). null = lấy từ trục +Y của tag đế đã commissioning.
     # Node tự báo giới hạn qua GET /info; hẹp hơn số ở đây thì Pi dùng số hẹp hơn và cảnh báo.
+    # pivot_offset (riêng từng node): tâm quay tính từ tâm tag, hệ tag; vòi trên trụ cao 30-40 cm với tag dán ở đế
+    # trụ thì cỡ [0.10, 0.0, 0.35] và khác nhau mỗi node. Bỏ thì dùng pivot_offset chung bên dưới. Chỉ là số
+    # giả định ban đầu: trạm tự hiệu chuẩn lại (mục selfcal).
+    # s1: {pivot_offset: [0.10, 0.0, 0.35]}
+    # s2: {pivot_offset: [-0.10, 0.0, 0.35]}
     s1: {yaw_deg: null, pan_limits: null, tilt_limits: null, water_tilt_deg: null, water_tilt_table: null}
     s2: {yaw_deg: null, pan_limits: null, tilt_limits: null, water_tilt_deg: null, water_tilt_table: null}
   # Tâm quay pan–tilt tính từ tâm tag đế, trong hệ tag (X phải, Y về mép trên tag, Z lên). Hiếu đo.
@@ -104,6 +109,18 @@ actuator:
   heartbeat_ms: 500
   aim_ttl_ms: 1500
   fire_ms: 2000
+
+selfcal:
+  # Trạm tự học tâm quay, hướng pan = 0, tilt = 0 và hệ số servo từ vết laser camera thấy. Xem docs/orchestrator.md.
+  enabled: true
+  startup_sweep: true          # sau commissioning, lúc rảnh, tự bắn laser tới vài góc để khớp một lần
+  sweep_points: 8              # số góc bắn mỗi node khi quét
+  min_samples: 6               # ít hơn thì chỉ khớp yaw0 và tilt0 (giữ pivot, hệ số servo)
+  max_rms_cm: 3.0              # khớp xong còn lệch hơn mức này (rms 3D) thì bác kết quả
+  pivot_prior_sigma_m: 0.15    # độ tin của pivot giả định khi mẫu đủ trải: yếu để pivot lệch 10-20 cm vẫn tìm lại được
+  learn_from_correct: true     # học tiếp từ vết laser của bước CORRECT mỗi lượt phun
+  refit_every: 4               # số mẫu CORRECT mới giữa hai lần khớp lại
+  file: calibration/nodes.yaml # kết quả lưu ở đây, lần khởi động sau nạp lại
 
 sensors:
   # Ngưỡng báo động trên node; orchestrator và mô hình quyết định dùng cùng số. Đo thực ở tuần 2.

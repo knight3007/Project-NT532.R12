@@ -134,7 +134,7 @@ def build_sim(decider: str = "rules", jev_run: str = "jev2", tau: float = 0.8,
               link: str = "mem", model_stages: str = "verify", decider_url: str | None = None,
               decider_timeout: float = 3.0, camera=None, node_layout: str | None = None,
               rule_questions: tuple = (), both_tau: float | None = None,
-              device: str = "cpu") -> Station:
+              device: str = "cpu", pivot_error_m: float = 0.0) -> Station:
     """`link="mem"`: node ảo trong bộ nhớ (SimLink). `"coap"`: mỗi node là một FakeNode chạy lõi C của
     firmware, lệnh và telemetry đi qua UDP localhost bằng CoapLink thật.
 
@@ -148,7 +148,8 @@ def build_sim(decider: str = "rules", jev_run: str = "jev2", tau: float = 0.8,
         raise ValueError(f"link phải là mem hoặc coap, nhận {link!r}")
 
     events = EventLog(path=log_path)
-    world = SimWorld(seed=seed, camera=camera, node_layout=node_layout)
+    world = SimWorld(seed=seed, camera=camera, node_layout=node_layout, pivot_error_m=pivot_error_m)
+    (REPO_ROOT / site["selfcal"]["file"]).unlink(missing_ok=True)  # sa bàn ảo mới có servo mới: không nạp cal cũ
     site = world.site
     site["vision"]["commissioning"] = "data/sim/station_commissioning.yaml"
     if detector == "oracle":

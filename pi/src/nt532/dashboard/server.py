@@ -5,7 +5,9 @@
     GET  /api/events?since=N
     GET  /stream.mjpg      video MJPEG có vẽ bảng bia, bia, điểm ngắm và vết laser của từng vòi
     GET  /snapshot.jpg     một khung
-    POST /api/cmd          {"cmd": ...}: stop, enable, recommission, decider (kind remote kèm url), và lệnh sa bàn ảo
+    POST /api/cmd          {"cmd": ...}: stop, enable, recommission, decider (kind remote kèm url), calibrate
+                           ({"cmd": "calibrate", "node": "s1" | "s2" | "all"}: quét tự hiệu chuẩn vòi lúc rảnh),
+                           và lệnh sa bàn ảo
 
 Không có xác thực: chỉ mở trong mạng LAN của sa bàn.
 """
@@ -21,6 +23,7 @@ from urllib.parse import parse_qs, urlparse
 import cv2
 import numpy as np
 
+from ..decider.state_text import NOZZLES
 from ..orchestrator.fusion import alarm_limits
 from ..vision.localize import project
 
@@ -169,6 +172,15 @@ class Dashboard:
             if not orch.check_camera():
                 return {"ok": False, "error": "trạm đang xử lý một lượt, kiểm tra camera sau"}
             return {"ok": True, "health": orch.last_health}
+        elif cmd == "calibrate":
+            node = body.get("node", "all")
+            nodes = list(NOZZLES) if node == "all" else [node]
+            if any(n not in NOZZLES for n in nodes):
+                return {"ok": False, "error": f"node phải là {', '.join(NOZZLES)} hoặc all, không phải {node!r}"}
+            if not orch.selfcal_on or not orch.enabled:
+                return {"ok": False, "error": "tự hiệu chuẩn hoặc orchestrator đang tắt"}
+            orch.request_calibration(nodes)
+            st.events.emit("config", f"yêu cầu tự hiệu chuẩn: {', '.join(nodes)}")
         elif cmd == "decider":
             kind = body.get("kind", "rules")
             if kind == "remote":

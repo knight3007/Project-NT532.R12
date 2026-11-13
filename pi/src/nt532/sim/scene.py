@@ -109,6 +109,8 @@ def sim_site(site: dict[str, Any] | None = None, write: bool = True) -> dict[str
             save_intrinsics(SIM_DIR / "camera.yaml", default_intrinsics(), 0.0, 0)
         site["camera"]["intrinsics"] = "data/sim/camera.yaml"
     site["vision"]["commissioning"] = "data/sim/commissioning.yaml"
+    # tự hiệu chuẩn: file riêng cho sim, và không tự quét lúc khởi động (bật lại bằng site["selfcal"]["startup_sweep"])
+    site["selfcal"] = {**site.get("selfcal", {}), "file": "data/sim/nodes.yaml", "startup_sweep": False}
     return site
 
 

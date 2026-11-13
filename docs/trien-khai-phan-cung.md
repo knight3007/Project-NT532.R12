@@ -281,7 +281,7 @@ Ghi số thật, kể cả khi không đạt. Thêm `--headless` khi chạy trê
 | `vision.weights`, `vision.imgsz` | `models/fire-n.pt`, 640 | 1 (`bench_detect.py` trên Pi) | Hùng |
 | `targeting.tolerance_m` | 0,03 (đề xuất) | 8 (chốt cuối tuần 3) | Cả nhóm |
 | `actuator.nodes.s1/s2.pan_limits`, `tilt_limits` | `null` | 6 | Hiếu |
-| `actuator.pivot_offset` | `[0.0, 0.0, 0.08]` (Hiếu đo; sa bàn thật node đặt trên bàn, không trụ, xem [ban-giao-2026-11-12.md](ban-giao-2026-11-12.md) mục 3) | 6 | Hiếu |
+| `actuator.pivot_offset` | `[0.0, 0.0, 0.08]` (Hiếu đo; sa bàn thật node đặt trên bàn, không trụ, xem [ban-giao-2026-11-12.md](ban-giao-2026-11-12.md) mục 3). Chỉ là số giả định ban đầu (prior): trạm tự tinh chỉnh từ vết laser, xem "Tự hiệu chuẩn vòi" trong [orchestrator.md](orchestrator.md); đặt riêng từng node ở `actuator.nodes.<n>.pivot_offset` | 6 | Hiếu |
 | `actuator.nodes.<n>.water_tilt_deg` / `water_tilt_table` (chung: `actuator.water_tilt_deg`) | 0,0 (đo ở tuần 3) | 6 | Hiếu |
 | `sensors.temp_alarm_c`, `sensors.gas_alarm` | 45, 600 (đo thực ở tuần 2) | 5 | Hậu, Hiếu |
 | `network.nodes.s1`, `s2` | `null` | 3 | Hậu |

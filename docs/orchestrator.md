@@ -93,6 +93,30 @@ Giao thức: `POST /decide` với `{"obs", "questions"}` (đúng dạng orchestr
 
 **Đổi lúc đang chạy.** Dashboard chuyển Pi sang bộ quyết định ở xa không cần khởi động lại: `POST /api/cmd {"cmd":"decider","kind":"remote","url":"https://...","timeout":5}` (`timeout` giây, tùy chọn; thiếu `url` thì dùng `--decider-url` đã cấu hình, nếu cũng không có thì trả `{"ok": false, "error": ...}`). Chỉ nhận URL `http://` hoặc `https://`. Trạm ghi sự kiện `config` kèm tên máy chủ rồi tự nạp (warm-up) như khi khởi động.
 
+## Tự hiệu chuẩn vòi
+
+Ngắm dựa vào pose tag đế và vài số giả định: tâm quay `pivot_offset` (tâm tag tới tâm quay, hệ tag), hướng pan = 0, tilt = 0 nằm ngang, hệ số servo bằng 1. Không số nào được đo, mà tilt lệch 5 độ đã trượt bia 3 cm. Trạm tự học các số này từ vết laser camera thấy (`orchestrator/selfcal.py`), nên `pivot_offset` và `yaw_deg` trong `site.yaml` chỉ còn là giá trị ban đầu (prior). Vòi đứng trên trụ cao 30-40 cm, tag dán ở đế trụ thì pivot cỡ `[0.10, 0.0, 0.35]` và khác nhau từng node: đặt prior riêng ở `actuator.nodes.<n>.pivot_offset`.
+
+**Học gì** (mỗi vòi, một `NodeCal`): `pivot` (hệ tag), `yaw0_deg` (pan = 0 lệch bao nhiêu so với hướng đầu của tag), `tilt0_deg` (độ cao của tia khi tilt lệnh bằng 0), `pan_gain`, `tilt_gain`. Mô hình: gốc tia là `tag.to_world(pivot)`, hướng ngang = yaw tag + `yaw0` + `pan_gain` x pan lệnh, độ cao = `tilt0` + `tilt_gain` x tilt lệnh. Servo lệch +3 độ thì `yaw0` ra +3 (lệnh được trừ đi 3 để bù). Mọi chỗ tính góc (`_aim_and_correct`, `_final_aim`, kiểm với tới, khoảng cách `dist3` đưa cho bộ quyết định) đều dùng cal này; giới hạn góc kiểm trên góc lệnh. Góc bù tia nước `water_tilt` vẫn cộng vào tilt hình học trước khi đổi sang lệnh.
+
+**Khi nào**
+- Quét lúc khởi động (`selfcal.startup_sweep`): một lần sau commissioning, lúc rảnh, mỗi vòi bắn laser tới `sweep_points` (8) góc trải đều pan và tilt, vết rơi trong vùng bia (cách mép 10 cm). Vòi lần lượt, mỗi lúc một laser. Sa bàn ảo mặc định không tự quét.
+- Theo lệnh dashboard: `{"cmd": "calibrate", "node": "s1" | "s2" | "all"}`. Yêu cầu xếp hàng, chạy ở vòng chính khi trạm rảnh.
+- Liên tục (`learn_from_correct`): mỗi vết laser của bước CORRECT thành một mẫu; cứ `refit_every` (4) mẫu mới thì khớp lại ở luồng nền trên 60 mẫu gần nhất. Kết quả chỉ áp dụng khi trạm rảnh (xong lượt đang chạy), để điểm ngắm đã bù giữa lượt không bị đổi.
+
+Quét chỉ chạy lúc IDLE, orchestrator bật, vòi không bị chặn và còn heartbeat. Có cảnh báo tới giữa chừng, dừng khẩn cấp, hoặc lỗi liên lạc thì bỏ quét (vòi nhận `/stop`), cal cũ giữ nguyên.
+
+**Khớp**: bình phương tối thiểu (Levenberg-Marquardt, Jacobian số, bỏ qua điểm ngoại lai bằng hàm Huber) trên khoảng cách 3D giữa vết dự đoán và vết đo. Mẫu ít (< `min_samples`) hoặc trải hẹp (pan < 15, tilt < 8 độ) thì chỉ khớp `yaw0`, `tilt0` và giữ pivot, hệ số servo như prior. Khi mẫu đủ trải, pivot chỉ bị prior yếu giữ (`pivot_prior_sigma_m`, 0,15 m) nên pivot sai 10-20 cm vẫn tìm lại được. Kết quả bị bác nếu rms sau khớp vượt `max_rms_cm` hoặc không tốt hơn trước. Sự kiện `calib` ghi từng phát (lệch so với dự đoán), rms trước và sau, và pivot thay đổi bao nhiêu cm so với prior.
+
+**Lưu**: `calibration/nodes.yaml` (`selfcal.file`), `{node: {pivot, yaw0_deg, tilt0_deg, pan_gain, tilt_gain, n_samples, rms_cm, time}}`, nạp lại khi khởi động. Sa bàn ảo dùng `data/sim/nodes.yaml` và xóa file khi dựng trạm. `snapshot()["calib"]` có số hiện tại, `rms_cm`, `n_samples`, `fitted` và `state` (idle, sweeping, ok, failed). Tắt hết bằng `selfcal.enabled: false`.
+
+**Giới hạn**
+- Cần vết laser nằm trên mặt phẳng đã biết (bảng hoặc nền) và camera thấy; vết trên vật khác thì sai.
+- Laser và vòi nước coi là cùng một tia: chênh lệch đầu laser với đầu vòi nước không tách được, phần quỹ đạo rơi vẫn do `water_tilt`.
+- Pose tag sai một lượng nhất quán bị hấp thụ vào `pivot` và `yaw0` (đúng ý nghĩa vì đều tính trong hệ tag); đế vòi bị nghiêng ngoài mặt phẳng ngang thì chỉ được bù một phần qua `tilt0`.
+- Servo phi tuyến hơn hệ số tuyến tính cần bảng hiệu chỉnh riêng.
+- `calibration/nodes.yaml` là số riêng của từng bộ phần cứng, `.gitignore` chưa loại nó.
+
 ## Dashboard
 
 ![Dashboard trên sa bàn ảo, chế độ lai](img/dashboard.png)
