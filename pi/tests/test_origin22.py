@@ -117,9 +117,15 @@ def test_cli_id22_converts_every_coordinate_and_debug(tmp_path, capsys, monkeypa
     assert data["pixel"]["xyz"] == pytest.approx([0.12, 0.15, 0], abs=0.015)
     assert data["target_anchor"] == "center"
     assert data["fire_targets"][0]["xyz"] == pytest.approx(data["pixel"]["xyz"], abs=0.001)
+    assert data["fire_targets"][0]["bbox_xywh"] == pytest.approx([*uv, 30, 24])
+    assert data["fire_targets"][0]["anchor_uv"] == pytest.approx(uv)
     converted = Camera(intr, np.array(data["camera"]["R"]), np.array(data["camera"]["t"]))
     assert project(np.array(data["pixel"]["xyz"]), converted) == pytest.approx(uv, abs=0.05)
     assert debug.exists() and debug.stat().st_size > 0
+    annotated = cv2.imread(str(debug))
+    assert np.any(annotated[40:70, 10:240, 0] != annotated[40:70, 10:240, 1])
+    u, v = map(round, uv)
+    assert annotated[v, u] == pytest.approx([255, 0, 255], abs=1)
 
 
 def test_cli_id22_missing_tag_blocks_without_coordinates(tmp_path, capsys):

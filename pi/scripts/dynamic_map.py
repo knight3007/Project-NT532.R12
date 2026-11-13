@@ -87,6 +87,8 @@ def _debug_image(frame: np.ndarray, pixel, targets, result: dict, camera) -> np.
     status = result["status"]
     cv2.putText(image, status, (16, 32), cv2.FONT_HERSHEY_SIMPLEX, 0.9,
                 (0, 180, 0) if status == "PASS" else (0, 0, 255), 2)
+    cv2.putText(image, result["coordinate_frame"], (16, 60), cv2.FONT_HERSHEY_SIMPLEX,
+                0.6, (0, 180, 0) if status == "PASS" else (0, 0, 255), 2)
     if status != "PASS":
         return image
     from nt532.vision.localize import project
@@ -111,6 +113,9 @@ def _debug_image(frame: np.ndarray, pixel, targets, result: dict, camera) -> np.
                       (round(d.u + d.w / 2), round(d.v + d.h / 2)), (0, 0, 255), 2)
         cv2.putText(image, f"{target.position[0]:.3f},{target.position[1]:.3f},0",
                     (round(d.u), round(d.v)), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 0, 255), 1)
+        anchor_v = d.v if result["target_anchor"] == "center" else d.v + d.h / 2
+        cv2.drawMarker(image, (round(d.u), round(anchor_v)), (255, 0, 255),
+                       cv2.MARKER_CROSS, 14, 2)
     return image
 
 
@@ -233,7 +238,12 @@ def main(argv: list[str] | None = None) -> int:
             result["fire_targets"] = [
                 {"xyz": _xyz(t.position), "surface": t.surface,
                  "confidence": round(t.detection.conf, 4),
-                 "uv": [t.detection.u, t.detection.v]} for t in targets
+                 "uv": [t.detection.u, t.detection.v],
+                 "bbox_xywh": [t.detection.u, t.detection.v,
+                               t.detection.w, t.detection.h],
+                 "anchor_uv": [t.detection.u, t.detection.v if
+                               site["vision"]["tabletop_anchor"] == "center"
+                               else t.detection.v + t.detection.h / 2]} for t in targets
             ]
         result["status"] = "PASS"
     except (ValueError, RuntimeError) as exc:
