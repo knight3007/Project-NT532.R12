@@ -152,7 +152,7 @@ def dump_records(f, split: str, recs, rules, ans, conf, hyb: dict) -> None:
         lab = r["labels"]
         if "action" not in lab:
             continue
-        pick = lambda a: {q: a[q] for q in ("real_fire", "action", "target", "nozzle") if q in a}  # noqa: E731
+        pick = lambda a: {q: a[q] for q in ("real_fire", "action", "target", "nozzle") if q in a}
         row = {"split": split, "id": r["id"], "labels": pick(lab), "size": r.get("truth", {}).get("size"),
                "rules": pick(rules[i]), "model": pick(ans[i]),
                "nozzle_model_conf": conf[i].get("nozzle"),
