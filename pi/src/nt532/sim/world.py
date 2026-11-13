@@ -110,9 +110,11 @@ class SimNodeSensors:
 class SimWorld:
     def __init__(self, site: dict | None = None, seed: int = 0, servo_bias_deg: float = 3.0,
                  telemetry_period: float = 1.0, tick: float = 0.1,
-                 camera=None, node_layout=None) -> None:
+                 camera=None, node_layout=None, pivot_error_m: float = 0.0) -> None:
         """`camera`: tên preset (`CAMERA_PRESETS`) hoặc (vị trí, điểm nhìn); `node_layout`: tên
-        bố cục node (`NODE_LAYOUTS`: "corners", "posts"). Bỏ trống là `DEFAULT_LAYOUT` (corners)."""
+        bố cục node (`NODE_LAYOUTS`: "corners", "posts"). Bỏ trống là `DEFAULT_LAYOUT` (corners).
+        `pivot_error_m`: tâm quay thật của mỗi node lệch ngẫu nhiên tới chừng này so với `pivot_offset` mà
+        site giả định (cho tự hiệu chuẩn); sai lệch servo ngẫu nhiên là `servo_bias_deg`."""
         self.site = sim_site(site)
         self.kinds = ensure_synth_cards()
         self.scene = Scene(self.site, cards_dir=SYNTH_DIR, seed=seed, camera_pose=camera,
@@ -125,6 +127,11 @@ class SimWorld:
         self.nodes = list(self.scene.nodes)
         for n in self.nodes:
             self.scene.set_servo_bias(n, *self.rng.uniform(-servo_bias_deg, servo_bias_deg, 2))
+            if pivot_error_m > 0:
+                v = self.rng.normal(size=3)
+                v *= pivot_error_m * self.rng.uniform(0.5, 1.0) / np.linalg.norm(v)
+                node = self.scene.nodes[n]
+                node.pivot_offset = node.pivot_offset + v
         self.sources: dict[int, Source] = {}
         self._ids = 0
         self.t = 0.0
@@ -340,6 +347,13 @@ class SimWorld:
         with self.lock:
             _, frame = self.cap.read()
         return frame
+
+    def calib_truth(self) -> dict:
+        """Giá trị thật mà tự hiệu chuẩn phải tìm: {node: {"pivot", "yaw0_deg", "tilt0_deg"}}. yaw0, tilt0 bằng
+        sai lệch servo (hướng thật = lệnh + sai lệch); pivot trong hệ tag."""
+        with self.lock:
+            return {n: {"pivot": node.pivot_offset.copy(), "yaw0_deg": node.bias[0], "tilt0_deg": node.bias[1]}
+                    for n, node in self.scene.nodes.items()}
 
     def truth(self) -> dict:
         with self.lock:

@@ -35,8 +35,12 @@ def limits(site: dict, node: str) -> Limits:
                   tuple(cfg.get("tilt_limits") or DEFAULT_TILT))
 
 
-def pivot_offset(site: dict) -> tuple[float, float, float]:
-    return tuple(site.get("actuator", {}).get("pivot_offset") or DEFAULT_PIVOT_OFFSET)
+def pivot_offset(site: dict, node: str | None = None) -> tuple[float, float, float]:
+    """Tâm quay trong hệ tag: `actuator.nodes.<node>.pivot_offset` nếu có, không thì `actuator.pivot_offset`
+    chung, không thì mặc định. Chỉ là số giả định ban đầu: trạm tự hiệu chuẩn lại (orchestrator/selfcal.py)."""
+    act = site.get("actuator", {})
+    cfg = (act.get("nodes", {}) or {}).get(node) or {} if node else {}
+    return tuple(cfg.get("pivot_offset") or act.get("pivot_offset") or DEFAULT_PIVOT_OFFSET)
 
 
 def water_tilt(site: dict, node: str | None = None, distance_m: float | None = None) -> float:
