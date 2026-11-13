@@ -1,14 +1,13 @@
 #include "integrated_control.h"
 
+#include <stdio.h>
 #include <string.h>
 
-_Static_assert(CONTROL_PAN_CAL_MIN_US <= CONTROL_TEST_MIN_US &&
-               CONTROL_TEST_MAX_US <= CONTROL_PAN_CAL_MAX_US &&
-               CONTROL_TILT_CAL_MIN_US <= CONTROL_TEST_MIN_US &&
-               CONTROL_TEST_MAX_US <= CONTROL_TILT_CAL_MAX_US &&
-               CONTROL_TEST_MIN_US <= CONTROL_HOME_US &&
-               CONTROL_HOME_US <= CONTROL_TEST_MAX_US,
-               "First-test limits must fit the measured servo pulse ranges");
+_Static_assert(CONTROL_PAN_CAL_MIN_US <= CONTROL_HOME_US &&
+               CONTROL_HOME_US <= CONTROL_PAN_CAL_MAX_US &&
+               CONTROL_TILT_CAL_MIN_US <= CONTROL_HOME_US &&
+               CONTROL_HOME_US <= CONTROL_TILT_CAL_MAX_US,
+               "HOME must fit both calibrated servo pulse ranges");
 
 void control_stop(control_state_t *state)
 {
@@ -55,13 +54,13 @@ bool control_watchdog(control_state_t *state, uint64_t now_ms)
     return was_active;
 }
 
-static bool parse_uint(const char *body, size_t length, size_t *index, int *value)
+static bool parse_uint(const char *body, size_t length, size_t *index, int max_us, int *value)
 {
     if (*index == length || body[*index] < '0' || body[*index] > '9') return false;
     int number = 0;
     do {
         number = number * 10 + body[(*index)++] - '0';
-        if (number > CONTROL_PAN_CAL_MAX_US) return false;
+        if (number > max_us) return false;
     } while (*index < length && body[*index] >= '0' && body[*index] <= '9');
     *value = number;
     return true;
@@ -71,9 +70,10 @@ static bool parse_pair(const char *body, size_t length, int *pan_us, int *tilt_u
 {
     if (length == 0 || length > 16) return false;
     size_t index = 0;
-    if (!parse_uint(body, length, &index, pan_us) || index == length || body[index++] != ',')
+    if (!parse_uint(body, length, &index, CONTROL_PAN_CAL_MAX_US, pan_us) ||
+        index == length || body[index++] != ',')
         return false;
-    return parse_uint(body, length, &index, tilt_us) && index == length;
+    return parse_uint(body, length, &index, CONTROL_TILT_CAL_MAX_US, tilt_us) && index == length;
 }
 
 control_result_t control_pantilt(control_state_t *state, const char *body, size_t length,
@@ -94,8 +94,8 @@ control_result_t control_pantilt(control_state_t *state, const char *body, size_
     }
     int pan_us, tilt_us;
     if (!parse_pair(body, length, &pan_us, &tilt_us) ||
-        pan_us < CONTROL_TEST_MIN_US || pan_us > CONTROL_TEST_MAX_US ||
-        tilt_us < CONTROL_TEST_MIN_US || tilt_us > CONTROL_TEST_MAX_US)
+        pan_us < CONTROL_PAN_CAL_MIN_US || pan_us > CONTROL_PAN_CAL_MAX_US ||
+        tilt_us < CONTROL_TILT_CAL_MIN_US || tilt_us > CONTROL_TILT_CAL_MAX_US)
         return CONTROL_BAD_REQUEST;
     if (!state->attached || !hb_fresh(state, now_ms) || !state->armed || !state->pwm_active)
         return CONTROL_FORBIDDEN;
@@ -148,4 +148,22 @@ bool control_next_step(control_state_t *state, int *pan_us, int *tilt_us)
     *pan_us = next_pan;
     *tilt_us = next_tilt;
     return true;
+}
+
+bool control_pantilt_status_json(const control_state_t *state, char *body, size_t capacity)
+{
+    char pan[16] = "null", tilt[16] = "null";
+    if (state->pwm_active) {
+        snprintf(pan, sizeof(pan), "%d", state->pan_us);
+        snprintf(tilt, sizeof(tilt), "%d", state->tilt_us);
+    }
+    int written = snprintf(body, capacity,
+        "{\"armed\":%s,\"pwm_active\":%s,\"pan_us\":%s,\"tilt_us\":%s,"
+        "\"target_pan_us\":%d,\"target_tilt_us\":%d,\"pan_min_us\":%d,"
+        "\"pan_max_us\":%d,\"tilt_min_us\":%d,\"tilt_max_us\":%d}",
+        state->armed ? "true" : "false", state->pwm_active ? "true" : "false",
+        pan, tilt, state->target_pan_us, state->target_tilt_us,
+        CONTROL_PAN_CAL_MIN_US, CONTROL_PAN_CAL_MAX_US,
+        CONTROL_TILT_CAL_MIN_US, CONTROL_TILT_CAL_MAX_US);
+    return written >= 0 && (size_t)written < capacity;
 }
