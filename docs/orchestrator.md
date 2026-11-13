@@ -119,6 +119,25 @@ API cho script khác: `GET /api/state`, `GET /api/events?since=N`, `GET /snapsho
 
 Trên sa bàn ảo, luật để lộ đúng hai điểm yếu đã đo ở `docs/decision-model.md`: phun vào đèn nóng nằm gần sensor báo động, và kết luận `done` khi trúng mà lửa vẫn cháy (khung "sự thật" cho thấy lửa còn cháy).
 
+### Node giả chạy firmware node B tích hợp (`--link coap-integrated`)
+
+`uv run python scripts/run_station.py --source sim --link coap-integrated` thay mỗi node ảo bằng `IntegratedFakeNode` (`nt532/net/integrated_node.py`): server CoAP trên UDP localhost chạy **lõi C thật** của `firmware/node-b-integrated/main` (`integrated_control.c`, `probe_state.c`) qua ctypes, nói đúng hợp đồng của Hậu (`/info /status /hb /stop /pantilt /laser`, payload text `ARM`, `HOME`, `pan_us,tilt_us`, `ON`, `OFF`; ramp 20 µs mỗi 20 ms; hết heartbeat 1500 ms thì tắt PWM, relay và xóa ARM). Phía Pi, `IntegratedLink` (`nt532/net/integrated_link.py`, kế thừa `CoapLink`) dịch hợp đồng cũ của orchestrator sang hợp đồng mới:
+
+| Orchestrator (cũ) | Adapter gửi (mới) |
+|---|---|
+| `heartbeat` | `POST /hb` rỗng (NON), có trả lời thì tính là node còn sống |
+| `aim(pan, tilt)` độ | đổi sang µs bằng `PulseMap`; `ARM` nếu chưa armed, `HOME` nếu chưa có PWM (đợi `GET /pantilt` báo `pwm_active`, tối đa 1 s), rồi `pan_us,tilt_us`. Báo `accepted`, sau đó poll `GET /pantilt` mỗi 50 ms tới khi xung bằng đích thì báo `reached`; quá `ttl` thì `fault` (`timeout`). 4.03 là `rejected` (`forbidden`, ví dụ chưa có heartbeat), 4.00 là `rejected` (`bad_request`), ngoài biên µs là `rejected` (`out_of_range`, không gửi gì) |
+| `fire(laser, ms)` | `POST /laser ON`, sau `ms` thì `OFF`, báo `done` |
+| `fire(pump, ms)` | **bị từ chối ngay** (`rejected`, `no_pump`), không gửi gì: firmware của Hậu không có bơm và relay chỉ mô phỏng laser |
+| `stop` | `POST /stop` |
+| `info` | `GET /info`; giới hạn góc suy ra từ `PulseMap` (`hb` 1500, `fire` 0) |
+
+Hệ quả: một lượt trên sa bàn ảo ngắm được và bật laser (CORRECT chạy bình thường) nhưng không phun được nên kết thúc `human`, không bao giờ `extinguished`. Đó là kết quả mong đợi cho tới khi có node bơm.
+
+- **`PulseMap` là TẠM THỜI.** Ánh xạ tuyến tính `deg_per_us = 0.09` (180° trên 2000 µs), HOME 1500 µs ứng với 0°, dấu `+1` cả hai trục. Chưa có số đo góc–xung thật (bàn giao 13/11 mục E), phải thay bằng bảng đo trước khi dùng trên board.
+- **Telemetry là lớp sim-only.** Firmware của Hậu không đẩy `/t` hay `/a` lên Pi (DHT11 chỉ có trong `GET /status`). Node giả tự đọc cảm biến của sa bàn, POST `/t` mỗi `telemetry_s` và `/a` theo luật 3 mẫu vượt, 5 mẫu dưới ngưỡng để orchestrator có cảnh báo; phần này không có trong firmware. Trên phần cứng thật cần node cảm biến riêng hoặc firmware bổ sung.
+- **Build lõi C.** Linux: `make -C firmware/node-b-integrated/test libintegrated.so` (tự chạy khi nạp nếu file thiếu hoặc cũ). Windows chỉ nạp `integrated.dll` có sẵn, build bằng mingw (ví dụ trong Docker): `make -C firmware/node-b-integrated/test integrated.dll`. Thiếu thư viện thì test `test_integrated_node.py` và `test_station_integrated.py` tự bỏ qua.
+
 ## Việc còn mở, cần chốt với Hậu và Hiếu
 
 - **Telemetry cho mô hình:** `obs` dùng 5 mẫu cuối mỗi node (giống bộ kịch bản, 1 Hz), nên firmware gửi `/t` mỗi 1 s (`NT532_TELEMETRY_S`, khoảng 55 byte/s mỗi node trên Thread). Gửi thưa hơn thì 5 mẫu trải dài hơn lúc train.
