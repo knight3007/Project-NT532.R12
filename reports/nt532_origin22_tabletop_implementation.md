@@ -86,7 +86,16 @@ The default CLI remains ID 2, with bottom-centre anchoring. `--world-origin 2` s
 
 ## I. Raspberry Pi verification for the operator
 
-The branch is local and was **not pushed**. Transfer these commits to `~/nt532-dynamic-test` before running the commands below. Use a fresh checkout and new filenames so previous PASS artifacts remain intact. These commands only read the camera and write diagnostic files; do not command servos, laser or pump.
+The branch is local and was **not pushed**. A local Git bundle is at `build-output/nt532-origin22-tabletop.bundle` in the Windows workspace and requires base `64ffa12`. Copy that bundle to the Pi as `~/nt532-origin22-tabletop.bundle`, then prepare the isolated clone:
+
+```bash
+git clone https://github.com/knight3007/Project-NT532.R12.git ~/nt532-dynamic-test
+git -C ~/nt532-dynamic-test fetch ~/nt532-origin22-tabletop.bundle \
+  refs/heads/feature/nt532-origin22-tabletop:refs/heads/feature/nt532-origin22-tabletop
+git -C ~/nt532-dynamic-test switch feature/nt532-origin22-tabletop
+```
+
+Use new filenames so previous PASS artifacts remain intact. The following commands only read the camera and write diagnostic files; they do not command servos, laser or pump.
 
 ```bash
 cd ~/nt532-dynamic-test/pi
