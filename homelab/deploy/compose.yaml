@@ -1,0 +1,49 @@
+# Bộ triển khai production cho NT532 control dashboard.
+# Chạy: docker compose up -d --build   (cần file .env cạnh file này)
+name: nt532
+
+services:
+  control:
+    build:
+      context: ../control
+    env_file: .env
+    volumes:
+      - ../control/data:/app/data
+    # Không publish port: chỉ Caddy trong mạng nội bộ gọi được control:8800
+    expose:
+      - "8800"
+    restart: unless-stopped
+    networks: [internal]
+    healthcheck:
+      # Dùng python để không phụ thuộc curl trong image
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8800/healthz', timeout=3).status == 200 else 1)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+  caddy:
+    image: caddy:2
+    depends_on:
+      control:
+        condition: service_healthy
+    environment:
+      DOMAIN: ${DOMAIN:?Hãy đặt DOMAIN trong .env}
+      ACME_EMAIL: ${ACME_EMAIL:-}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp" # HTTP/3
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    restart: unless-stopped
+    networks: [internal]
+
+networks:
+  internal: {}
+
+volumes:
+  caddy_data:
+  caddy_config:

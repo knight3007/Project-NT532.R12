@@ -114,3 +114,30 @@ def test_http_round_trip(rig, dash):
     with pytest.raises(urllib.error.HTTPError) as e:  # đường dẫn lạ
         get("/khong-co")
     assert e.value.code == 404
+
+
+def test_decider_remote_needs_valid_url(rig, dash):
+    st, _ = rig
+    old = (st.decider_url, st.decider_timeout, st.orch.decider)
+    try:
+        st.decider_url = None
+        for bad in ({}, {"url": "ftp://x/y"}, {"url": "không phải url"}, {"url": 5}):
+            r = dash.command({"cmd": "decider", "kind": "remote", **bad})
+            assert r["ok"] is False and "url" in r["error"]
+        assert st.decider_url is None and st.orch.decider is old[2]
+        r = dash.command({"cmd": "decider", "kind": "remote", "url": "http://127.0.0.1:9", "timeout": "abc"})
+        assert r["ok"] is False and "timeout" in r["error"]
+
+        r = dash.command({"cmd": "decider", "kind": "remote", "url": "http://127.0.0.1:9/", "timeout": 1.5})
+        assert r["ok"] is True
+        assert st.decider_url == "http://127.0.0.1:9/" and st.decider_timeout == 1.5
+        assert st.orch.decider.name.startswith("remote(") and st.orch.decider.timeout_s == 1.5
+        assert any(e["kind"] == "config" and "127.0.0.1" in e["text"] for e in st.events.since(0, 10_000))
+
+        # đã có url cấu hình sẵn thì không cần nói lại
+        st.decider_url = "https://decider.example.com"
+        assert dash.command({"cmd": "decider", "kind": "remote"})["ok"] is True
+        assert "decider.example.com" in st.orch.decider.name
+    finally:
+        st.decider_url, st.decider_timeout = old[0], old[1]
+        assert dash.command({"cmd": "decider", "kind": "rules"})["ok"] is True

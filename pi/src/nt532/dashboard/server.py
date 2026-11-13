@@ -5,7 +5,7 @@
     GET  /api/events?since=N
     GET  /stream.mjpg      video MJPEG có vẽ bảng bia, bia, điểm ngắm và vết laser của từng vòi
     GET  /snapshot.jpg     một khung
-    POST /api/cmd          {"cmd": ...}: stop, enable, recommission, decider, và lệnh sa bàn ảo
+    POST /api/cmd          {"cmd": ...}: stop, enable, recommission, decider (kind remote kèm url), và lệnh sa bàn ảo
 
 Không có xác thực: chỉ mở trong mạng LAN của sa bàn.
 """
@@ -170,7 +170,23 @@ class Dashboard:
                 return {"ok": False, "error": "trạm đang xử lý một lượt, kiểm tra camera sau"}
             return {"ok": True, "health": orch.last_health}
         elif cmd == "decider":
-            st.set_decider(body.get("kind", "rules"), body.get("run", "jev2"), float(body.get("tau", 0.8)),
+            kind = body.get("kind", "rules")
+            if kind == "remote":
+                # đổi sang máy chủ quyết định ở xa lúc đang chạy: cần URL http(s) hợp lệ
+                url = body.get("url") or st.decider_url
+                parsed = urlparse(url) if isinstance(url, str) else None
+                if not parsed or parsed.scheme not in ("http", "https") or not parsed.hostname:
+                    return {"ok": False, "error": "bộ quyết định remote cần url dạng http://host:cổng "
+                                                  "hoặc https://host"}
+                try:
+                    timeout = float(body["timeout"]) if body.get("timeout") is not None else st.decider_timeout
+                except (TypeError, ValueError):
+                    return {"ok": False, "error": "timeout phải là số giây"}
+                if not math.isfinite(timeout) or timeout <= 0:
+                    return {"ok": False, "error": "timeout phải là số giây dương"}
+                st.decider_url, st.decider_timeout = url.strip(), timeout
+                st.events.emit("config", f"chuyển sang bộ quyết định ở máy {parsed.hostname}")
+            st.set_decider(kind, body.get("run", "jev2"), float(body.get("tau", 0.8)),
                            body.get("stages", "verify"))
         elif world is None:
             return {"ok": False, "error": f"lệnh {cmd!r} chỉ có trên sa bàn ảo"}

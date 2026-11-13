@@ -87,7 +87,11 @@ uv run python scripts/serve_decider.py --decider hybrid --model-stages verify --
 uv run python scripts/run_station.py --decider remote --decider-url http://<ip laptop>:8090
 ```
 
-Giao thức: `POST /decide` với `{"obs", "questions"}` (đúng dạng orchestrator đưa cho bộ quyết định) trả `Decision.to_json()`; `GET /health` trả `{"ok": true, ...}`. Máy chủ chỉ dùng thư viện chuẩn (`ThreadingHTTPServer`), giữ một thể hiện mô hình sau một khóa và in độ trễ mỗi yêu cầu. **Không có xác thực và không mã hóa**: `--host` bắt buộc nêu rõ, chỉ bind vào mạng LAN tin cậy của phòng lab, không mở ra Internet. Máy chủ không phá được chặn an toàn vì các chặn cứng vẫn ở orchestrator trên Pi. Đặt `--decider-timeout` lớn hơn độ trễ mô hình đã đo (hoặc dùng `hybrid` với `--model-stages verify` để DECIDE vẫn do luật trả lời tức thì); `hybrid` ở máy chủ mà mô hình lỗi thì Pi vẫn nhận đáp án luật kèm cảnh báo lỗi trên dashboard.
+Giao thức: `POST /decide` với `{"obs", "questions"}` (đúng dạng orchestrator đưa cho bộ quyết định) trả `Decision.to_json()`; `GET /health` trả `{"ok": true, ...}`. Máy chủ chỉ dùng thư viện chuẩn (`ThreadingHTTPServer`), giữ một thể hiện mô hình sau một khóa và in độ trễ mỗi yêu cầu. **Không mã hóa**; xác thực là tùy chọn (xem dưới). `--host` bắt buộc nêu rõ, chỉ bind vào mạng LAN tin cậy của phòng lab, không mở ra Internet. Máy chủ không phá được chặn an toàn vì các chặn cứng vẫn ở orchestrator trên Pi. Đặt `--decider-timeout` lớn hơn độ trễ mô hình đã đo (hoặc dùng `hybrid` với `--model-stages verify` để DECIDE vẫn do luật trả lời tức thì); `hybrid` ở máy chủ mà mô hình lỗi thì Pi vẫn nhận đáp án luật kèm cảnh báo lỗi trên dashboard.
+
+**Token (tùy chọn).** Đặt `--token` cho `serve_decider.py` (hoặc env `NT532_DECIDER_TOKEN`) thì cả `POST /decide` lẫn `GET /health` đòi `Authorization: Bearer <token>`, thiếu hoặc sai trả 401. Pi gửi header này khi `RemoteDecider` có token, mặc định lấy từ env `NT532_DECIDER_TOKEN` trên Pi; token không bao giờ được ghi log. Token đi qua HTTP thường là rõ chữ, nên khi máy chủ nằm sau tunnel hoặc proxy phải dùng HTTPS.
+
+**Đổi lúc đang chạy.** Dashboard chuyển Pi sang bộ quyết định ở xa không cần khởi động lại: `POST /api/cmd {"cmd":"decider","kind":"remote","url":"https://...","timeout":5}` (`timeout` giây, tùy chọn; thiếu `url` thì dùng `--decider-url` đã cấu hình, nếu cũng không có thì trả `{"ok": false, "error": ...}`). Chỉ nhận URL `http://` hoặc `https://`. Trạm ghi sự kiện `config` kèm tên máy chủ rồi tự nạp (warm-up) như khi khởi động.
 
 ## Dashboard
 

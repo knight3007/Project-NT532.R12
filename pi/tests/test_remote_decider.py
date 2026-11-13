@@ -2,6 +2,7 @@ import json
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from typing import ClassVar
 
 import pytest
 from test_orchestrator import NODE_X, history, nozzles, tgt
@@ -136,3 +137,80 @@ def test_make_decider_remote():
     assert isinstance(d, RemoteDecider) and d.timeout_s == 0.5
     with pytest.raises(ValueError):
         make_decider("remote")
+
+
+class HeaderSpy(BaseHTTPRequestHandler):
+    """Ghi lại header Authorization của mọi yêu cầu để kiểm tra Pi có gửi token không."""
+
+    seen: ClassVar[list] = []
+
+    def log_message(self, *a):
+        pass
+
+    def _reply(self):
+        HeaderSpy.seen.append((self.command, self.path, self.headers.get("Authorization")))
+        data = b'{"ok": true}'
+        self.send_response(200)
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
+    do_GET = do_POST = _reply
+
+
+def spy_server():
+    HeaderSpy.seen = []
+    server = ThreadingHTTPServer(("127.0.0.1", 0), HeaderSpy)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    return server, f"http://127.0.0.1:{server.server_address[1]}"
+
+
+def test_remote_sends_bearer_only_when_token_set(monkeypatch):
+    monkeypatch.delenv("NT532_DECIDER_TOKEN", raising=False)
+    server, url = spy_server()
+    try:
+        obs, q = cases()[0]
+        RemoteDecider(url, 3.0).decide(obs, q)  # trả lời sai dạng nên rơi về luật, nhưng vẫn có yêu cầu
+        RemoteDecider(url, 3.0).health()
+        assert [a for _, _, a in HeaderSpy.seen] == [None, None]
+        HeaderSpy.seen.clear()
+        d = RemoteDecider(url, 3.0, token="s3cret")
+        d.decide(obs, q)
+        d.health()
+        assert HeaderSpy.seen == [("POST", "/decide", "Bearer s3cret"), ("GET", "/health", "Bearer s3cret")]
+        assert "s3cret" not in d.name and "s3cret" not in (d.last_error or "")
+        # mặc định lấy từ biến môi trường
+        monkeypatch.setenv("NT532_DECIDER_TOKEN", "fromenv")
+        HeaderSpy.seen.clear()
+        RemoteDecider(url, 3.0).health()
+        assert HeaderSpy.seen == [("GET", "/health", "Bearer fromenv")]
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_server_token_rejects_missing_or_wrong_bearer():
+    import urllib.error
+    import urllib.request
+
+    server = make_server(RuleDecider(), "127.0.0.1", 0, log=lambda m: None, token="tok")
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    url = f"http://127.0.0.1:{server.server_address[1]}"
+    try:
+        for hdr in ({}, {"Authorization": "Bearer sai"}, {"Authorization": "tok"}):
+            for path, data in (("/health", None), ("/decide", b"{}")):
+                req = urllib.request.Request(url + path, data, hdr)
+                with pytest.raises(urllib.error.HTTPError) as e:
+                    urllib.request.urlopen(req, timeout=3)
+                assert e.value.code == 401
+        assert RemoteDecider(url, 3.0, token="tok").health() == {"ok": True, "decider": "rules"}
+        obs, q = cases()[0]
+        remote = RemoteDecider(url, 5.0, token="tok")
+        remote.decide(obs, q)
+        assert remote.last_error is None
+        bad = RemoteDecider(url, 5.0, token="sai")  # sai token: rơi về luật, vẫn quyết định được
+        d = bad.decide(obs, q)
+        assert "401" in bad.last_error and "dự phòng" in d.decider
+    finally:
+        server.shutdown()
+        server.server_close()

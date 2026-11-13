@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>NT532 · Nhật ký</title>
+  <meta name="theme-color" content="#0F1419">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%230F1419'/%3E%3Cpath d='M16 5c1 5 7 8 7 14a7 7 0 0 1-14 0c0-3 2-5 3-7 1 2 2 3 3 3 1-3 0-6 1-10z' fill='%23FF6B35'/%3E%3C/svg%3E">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&family=Be+Vietnam+Pro:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+  <div class="sticky-top">
+    <header class="topbar sub">
+      <div class="logo">NT<span>532</span></div>
+      <div class="who">
+        <span class="pi-status" title="Kết nối tới Pi"><span class="dot" id="pi-dot"></span><span class="label" id="pi-label">Pi</span></span>
+        <span class="user mono" id="user"></span>
+        <form method="post" action="/logout"><button class="linkbtn" type="submit">Đăng xuất</button></form>
+      </div>
+    </header>
+    <nav class="mainnav" aria-label="Điều hướng">
+      <a href="/">Tổng quan</a><a href="/history" aria-current="page">Nhật ký</a><a href="/runs">Lượt</a><a href="/decider">Bộ quyết định</a><span class="soon" aria-disabled="true">Cài đặt <small>sắp có</small></span>
+    </nav>
+  </div>
+
+  <main class="page">
+    <h1 class="page-h">Nhật ký</h1>
+
+    <section class="panel filter-panel" aria-label="Bộ lọc">
+      <div class="frow">
+        <label class="fld"><span class="label">Node</span>
+          <select id="f-node"><option value="">Tất cả</option><option value="s1">s1</option><option value="s2">s2</option></select></label>
+        <label class="fld"><span class="label">Mức</span>
+          <select id="f-level"><option value="">Tất cả</option><option value="info">Thông tin</option><option value="warn">Cảnh báo</option><option value="error">Lỗi</option></select></label>
+        <label class="fld grow"><span class="label">Tìm trong nội dung</span>
+          <input id="f-q" type="text" placeholder="ví dụ: s1, phun, mất kết nối" autocomplete="off"></label>
+      </div>
+      <div class="frow">
+        <div class="fld"><span class="label" id="kind-label">Loại</span><div class="filters nomb" id="f-kinds" role="group" aria-labelledby="kind-label"></div></div>
+      </div>
+      <div class="frow">
+        <div class="fld"><span class="label" id="range-label">Khoảng thời gian</span><div class="filters nomb" id="f-range" role="group" aria-labelledby="range-label"></div></div>
+        <div class="fld custom-range" id="custom-range" hidden>
+          <label class="fld"><span class="label">Từ</span><input id="f-from" type="datetime-local"></label>
+          <label class="fld"><span class="label">Đến</span><input id="f-to" type="datetime-local"></label>
+          <button class="btn water" id="f-apply" type="button">Áp dụng</button>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel" aria-label="Cảm biến">
+      <div class="panel-head">
+        <span class="eyebrow">Cảm biến theo thời gian</span>
+        <label class="check"><input type="checkbox" id="c-hum" autocomplete="off"> Độ ẩm</label>
+        <button class="btn sm" id="csv-tel" type="button">Xuất CSV</button>
+      </div>
+      <div class="chart-cols" id="charts"></div>
+      <p class="legend"><i class="lg-band"></i>min–max <i class="lg-line"></i>trung bình <i class="lg-limit"></i>ngưỡng <i class="lg-run"></i>lượt xử lý</p>
+    </section>
+
+    <section class="panel" aria-label="Sự kiện">
+      <div class="panel-head">
+        <span class="eyebrow">Sự kiện</span>
+        <span class="count mono" id="count"></span>
+        <button class="btn sm" id="csv-ev" type="button">Xuất CSV</button>
+      </div>
+      <div class="hist-head" aria-hidden="true"><span>Thời gian</span><span></span><span>Node</span><span>Loại</span><span>Nội dung</span></div>
+      <ul class="hist" id="hist"></ul>
+      <div class="more"><button class="btn" id="more" type="button" hidden>Tải thêm</button></div>
+    </section>
+  </main>
+  <div class="toasts" id="toasts" role="status" aria-live="polite"></div>
+  <script type="module" src="/static/js/history.js"></script>
+</body>
+</html>

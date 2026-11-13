@@ -3,13 +3,15 @@
     Pi: RemoteDecider(url) --POST {obs, questions}--> <url>/decide --> Decision.to_json()
     Laptop: scripts/serve_decider.py (jev, hybrid hoặc rules) dùng `make_server` ở đây.
 
-Chỉ dùng thư viện chuẩn. KHÔNG có xác thực và không mã hóa: chỉ chạy trong mạng LAN tin cậy của
-sa bàn, không mở ra Internet. Mất mạng, quá hạn, HTTP lỗi hoặc trả lời sai dạng thì cả lượt dùng
+Chỉ dùng thư viện chuẩn. Không mã hóa. Xác thực tùy chọn bằng bearer token dùng chung (env
+NT532_DECIDER_TOKEN hoặc tham số `token`); không đặt thì không xác thực, chỉ chạy trong LAN tin cậy. Mất mạng, quá hạn, HTTP lỗi hoặc trả lời sai dạng thì cả lượt dùng
 bộ dự phòng (luật) và đặt `last_error` để dashboard báo "mô hình lỗi, đang dùng luật" như HybridDecider.
 Các chặn an toàn cứng vẫn ở orchestrator, nên máy từ xa không thể phá chúng.
 """
 
+import hmac
 import json
+import os
 import sys
 import threading
 import time
@@ -20,6 +22,7 @@ from ..decider.state_text import render_state
 from .decide import Answer, Decision, RuleDecider
 
 MAX_BODY = 1_000_000  # byte, cho cả yêu cầu lẫn trả lời
+TOKEN_ENV = "NT532_DECIDER_TOKEN"
 
 
 class BadReply(ValueError):
@@ -55,8 +58,9 @@ def parse_decision(reply: dict, questions: dict, obs: dict) -> Decision:
 class RemoteDecider:
     """Gọi bộ quyết định ở máy khác; lỗi thì dùng `fallback` (mặc định luật) và đặt `last_error`."""
 
-    def __init__(self, url: str, timeout_s: float = 3.0, fallback=None) -> None:
+    def __init__(self, url: str, timeout_s: float = 3.0, fallback=None, token: str | None = None) -> None:
         self.url = url.rstrip("/")
+        self.token = token if token is not None else os.environ.get(TOKEN_ENV) or None  # không bao giờ ghi log
         self.timeout_s = timeout_s
         self.fallback = fallback or RuleDecider()
         self.name = f"remote({self.url})"
@@ -75,10 +79,19 @@ class RemoteDecider:
         dec.latency_ms = (time.perf_counter() - t0) * 1000
         return dec
 
+    def _auth(self) -> dict:
+        return {"Authorization": f"Bearer {self.token}"} if self.token else {}
+
+    def health(self, timeout_s: float = 3.0) -> dict:
+        """GET /health (kèm token nếu có); lỗi thì ném ngoại lệ cho nơi gọi xử lý."""
+        req = urllib.request.Request(f"{self.url}/health", headers=self._auth())
+        with urllib.request.urlopen(req, timeout=timeout_s) as r:
+            return json.loads(r.read(MAX_BODY))
+
     def _ask(self, obs: dict, questions: dict) -> Decision:
         body = json.dumps({"obs": obs, "questions": questions}, default=str).encode()
-        req = urllib.request.Request(f"{self.url}/decide", body,
-                                     {"Content-Type": "application/json"}, method="POST")
+        headers = {"Content-Type": "application/json", **self._auth()}
+        req = urllib.request.Request(f"{self.url}/decide", body, headers, method="POST")
         with urllib.request.urlopen(req, timeout=self.timeout_s) as r:
             raw = r.read(MAX_BODY + 1)
         if len(raw) > MAX_BODY:
@@ -96,9 +109,10 @@ class RemoteDecider:
 
 # --- phía máy chủ -----------------------------------------------------------------------------
 
-def make_server(decider, host: str, port: int, log=None) -> ThreadingHTTPServer:
+def make_server(decider, host: str, port: int, log=None, token: str | None = None) -> ThreadingHTTPServer:
     """HTTP server cho một bộ quyết định. Một thể hiện mô hình, khóa quanh `decide` nên các yêu cầu
-    đồng thời xếp hàng. `port=0` để hệ điều hành chọn cổng rảnh (server.server_address[1])."""
+    đồng thời xếp hàng. `port=0` để hệ điều hành chọn cổng rảnh (server.server_address[1]).
+    `token` đặt thì cả /health lẫn /decide phải có `Authorization: Bearer <token>`, sai thì 401."""
     lock = threading.Lock()
     log = log or (lambda msg: print(msg, file=sys.stderr, flush=True))
 
@@ -114,13 +128,26 @@ def make_server(decider, host: str, port: int, log=None) -> ThreadingHTTPServer:
             self.end_headers()
             self.wfile.write(data)
 
+        def _authorized(self) -> bool:
+            if not token:
+                return True
+            got = self.headers.get("Authorization", "")
+            if hmac.compare_digest(got.encode(), f"Bearer {token}".encode()):
+                return True
+            self._send(401, {"error": "thiếu hoặc sai token"})
+            return False
+
         def do_GET(self) -> None:
+            if not self._authorized():
+                return
             if self.path == "/health":
                 self._send(200, {"ok": True, "decider": getattr(decider, "name", "?")})
             else:
                 self._send(404, {"error": "không có đường dẫn này"})
 
         def do_POST(self) -> None:
+            if not self._authorized():
+                return
             if self.path != "/decide":
                 return self._send(404, {"error": "không có đường dẫn này"})
             try:

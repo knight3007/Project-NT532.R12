@@ -10,13 +10,18 @@ Chỉ dùng thư viện chuẩn cho phần HTTP (nt532.orchestrator.remote). POS
 {"obs", "questions"} và trả Decision dạng JSON; GET /health để kiểm tra. Một thể hiện mô hình, các
 yêu cầu xếp hàng sau một khóa; mỗi yêu cầu in độ trễ ra stderr.
 
-AN TOÀN: không có xác thực và không mã hóa. Chỉ bind vào địa chỉ trong LAN tin cậy của phòng lab
+XÁC THỰC TÙY CHỌN: --token (hoặc env NT532_DECIDER_TOKEN) đặt thì cả /decide lẫn /health phải kèm
+`Authorization: Bearer <token>`, thiếu hoặc sai trả 401. Pi đọc cùng biến env NT532_DECIDER_TOKEN.
+Token đi qua HTTP thường là rõ chữ: cần HTTPS (proxy/tunnel) nếu đi ngoài LAN.
+
+AN TOÀN: không mã hóa. Chỉ bind vào địa chỉ trong LAN tin cậy của phòng lab
 (--host bắt buộc phải nêu rõ; 0.0.0.0 là mọi giao diện), không mở cổng này ra Internet. Máy chủ
 không thể phá chặn an toàn: các chặn cứng vẫn nằm ở orchestrator trên Pi, và Pi dùng luật nếu
 máy chủ chậm hoặc lỗi.
 """
 
 import argparse
+import os
 
 from nt532.orchestrator.decide import QUESTION_IDS, JevDecider, make_decider, parse_stages
 from nt532.orchestrator.remote import make_server
@@ -44,6 +49,8 @@ def main() -> None:
                         "(s1 + s2) khi mô hình trả both với conf >= ngưỡng này; mặc định tắt")
     p.add_argument("--host", required=True, help="địa chỉ bind, vd 192.168.1.50 hoặc 0.0.0.0 (mọi giao diện)")
     p.add_argument("--port", type=int, default=8090)
+    p.add_argument("--token", default=os.environ.get("NT532_DECIDER_TOKEN"),
+                   help="bearer token dùng chung (mặc định env NT532_DECIDER_TOKEN); không đặt thì không xác thực")
     args = p.parse_args()
     try:
         parse_stages(args.model_stages)
@@ -55,9 +62,9 @@ def main() -> None:
     if args.decider != "rules":
         print(f"Đang nạp mô hình {args.jev_run} trên {args.device}...", flush=True)
         warm_up(decider)
-    server = make_server(decider, args.host, args.port)
+    server = make_server(decider, args.host, args.port, token=args.token or None)
     print(f"Bộ quyết định {decider.name} tại http://{args.host}:{args.port}  "
-          "(không xác thực, chỉ dùng trong LAN phòng lab)", flush=True)
+          f"({'có' if args.token else 'không'} xác thực bằng token, chỉ dùng trong LAN phòng lab)", flush=True)
     try:
         server.serve_forever()
     except KeyboardInterrupt:
