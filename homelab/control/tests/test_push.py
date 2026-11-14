@@ -7,7 +7,7 @@ import time
 import httpx
 import pytest
 
-from app.main import create_app
+from app.main import create_app, mjpeg_chunks
 from tests.conftest import PASSWORD, FakePi
 
 TOKEN = "token-thu"
@@ -140,3 +140,111 @@ async def test_camera_503_in_push_mode(plogged):
     for path in ("/camera/stream.mjpg", "/camera/snapshot.jpg"):
         r = await plogged.get(path)
         assert r.status_code == 503 and r.json() == {"error": "Không có hình"}
+
+
+JPEG = b"\xff\xd8\xff\xe0fake-jpeg\xff\xd9"
+
+
+async def test_frame_auth_and_validation(pclient):
+    h = {**AUTH, "Content-Type": "image/jpeg"}
+    assert (await pclient.post("/api/pi/frame", content=JPEG)).status_code == 401
+    assert (await pclient.post("/api/pi/frame", content=JPEG, headers={"Authorization": "Bearer sai"})).status_code == 401
+    assert (await pclient.post("/api/pi/frame", content=b"khong phai jpeg", headers=h)).status_code == 400
+    assert (await pclient.post("/api/pi/frame", content=b"\xff\xd8" + b"x" * (1024 * 1024), headers=h)).status_code == 413
+
+
+async def test_frame_disabled_without_token(anon):
+    assert (await anon.post("/api/pi/frame", content=JPEG, headers=AUTH)).status_code == 503
+
+
+async def test_snapshot_returns_pushed_frame(plogged, papp):
+    assert (await plogged.get("/camera/snapshot.jpg")).status_code == 503
+    r = await plogged.post("/api/pi/frame", content=JPEG, headers={**AUTH, "Content-Type": "image/jpeg"})
+    assert r.status_code == 200
+    r = await plogged.get("/camera/snapshot.jpg")
+    assert r.status_code == 200 and r.content == JPEG and r.headers["content-type"] == "image/jpeg"
+    papp.state.pi.frame_at = time.monotonic() - 60  # khung cũ
+    assert (await plogged.get("/camera/snapshot.jpg")).status_code == 503
+    assert (await plogged.get("/camera/stream.mjpg")).status_code == 503
+
+
+async def test_mjpeg_chunks_yields_new_frames_then_ends(papp):
+    p = papp.state.pi
+    p.set_frame(JPEG)
+    chunks = []
+
+    async def feed():
+        await asyncio.sleep(0.1)
+        p.set_frame(JPEG + b"2")
+
+    async def never():
+        return False
+
+    t = asyncio.create_task(feed())
+    async for c in mjpeg_chunks(p, never, stale_s=0.3, poll_s=0.01):
+        chunks.append(c)
+    await t
+    assert len(chunks) == 2
+    assert chunks[0].startswith(b"--frame\r\nContent-Type: image/jpeg\r\n")
+    assert f"Content-Length: {len(JPEG)}".encode() in chunks[0] and JPEG + b"\r\n" in chunks[0]
+
+
+async def test_mjpeg_chunks_stops_on_disconnect(papp):
+    p = papp.state.pi
+    p.set_frame(JPEG)
+
+    async def gone():
+        return True
+
+    assert [c async for c in mjpeg_chunks(p, gone, stale_s=5)] == []
+
+
+async def test_overview_camera_flag_follows_frames(plogged, papp):
+    assert (await plogged.get("/api/overview")).json()["camera"] is False
+    await plogged.post("/api/pi/frame", content=JPEG, headers={**AUTH, "Content-Type": "image/jpeg"})
+    assert (await plogged.get("/api/overview")).json()["camera"] is True
+    papp.state.pi.frame_at = time.monotonic() - 60
+    assert (await plogged.get("/api/overview")).json()["camera"] is False
+
+
+# --- hiệu chuẩn camera ----------------------------------------------------------------------
+
+
+async def test_calib_status_auth_and_validation(pclient):
+    ok = {"req": 1, "state": "capturing", "saved": 3, "target": 25, "corners": 20}
+    assert (await pclient.post("/api/pi/calib", json=ok)).status_code == 401
+    assert (await pclient.post("/api/pi/calib", json={"state": "bậy"}, headers=AUTH)).status_code == 400
+    assert (await pclient.post("/api/pi/calib", json={"state": "idle", "saved": "x"}, headers=AUTH)).status_code == 400
+    assert (await pclient.post("/api/pi/calib", content=b"x" * 70000, headers=AUTH)).status_code == 413
+
+
+async def test_calib_roundtrip_and_overview(plogged, papp):
+    h = {**AUTH, "Content-Type": "image/jpeg"}
+    r = await plogged.post("/api/pi/frame", content=JPEG, headers=h)
+    assert r.json() == {"ok": True, "calib": {"req": 0, "action": "idle", "target": 25}}
+    r = await plogged.post("/api/calib", json={"action": "capture", "target": 30})
+    assert r.status_code == 200 and r.json()["calib"] == {"req": 1, "action": "capture", "target": 30}
+    r = await plogged.post("/api/pi/frame", content=JPEG, headers=h)
+    assert r.json()["calib"] == {"req": 1, "action": "capture", "target": 30}
+    r = await plogged.post("/api/calib", json={"action": "stop"})
+    assert r.json()["calib"]["action"] == "idle" and r.json()["calib"]["req"] == 2
+    st = {"req": 2, "state": "done", "saved": 25, "target": 30, "rms": 0.42, "file": "calibration/camera.yaml"}
+    assert (await plogged.post("/api/pi/calib", json=st, headers=AUTH)).status_code == 200
+    c = (await plogged.get("/api/overview")).json()["calib"]
+    assert c["status"] == st and c["req"] == 2 and c["status_age"] is not None
+    texts = [e["text"] for e in (await plogged.get("/api/overview")).json()["last_events"]]
+    assert any("hiệu chuẩn camera capture" in t for t in texts)
+
+
+async def test_calib_user_endpoint_protection(pclient, plogged):
+    r = await pclient.post("/api/calib", json={"action": "capture"})
+    assert r.status_code == 200  # pclient và plogged dùng chung cookie jar nên đã đăng nhập
+    for bad in ({"action": "nổ"}, {}, {"action": "capture", "target": 5}, {"action": "capture", "target": 61},
+                {"action": "capture", "target": "25"}, {"action": "capture", "target": True}, [1]):
+        assert (await plogged.post("/api/calib", json=bad)).status_code == 400
+    assert (await plogged.post("/api/calib", content=b"{}", headers={"Content-Type": "text/plain"})).status_code == 415
+
+
+async def test_calib_requires_login(pclient):
+    r = await pclient.post("/api/calib", json={"action": "capture"})
+    assert r.status_code == 401

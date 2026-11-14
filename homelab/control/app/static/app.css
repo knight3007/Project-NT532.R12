@@ -442,3 +442,34 @@ pre.json {
   .tile-n { font-size: 30px; }
   .chart-cols { grid-template-columns: 100%; }
 }
+.sim-box .btn.on { outline: 2px solid var(--water, #4aa3ff); }
+.camera .frame img { cursor: crosshair; }
+
+/* hiệu chuẩn camera */
+#calib-panel .calib-info { display: grid; gap: 4px; margin-bottom: 12px; }
+#calib-panel .big { font: 700 var(--s-20)/1.2 var(--f-label); text-transform: uppercase; letter-spacing: .06em; }
+#calib-panel .calib-result { font: 400 var(--s-12)/1.5 var(--f-mono); overflow-wrap: anywhere; }
+#calib-panel .calib-result.bad { color: var(--ember); }
+#calib-panel .calib-hint { font: 400 var(--s-12)/1.5 var(--f-body); color: var(--muted); }
+#calib-panel .btns { display: flex; flex-wrap: wrap; gap: 8px; }
+#calib-panel[hidden] { display: none; }
+
+/* mạng Thread */
+.thread-panel { margin-top: 20px; }
+.thread-panel .panel-head .count.bad, .thread-panel .bad { color: var(--ember); }
+.thread-panel a.btn { text-decoration: none; display: inline-flex; align-items: center; }
+.th-otbr { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 10px 16px; margin-bottom: 16px; }
+.th-kv { display: grid; gap: 4px; min-width: 0; }
+.th-kv .mono { font-size: var(--s-14); overflow-wrap: anywhere; }
+.th-err { color: var(--ember); font-size: var(--s-12); }
+.th-scroll { overflow-x: auto; }
+.th-table { width: 100%; border-collapse: collapse; font-size: var(--s-14); }
+.th-table th { text-align: left; padding: 6px 10px; font: 600 var(--s-12)/1.2 var(--f-label); text-transform: uppercase; letter-spacing: .06em; color: var(--muted); border-bottom: 1px solid var(--line); white-space: nowrap; }
+.th-table td { padding: 8px 10px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+.th-table td.nm { font: 700 var(--s-16)/1 var(--f-label); letter-spacing: .06em; }
+.th-table tr.down td { color: var(--muted); }
+.th-note { color: var(--muted); font-size: var(--s-12); margin: 12px 0 8px; }
+.th-topo, .th-sub { list-style: none; margin: 0; padding: 0; }
+.th-topo > li { padding: 8px 0; border-top: 1px solid var(--line); display: grid; grid-template-columns: auto 1fr; gap: 2px 12px; align-items: baseline; }
+.th-topo .nm { font: 700 var(--s-14)/1.2 var(--f-label); letter-spacing: .06em; text-transform: uppercase; }
+.th-sub { grid-column: 1 / -1; display: grid; gap: 2px; font-size: var(--s-12); color: var(--muted); }

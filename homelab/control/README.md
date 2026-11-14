@@ -52,6 +52,8 @@ Khi Pi ở sau NAT, VM không gọi vào được Pi. Đặt `NT532_PI_TOKEN` (s
 - Response `{"ack": <seq lớn nhất đã nhận trong boot này>, "cmds": [{"id", "cmd", ...}]}`. Pi chỉ gửi lại các sự kiện có seq lớn hơn `ack`. Boot đổi = Pi khởi động lại, VM đồng bộ lại seq.
 - Lệnh từ `/api/cmd` và đổi bộ quyết định vào hàng đợi, chỉ trao cho Pi đúng một lần qua response, kết quả về ở lần push sau. Quá `NT532_CMD_TIMEOUT_S` mà Pi chưa nhận thì lệnh bị xóa (không chạy muộn) và trả 504; Pi mất kết nối trả 502.
 - Sai hoặc thiếu token trả 401; `NT532_PI_TOKEN` rỗng thì endpoint trả 503. Body tối đa 2 MB, tối đa 1000 sự kiện mỗi lần.
+- Hình camera: Pi `POST /api/pi/frame` (cùng Bearer token, body là JPEG thô, tối đa 1 MB). `/camera/snapshot.jpg` và `/camera/stream.mjpg` phát lại khung mới nhất; quá 10 s không có khung mới thì trả 503.
+- Mạng Thread: `pi/scripts/thread_monitor.py` (dịch vụ `nt532-thread`) `POST /api/pi/thread` mỗi ~10 s (cùng Bearer token, JSON tối đa 256 KB): OTBR, ping/CoAP/vai trò từng node, topology. Tổng quan có panel "Mạng Thread"; mỗi mẫu ghi một dòng mỗi node vào bảng `thread` (giữ theo `retention_days`). Lịch sử `GET /api/thread/history?hours=` và CSV `GET /api/thread.csv?hours=` (cần đăng nhập); trang Nhật ký có biểu đồ ping, mất gói, CoAP theo node.
 - Không có push trong `max(5, 3 x NT532_POLL_S)` giây thì ghi "Mất kết nối với Pi".
 - Camera chưa có ở chế độ này: `/camera/stream.mjpg` và `/camera/snapshot.jpg` trả 503.
 

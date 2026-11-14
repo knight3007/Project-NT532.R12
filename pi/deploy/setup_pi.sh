@@ -5,6 +5,8 @@
 #   bash pi/deploy/setup_pi.sh --yolo             # thêm --extra yolo và ncnn
 #   bash pi/deploy/setup_pi.sh --install-services # chép và bật nt532-station + mediamtx (systemd)
 #   bash pi/deploy/setup_pi.sh --mosquitto        # thêm gói mqtt (paho) và cài broker mosquitto cho Home Assistant
+#   NT532_PI_TOKEN=<token> bash pi/deploy/setup_pi.sh --control-url http://<ip-vm>:8800
+#                                                 # dịch vụ trạm đẩy lên control (ghi ~/.config/nt532/station.env)
 #
 # Chạy bằng user thường (không sudo); script tự gọi sudo khi cần. Không cài OTBR: xem firmware/rcp/README.md.
 set -euo pipefail
@@ -12,16 +14,23 @@ set -euo pipefail
 YOLO=0
 SERVICES=0
 MOSQUITTO=0
+CONTROL_URL=""
 MEDIAMTX_DIR="${MEDIAMTX_DIR:-$HOME/mediamtx}"
-for a in "$@"; do
-  case "$a" in
+while [ $# -gt 0 ]; do
+  case "$1" in
     --yolo) YOLO=1 ;;
     --install-services) SERVICES=1 ;;
     --mosquitto) MOSQUITTO=1 ;;
-    -h|--help) sed -n '2,9p' "$0"; exit 0 ;;
-    *) echo "Tham số lạ: $a (xem --help)" >&2; exit 2 ;;
+    --control-url) CONTROL_URL="${2:?--control-url cần URL}"; shift ;;
+    -h|--help) sed -n '2,11p' "$0"; exit 0 ;;
+    *) echo "Tham số lạ: $1 (xem --help)" >&2; exit 2 ;;
   esac
+  shift
 done
+if [ -n "$CONTROL_URL" ] && [ -z "${NT532_PI_TOKEN:-}" ]; then
+  echo "--control-url cần biến NT532_PI_TOKEN (token in ra lúc chạy homelab/deploy/install-vm.sh)." >&2
+  exit 2
+fi
 
 if [ "$(id -u)" -eq 0 ]; then
   echo "Đừng chạy bằng root/sudo: uv và mediamtx cài vào thư mục của user." >&2
@@ -100,13 +109,22 @@ else
 fi
 "$MEDIAMTX_DIR/mediamtx" --version || true
 
+# --- 4b. đẩy lên control (tùy chọn) ----------------------------------------------
+if [ -n "$CONTROL_URL" ]; then
+  log "Ghi ~/.config/nt532/station.env (đẩy lên $CONTROL_URL)"
+  mkdir -p "$HOME/.config/nt532"
+  (umask 077; printf 'NT532_PI_TOKEN=%s\nNT532_STATION_ARGS=--control-url %s\n' \
+    "$NT532_PI_TOKEN" "$CONTROL_URL" > "$HOME/.config/nt532/station.env")
+fi
+
 # --- 5. systemd -----------------------------------------------------------------
 if [ "$SERVICES" -eq 1 ]; then
   log "Cài dịch vụ systemd"
-  for unit in mediamtx nt532-station; do
+  for unit in mediamtx nt532-station nt532-camera nt532-thread; do
     # Unit mẫu viết cho user pi, repo /home/pi/nt532, mediamtx /home/pi/mediamtx; sửa theo máy thật.
     sed -e "s|^User=pi|User=$(id -un)|" \
         -e "s|/home/pi/nt532|$REPO|g" \
+        -e "s|/home/pi/.config|$HOME/.config|g" \
         -e "s|/home/pi/mediamtx|$MEDIAMTX_DIR|g" \
         -e "s|/home/pi/.local/bin/uv|$(command -v uv)|g" \
         "$HERE/$unit.service" | sudo tee "/etc/systemd/system/$unit.service" >/dev/null
@@ -114,7 +132,12 @@ if [ "$SERVICES" -eq 1 ]; then
   sudo systemctl daemon-reload
   sudo systemctl enable --now mediamtx
   # Trạm cần config/site.yaml, calibration/ và network.nodes xong mới chạy được: chỉ bật, chưa khởi động.
+  # Unit trạm tự bỏ qua khi chưa có calibration/camera.yaml; lúc đó nt532-camera đẩy hình để ngắm và hiệu chuẩn.
   sudo systemctl enable nt532-station
+  if [ -n "$CONTROL_URL" ] || [ -f "$HOME/.config/nt532/station.env" ]; then
+    sudo systemctl enable --now nt532-camera
+    sudo systemctl enable --now nt532-thread
+  fi
   echo "mediamtx đã chạy. nt532-station mới được bật (khởi động cùng máy), chưa start."
 fi
 

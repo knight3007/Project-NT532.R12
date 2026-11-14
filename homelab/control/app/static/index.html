@@ -44,6 +44,21 @@
             <div class="chips" id="chips"></div>
           </div>
         </section>
+        <section class="panel" id="calib-panel" aria-label="Hiệu chuẩn camera" hidden>
+          <span class="eyebrow">Hiệu chuẩn camera</span>
+          <div class="calib-info">
+            <span class="big" id="calib-state">--</span>
+            <span class="mono" id="calib-detail"></span>
+            <span class="calib-result" id="calib-result"></span>
+            <span class="calib-hint">Cầm bảng ChArUco (docs/print/charuco-a4.pdf), di chuyển khắp khung hình, nghiêng nhiều hướng, có ảnh sát mép khung. Chạy scripts/push_camera.py trên Pi.</span>
+          </div>
+          <div class="btns">
+            <button class="btn water" type="button" data-calib="capture">Bắt đầu chụp</button>
+            <button class="btn" type="button" data-calib="stop">Dừng</button>
+            <button class="btn" type="button" data-calib="compute">Tính hiệu chuẩn</button>
+            <button class="btn" type="button" data-calib="reset">Xóa ảnh cũ</button>
+          </div>
+        </section>
         <div class="row-2">
           <section class="panel" aria-label="Bộ quyết định">
             <span class="eyebrow">Bộ quyết định</span>
@@ -59,6 +74,8 @@
                 <option value="jev">jev</option>
                 <option value="remote">remote</option>
               </select>
+              <input id="dec-url" type="text" inputmode="url" spellcheck="false" placeholder="http://host:8800" aria-label="URL bộ quyết định remote" hidden>
+              <input id="dec-timeout" type="number" min="0.1" max="30" step="0.1" value="3" aria-label="Timeout (giây)" title="Timeout (giây)" hidden>
               <input id="dec-tau" type="number" min="0" max="1" step="0.05" value="0.7" aria-label="Ngưỡng tau" title="Ngưỡng tin cậy tau" hidden>
               <button class="btn water" type="submit">Đổi bộ quyết định</button>
             </form>
@@ -74,6 +91,7 @@
               <div class="form-row">
                 <button class="btn" type="button" id="recommission">Commissioning lại</button>
                 <button class="btn" type="button" id="check-camera">Kiểm tra camera</button>
+                <button class="btn" type="button" id="selfcal">Tự hiệu chuẩn vòi</button>
               </div>
               <div class="sim-box" id="sim-box" hidden>
                 <span class="eyebrow">Sa bàn ảo</span>
@@ -86,6 +104,21 @@
                   <button class="btn" type="button" data-sim='{"cmd":"spike"}'>Xung</button>
                   <button class="btn" type="button" data-sim='{"cmd":"clear"}'>Xóa</button>
                 </div>
+                <span class="eyebrow">Bấm lên hình để đặt</span>
+                <div class="btns">
+                  <button class="btn on" type="button" data-kind="fire">Lửa</button>
+                  <button class="btn" type="button" data-kind="fire_large">Lửa lớn</button>
+                  <button class="btn" type="button" data-kind="lamp">Đèn</button>
+                  <button class="btn" type="button" data-kind="object">Vật cam</button>
+                </div>
+                <span class="eyebrow">Camera ảo</span>
+                <div class="btns">
+                  <button class="btn" type="button" data-sim='{"cmd":"camera_preset","name":"front"}'>Chính diện</button>
+                  <button class="btn" type="button" data-sim='{"cmd":"camera_preset","name":"left"}'>Trái</button>
+                  <button class="btn" type="button" data-sim='{"cmd":"camera_preset","name":"right"}'>Phải</button>
+                  <button class="btn" type="button" data-sim='{"cmd":"camera_preset","name":"legacy"}'>Góc thấp</button>
+                  <button class="btn" type="button" id="cam-jitter">Xê dịch camera</button>
+                </div>
               </div>
             </div>
           </section>
@@ -93,6 +126,23 @@
       </div>
       <aside class="col-side" id="nodes" aria-label="Node cảm biến"></aside>
     </div>
+
+    <section class="panel thread-panel" id="thread-panel" aria-label="Mạng Thread" hidden>
+      <div class="panel-head">
+        <span class="eyebrow">Mạng Thread</span>
+        <span class="count mono" data-f="age"></span>
+        <a class="btn sm" href="/history#thread">Biểu đồ và CSV</a>
+      </div>
+      <div class="th-otbr" data-f="otbr"></div>
+      <div class="th-scroll">
+        <table class="th-table">
+          <thead><tr><th>Node</th><th>Vai trò</th><th>Ping TB (ms)</th><th>min</th><th>max</th><th>Mất gói (%)</th><th>CoAP (ms)</th><th>Liên lạc</th><th>Firmware</th></tr></thead>
+          <tbody data-f="nodes"></tbody>
+        </table>
+      </div>
+      <p class="th-note" data-f="none" hidden>Chưa có node nào trong số đo.</p>
+      <div data-f="topo"></div>
+    </section>
 
     <section class="panel log-panel" aria-label="Nhật ký">
       <span class="eyebrow">Nhật ký</span>

@@ -57,7 +57,8 @@ async def test_login_rate_limit(anon):
 async def test_overview_shape(client, app):
     await app.state.pi.poll_once()
     j = (await client.get("/api/overview")).json()
-    assert set(j) >= {"pi_online", "state", "limits", "sim", "last_events"}
+    assert set(j) >= {"pi_online", "state", "limits", "sim", "last_events", "camera"}
+    assert j["camera"] is False
     assert j["pi_online"] is True and j["sim"] is True
     assert j["limits"] == {"temp": 45.0, "gas": 600.0}
     assert j["state"]["orch"]["phase"] == "IDLE"
@@ -102,7 +103,36 @@ async def test_cmd_decider_params(client, app, fake_pi):
         assert (await client.post("/api/cmd", json=body)).status_code == 400, body
 
 
-@pytest.mark.parametrize("body", [{"cmd": "rm -rf"}, {"cmd": "camera_set"}, {"cmd": 5}, {}, [], {"cmd": "online"}])
+async def test_new_cmds_forwarded(client, app, fake_pi):
+    await app.state.pi.poll_once()
+    ok = [{"cmd": "calibrate", "node": "all"}, {"cmd": "calibrate", "node": "s2"}, {"cmd": "calibrate"},
+          {"cmd": "camera_preset", "name": "left"}, {"cmd": "camera_jitter"},
+          {"cmd": "camera_set", "x": 0.6, "y": -0.8, "z": 0.9, "lx": 0.6, "ly": 0.4, "lz": 0.2},
+          {"cmd": "decider", "kind": "remote", "url": "http://192.168.1.20:8800", "timeout": 3},
+          {"cmd": "fire", "u": 640, "v": 360}]
+    for body in ok:
+        r = await client.post("/api/cmd", json=body)
+        assert r.status_code == 200, (body, r.text)
+    assert len(fake_pi.cmds) == len(ok)
+
+
+@pytest.mark.parametrize("body", [
+    {"cmd": "calibrate", "node": "s9"}, {"cmd": "camera_preset", "name": "top"}, {"cmd": "camera_preset"},
+    {"cmd": "camera_set", "x": 1, "y": 1, "z": 1}, {"cmd": "camera_set", "x": 99, "y": 0, "z": 0, "lx": 0, "ly": 0, "lz": 0},
+    {"cmd": "decider", "kind": "remote", "url": "ftp://host"}, {"cmd": "decider", "kind": "remote", "url": "http://"},
+    {"cmd": "decider", "kind": "remote", "url": "http://a b"},
+    {"cmd": "decider", "kind": "remote", "url": "http://x/" + "a" * 200},
+    {"cmd": "decider", "kind": "remote", "url": "http://h", "timeout": 100},
+    {"cmd": "decider", "kind": "remote", "url": "http://h", "timeout": 0},
+    {"cmd": "fire", "u": 5000, "v": 1}])
+async def test_new_cmds_rejected(client, app, fake_pi, body):
+    await app.state.pi.poll_once()
+    assert (await client.post("/api/cmd", json=body)).status_code == 400
+    assert fake_pi.cmds == []
+
+
+@pytest.mark.parametrize("body", [{"cmd": "rm -rf"}, {"cmd": "camera_set"}, {"cmd": "camera_x"}, {"cmd": 5}, {}, [],
+                                  {"cmd": "online"}])
 async def test_cmd_rejects_unknown(client, app, fake_pi, body):
     await app.state.pi.poll_once()
     r = await client.post("/api/cmd", json=body)

@@ -4,6 +4,7 @@ import asyncio
 import csv
 import io
 import json
+import re
 import time
 from datetime import datetime
 from typing import Annotated
@@ -13,6 +14,7 @@ from fastapi.responses import JSONResponse, Response
 
 LEVELS = ("info", "warn", "error")
 NODES = ("s1", "s2")
+NODE_RE = re.compile(r"[A-Za-z0-9_-]{1,16}")
 T0 = Annotated[float | None, Query(alias="from", description="epoch giây")]
 T1 = Annotated[float | None, Query(alias="to", description="epoch giây")]
 Multi = Annotated[list[str] | None, Query()]
@@ -99,6 +101,28 @@ def make_router(require_user) -> APIRouter:
         rows = await asyncio.to_thread(store(request).telemetry_rows, t0, t1, clean_node(node))
         data = [[_stamp(t), n, temp, gas, hum] for t, n, temp, gas, hum in rows]
         return _csv(data, ["Thời gian", "Node", "Nhiệt độ (°C)", "Khí gas (ppm)", "Độ ẩm (%)"], "cam-bien.csv")
+
+    # --- mạng Thread --------------------------------------------------------------------------
+
+    @r.get("/api/thread/history")
+    async def thread_history(request: Request, hours: Annotated[float, Query(gt=0, le=24 * 31)] = 1.0,
+                             node: str | None = None, points: Annotated[int, Query(ge=1)] = 300,
+                             user: str = Depends(require_user)):
+        """Ping min/avg/max, mất gói, CoAP theo ô thời gian cho từng node trong `hours` giờ gần nhất."""
+        t1 = time.time()
+        return await asyncio.to_thread(store(request).thread_buckets, t1 - hours * 3600, t1, points,
+                                       node if node and NODE_RE.fullmatch(node) else None)
+
+    @r.get("/api/thread.csv")
+    async def thread_csv(request: Request, hours: Annotated[float, Query(gt=0, le=24 * 31)] = 24.0,
+                         node: str | None = None, user: str = Depends(require_user)):
+        t1 = time.time()
+        rows = await asyncio.to_thread(store(request).thread_rows, t1 - hours * 3600, t1,
+                                       node if node and NODE_RE.fullmatch(node) else None)
+        data = [[_stamp(t), n, role or "", avg, mn, mx, loss, coap, "có" if ok else "không"]
+                for t, n, role, avg, mn, mx, loss, coap, ok in rows]
+        return _csv(data, ["Thời gian", "Node", "Vai trò", "Ping TB (ms)", "Ping min (ms)", "Ping max (ms)",
+                           "Mất gói (%)", "CoAP (ms)", "Liên lạc được"], "mang-thread.csv")
 
     # --- lượt xử lý ---------------------------------------------------------------------------
 

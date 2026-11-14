@@ -12,7 +12,8 @@ import argparse
 import cv2
 
 from nt532.config import REPO_ROOT, load_site
-from nt532.vision.calibration import calibrate, charuco_board, save_intrinsics
+from nt532.vision.calib_session import compute_from_dir
+from nt532.vision.calibration import charuco_board
 from nt532.vision.camera import open_camera
 
 CALIB_DIR = REPO_ROOT / "data" / "calib"
@@ -63,13 +64,11 @@ def main() -> None:
     if args.capture:
         capture(cam_cfg)
         return
-    paths = sorted(CALIB_DIR.glob("*.jpg"))
-    intrinsics, rms, used = calibrate(
-        [cv2.imread(str(f)) for f in paths], charuco_board(cam_cfg["calib_board"])
-    )
-    out = REPO_ROOT / cam_cfg["intrinsics"]
-    save_intrinsics(out, intrinsics, rms, used)
-    print(f"dùng {used}/{len(paths)} ảnh, RMS {rms:.3f} px, lưu {out.relative_to(REPO_ROOT)}")
+    try:
+        out, rms, used, total = compute_from_dir(cam_cfg, CALIB_DIR)
+    except ValueError as e:
+        raise SystemExit(str(e)) from e
+    print(f"dùng {used}/{total} ảnh, RMS {rms:.3f} px, lưu {out.relative_to(REPO_ROOT)}")
 
 
 if __name__ == "__main__":

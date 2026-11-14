@@ -3,6 +3,7 @@ import { el } from "./js/format.js";
 import { createLog } from "./js/log.js";
 import { createNodeCards } from "./js/nodes.js";
 import { createPhaseStrip, runInfo } from "./js/phase.js";
+import { createThreadPanel } from "./js/thread.js";
 
 const $ = (id) => document.getElementById(id);
 const NODES = ["s1", "s2"];
@@ -10,6 +11,7 @@ const NODES = ["s1", "s2"];
 const renderPhase = createPhaseStrip($("phase"));
 const renderNodes = createNodeCards($("nodes"), NODES);
 const log = createLog($("log"), $("filters"));
+const renderThread = createThreadPanel($("thread-panel"));
 
 let ov = null; // overview mới nhất
 let receivedAt = performance.now();
@@ -27,8 +29,43 @@ function render() {
   renderChips(state);
   renderDecider(state);
   renderCmds(state);
-  ensureCamera(online);
+  ensureCamera(online || !!ov?.camera);
+  renderCalib(ov?.calib);
+  renderThread(ov?.thread);
 }
+
+const CALIB_STATE = { idle: "Nghỉ", capturing: "Đang chụp", computing: "Đang tính", done: "Xong", error: "Lỗi" };
+function renderCalib(c) {
+  const st = c?.status;
+  $("calib-panel").hidden = !(ov?.camera || st);
+  if (!c) return;
+  $("calib-state").textContent = st ? (CALIB_STATE[st.state] ?? st.state) : "Chưa có báo cáo từ Pi";
+  const d = [];
+  if (st) {
+    if (st.saved != null) d.push(`đã lưu ${st.saved}/${st.target ?? c.target}`);
+    if (st.corners != null && st.state === "capturing") d.push(`thấy ${st.corners} góc`);
+    if (c.status_age != null && c.status_age > 10) d.push(`(báo cáo cũ ${Math.round(c.status_age)} s)`);
+  }
+  $("calib-detail").textContent = d.join(" · ");
+  const res = $("calib-result");
+  res.className = "calib-result" + (st?.state === "error" ? " bad" : "");
+  if (st?.state === "done" && st.rms != null) res.textContent = `RMS ${Number(st.rms).toFixed(3)} px · ${st.file ?? ""}`;
+  else if (st?.state === "error") res.textContent = st.error ?? "Lỗi không rõ";
+  else res.textContent = "";
+}
+
+async function sendCalib(action) {
+  try {
+    const r = await fetch("/api/calib", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action }) });
+    if (r.status === 401) { location.href = "/login"; return; }
+    const j = await r.json().catch(() => ({}));
+    if (r.ok && j.ok !== false) toast(`Đã gửi: hiệu chuẩn ${action}`);
+    else toast(`Hiệu chuẩn lỗi: ${j.error ?? r.status}`, true);
+  } catch {
+    toast("Chưa gửi được lệnh hiệu chuẩn", true);
+  }
+}
+document.querySelectorAll("[data-calib]").forEach((b) => b.addEventListener("click", () => sendCalib(b.dataset.calib)));
 
 function renderTop(online) {
   $("pi-dot").className = "dot " + (online ? "ok" : "bad");
@@ -78,6 +115,9 @@ function renderDecider(state) {
 
 function syncTau() {
   $("dec-tau").hidden = !["hybrid", "jev"].includes($("dec-kind").value);
+  const remote = $("dec-kind").value === "remote";
+  $("dec-url").hidden = !remote;
+  $("dec-timeout").hidden = !remote;
 }
 
 function renderCmds(state) {
@@ -100,7 +140,7 @@ function ensureCamera(online) {
   } else if (!online && camOn) {
     camOn = false;
     img.removeAttribute("src");
-    showCam(false, "Đang chờ kết nối với Pi");
+    showCam(false, "Đang chờ kết nối với Pi hoặc hình từ camera");
   }
 }
 function showCam(ok, hint) {
@@ -114,7 +154,7 @@ $("cam").addEventListener("error", () => {
   camOn = false;
   $("cam").removeAttribute("src");
   showCam(false, "Camera chưa có khung hình, đang thử lại");
-  camRetry = setTimeout(() => { camRetry = 0; ensureCamera(!!ov?.pi_online); }, 5000);
+  camRetry = setTimeout(() => { camRetry = 0; ensureCamera(!!ov?.pi_online || !!ov?.camera); }, 5000);
 });
 
 // --- lệnh ----------------------------------------------------------------------------------
@@ -154,7 +194,31 @@ $("dec-form").addEventListener("submit", (e) => {
   const kind = $("dec-kind").value;
   const body = { cmd: "decider", kind };
   if (["hybrid", "jev"].includes(kind)) body.tau = Number($("dec-tau").value);
+  if (kind === "remote") {
+    const url = $("dec-url").value.trim();
+    if (url) body.url = url; // trống: Pi dùng URL đang cấu hình
+    const t = Number($("dec-timeout").value);
+    if (url && t) body.timeout = t;
+  }
   send(body, `Đổi bộ quyết định: ${kind}`);
+});
+$("selfcal").addEventListener("click", () => send({ cmd: "calibrate", node: "all" }, "Tự hiệu chuẩn vòi"));
+$("cam-jitter").addEventListener("click", () => send({ cmd: "camera_jitter" }, "Xê dịch camera"));
+document.querySelectorAll("[data-kind]").forEach((b) => b.addEventListener("click", () => {
+  placeKind = b.dataset.kind;
+  document.querySelectorAll("[data-kind]").forEach((x) => x.classList.toggle("on", x === b));
+}));
+// bấm lên hình khi sa bàn ảo: gửi pixel (theo ảnh gốc), Pi đổi ra tọa độ bảng hoặc nền
+let placeKind = "fire";
+$("cam").addEventListener("click", (e) => {
+  if (!ov?.state?.sim) return;
+  const img = e.target, r = img.getBoundingClientRect();
+  const nw = img.naturalWidth, nh = img.naturalHeight;
+  if (!nw || !nh) return;
+  const s = Math.min(r.width / nw, r.height / nh), ox = (r.width - nw * s) / 2, oy = (r.height - nh * s) / 2;
+  const u = (e.clientX - r.left - ox) / s, v = (e.clientY - r.top - oy) / s;
+  if (u < 0 || v < 0 || u > nw || v > nh) return;
+  send({ cmd: placeKind, u: Math.round(u), v: Math.round(v) }, `Đặt ${placeKind} lên hình`);
 });
 document.querySelectorAll("[data-sim]").forEach((b) => b.addEventListener("click", () => send(JSON.parse(b.dataset.sim), b.textContent)));
 
