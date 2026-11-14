@@ -131,6 +131,9 @@ network:
   # CoAP server trên Pi và địa chỉ node (tự tìm qua SRP, bù bằng nodes). Xem docs/orchestrator.md.
   bind: "::"
   port: 5683
+  # coap: node đẩy /t /a tới Pi. integrated: firmware A/B tích hợp (/pantilt /laser, không bơm), Pi poll GET /status.
+  link: coap
+  status_poll_s: 1.0           # chỉ dùng khi link: integrated
   transports: null             # null: mặc định aiocoap (udp6). Máy không có IPv6: [simplesocketserver]
   # srp: hỏi SRP server của border router (ot-ctl srp server service), node nào không thấy thì dùng nodes bên dưới.
   # static: chỉ dùng nodes bên dưới.

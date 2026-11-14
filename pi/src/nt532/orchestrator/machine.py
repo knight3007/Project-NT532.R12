@@ -589,11 +589,31 @@ class Orchestrator:
         self.link.fire(node, cmd, "laser", self.cfg.laser_ms)
         self._sleep(0.15)  # chờ laser bật và khung mới
         on = self.hub.fresh()
-        spot = self.vision.find_spot(on, off)
+        spot = self._find_spot(node, on, off)
         self.link.wait(cmd, ("done", "fault"), self.cfg.laser_ms / 1000 + 1)
         if spot is None:
             self.events.emit("vision", "không thấy vết laser", level="warn")
         return spot
+
+    def _find_spot(self, node: str, on, off):
+        """Vết laser, bỏ qua vùng quanh đầu phát của mọi vòi (camera thấy đầu phát sáng đỏ khi bật).
+        Bán kính che `selfcal.head_mask_px` (mặc định 45; 0 là tắt)."""
+        r = int(self.scfg.get("head_mask_px", 45))
+        heads = []
+        if r > 0:
+            for n in NOZZLES:
+                tag = self._tag(n)
+                if tag is not None:
+                    try:
+                        heads.append(self.cal(n).pivot_world(tag))
+                    except Exception as e:  # noqa: BLE001 - thiếu cal/pose thì không che, như trước
+                        self.events.emit("calib", f"không che được đầu phát {n}: {e}", level="warn")
+        if not heads:
+            return self.vision.find_spot(on, off)
+        try:
+            return self.vision.find_spot(on, off, exclude=heads, exclude_px=r)
+        except TypeError:  # vision giả trong test không nhận tham số che
+            return self.vision.find_spot(on, off)
 
     def _aim_and_correct(self, run, node, pivot, target, aim_point, dual=False):
         """AIM rồi CORRECT bằng vết laser; trả (điểm ngắm đã bù, độ lệch đo được cuối cùng cm).

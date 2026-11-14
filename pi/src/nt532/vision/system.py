@@ -283,12 +283,24 @@ class Vision:
         poses = _tag_poses(corners, self.camera, self.site)
         return {self._node_of[i]: p for i, p in poses.items()}
 
-    def find_spot(self, on: np.ndarray, off: np.ndarray) -> np.ndarray | None:
-        """Tọa độ sa bàn của vết laser trên bảng, từ một ảnh bật và một ảnh tắt laser."""
+    def find_spot(self, on: np.ndarray, off: np.ndarray, exclude: list | None = None,
+                  exclude_px: int = 45) -> np.ndarray | None:
+        """Tọa độ sa bàn của vết laser trên bảng, từ một ảnh bật và một ảnh tắt laser.
+
+        `exclude`: điểm 3D (hệ sa bàn) cần bỏ qua, ví dụ đầu phát laser của vòi: camera nhìn thẳng vào đầu
+        phát thấy nó sáng đỏ khi bật, mạnh hơn cả vết trên nền, và chiếu xuống nền ra một tọa độ giả cố định.
+        Mỗi điểm che một vòng tròn bán kính `exclude_px` pixel quanh hình chiếu của nó."""
         mask = np.zeros(on.shape[:2], np.uint8)
         for poly in (self.board_polygon(), self.floor_polygon()):
             if len(poly):
                 cv2.fillPoly(mask, [poly.astype(np.int32)], 255)
+        for p in exclude or ():
+            try:
+                u, v = project(np.asarray(p, float), self.camera)
+            except (cv2.error, ValueError, TypeError):
+                continue
+            if np.isfinite(u) and np.isfinite(v):
+                cv2.circle(mask, (round(u), round(v)), int(exclude_px), 0, -1)
         pixel = _find_spot(on, off, min_rise=self.cfg["laser_min_rise"], mask=mask)
         return None if pixel is None else self.localize(pixel)
 

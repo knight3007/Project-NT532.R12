@@ -39,3 +39,7 @@ kaggle/*.zip
 firmware/*/test/test_run
 firmware/sensor-h2/test/libcore.so
 /build-output/
+firmware/node-b-integrated/test/libintegrated.so
+firmware/node-b-integrated/test/integrated.dll
+firmware/node-b-integrated/test/test_shim_bin
+firmware/node-b-integrated/test/test_shim
