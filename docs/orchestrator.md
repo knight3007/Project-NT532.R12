@@ -133,6 +133,15 @@ API cho script khác: `GET /api/state`, `GET /api/events?since=N`, `GET /snapsho
 
 `orch.overlay` trong `/api/state` (và `Orchestrator.snapshot()["overlay"]`) gồm `tracks`, `target`, `nozzle`, cùng ba trường theo vòi: `active` (danh sách vòi đang được ngắm hoặc phun, rỗng lúc VERIFY và hết lượt), `aims` và `spots` (`{vòi: {"x", "z"}}`: điểm ngắm đã bù và vết laser đo được của từng vòi). Cầu nối MQTT cũng suy ra bơm và laser của từng node từ `active`.
 
+### Đẩy lên control trên homelab
+
+Server giám sát/điều khiển (`homelab/control`) chạy ở mạng khác, trên một domain public (cloudflared trên VM); server không gọi vào Pi. Pi tự làm HTTP client: mỗi chu kỳ (mặc định 1 s) `POST <url>/api/pi/push` với `Authorization: Bearer <token>`, body gồm `boot` (chuỗi ngẫu nhiên mỗi tiến trình), `state` (như `/api/state`), `events` (từ `ack` trở đi) và `results` (kết quả lệnh đã chạy). Response `{"ack", "cmds"}`: Pi chạy từng lệnh bằng cùng hàm của `POST /api/cmd`, rồi đẩy lại ngay để kết quả về nhanh. Mất mạng thì giữ kết quả, thử lại lùi dần 1, 2, 4... tối đa 10 s; sai token (401) báo lỗi trong log. Dashboard LAN không đổi. Mã: `pi/src/nt532/dashboard/push.py`.
+
+```
+export NT532_PI_TOKEN=<token>   # hoặc --control-token
+uv run --no-sync python scripts/run_station.py --source sim --control-url https://<domain> --control-token <token>
+```
+
 ## Sa bàn ảo
 
 `SimWorld` chạy theo thời gian thực. Mọi số liệu dưới đây là **giả định để demo**, không phải số đo:

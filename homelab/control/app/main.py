@@ -20,6 +20,7 @@ from . import config, history
 from .hub import hub
 from .hub import router as hub_router
 from .pi_client import PiClient
+from .push import router as push_router
 from .security import verify_password
 from .store import Store
 
@@ -156,6 +157,7 @@ def create_app(cfg: config.Settings | None = None, pi_http: httpx.AsyncClient | 
     app = FastAPI(title="NT532 control", lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
     app.state.cfg = cfg
     app.state.limiter = limiter
+    app.include_router(push_router)  # /api/pi/push: Pi tự đẩy dữ liệu lên, nhận lệnh trong response
     app.include_router(hub_router)  # /decider, /api/decider/*, /api/worker/ws, /decide, /health
 
     def user_of(request: Request) -> str | None:
@@ -279,13 +281,8 @@ def create_app(cfg: config.Settings | None = None, pi_http: httpx.AsyncClient | 
         except (ValueError, json.JSONDecodeError) as e:
             return JSONResponse({"ok": False, "error": str(e)}, 400)
         params = {k: v for k, v in body.items() if k != "cmd"}
-        try:
-            r = await p.http.post("/api/cmd", json=body)
-            reply = r.json()
-            ok = r.status_code == 200 and bool(reply.get("ok"))
-            status = 200 if r.status_code == 200 else 502
-        except (httpx.HTTPError, ValueError) as e:
-            reply, ok, status = {"ok": False, "error": f"Pi không phản hồi ({type(e).__name__})"}, False, 502
+        status, reply = await p.send_cmd(body)
+        ok = status == 200 and bool(reply.get("ok"))
         text = f"{user}: {body['cmd']}" + (f" {json.dumps(params, ensure_ascii=False)}" if params else "")
         if not ok:
             text += f" — lỗi: {reply.get('error', 'không rõ')}"
@@ -298,6 +295,8 @@ def create_app(cfg: config.Settings | None = None, pi_http: httpx.AsyncClient | 
     @app.get("/camera/stream.mjpg")
     async def camera_stream(request: Request, user: str = Depends(require_user)):
         p = pi(request)
+        if p.push_mode:
+            return JSONResponse({"error": "Không có hình"}, 503)
         req = p.http.build_request("GET", "/stream.mjpg", timeout=httpx.Timeout(5.0, read=None))
         try:
             up = await p.http.send(req, stream=True)
@@ -321,6 +320,8 @@ def create_app(cfg: config.Settings | None = None, pi_http: httpx.AsyncClient | 
 
     @app.get("/camera/snapshot.jpg")
     async def camera_snapshot(request: Request, user: str = Depends(require_user)):
+        if pi(request).push_mode:
+            return JSONResponse({"error": "Không có hình"}, 503)
         try:
             r = await pi(request).http.get("/snapshot.jpg")
         except httpx.HTTPError:
