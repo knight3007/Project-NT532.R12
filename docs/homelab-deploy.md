@@ -1,136 +1,95 @@
-# Triển khai NT532 control dashboard lên homelab
+# Triển khai NT532 control lên homelab
 
-Dashboard chạy trong một LXC Ubuntu 24.04 trên Proxmox. Caddy lấy chứng chỉ HTTPS tự động và làm reverse proxy tới app `control` (cổng 8800, không mở ra ngoài). Raspberry Pi nằm ở mạng khác, LXC gọi Pi qua Tailscale. Colab worker kết nối ra ngoài bằng WebSocket tới URL HTTPS công khai.
-
-```
-Internet ──443──> Router ──> LXC [Caddy] ──> [control:8800] ──Tailscale──> Raspberry Pi
-Colab worker ──wss──> (cùng URL HTTPS)
-```
-
-Bộ file nằm ở `homelab/deploy/`: `compose.yaml`, `Caddyfile`, `.env.example`, `setup-lxc.sh`.
-
-## 1. Tạo LXC trên Proxmox
-
-- Template Ubuntu 24.04, 2 vCPU, 2 GB RAM, đĩa 16 GB là đủ.
-- Unprivileged container, bật Options > Features: `nesting=1` và `keyctl=1` (Docker cần).
-- IP LAN cố định, ví dụ `192.168.1.50`.
-- Tailscale cần thiết bị TUN. Trên host Proxmox, sửa `/etc/pve/lxc/<CTID>.conf`, thêm:
+App `control` chạy bằng Docker trên một VM. cloudflared trên VM public nó ra một domain HTTPS. Pi ở mạng khác và chỉ là HTTP client: mỗi giây Pi gửi `POST https://<domain>/api/pi/push` (trạng thái, sự kiện, kết quả lệnh), lệnh từ trang web đi về Pi ngay trong response. Pi không mở cổng, không cài thêm gì; không dùng VPN, không cần Caddy hay port-forward.
 
 ```
-lxc.cgroup2.devices.allow: c 10:200 rwm
-lxc.mount.entry: /dev/net/tun dev/net/tun none bind,create=file
+Trình duyệt ──https──> <domain> (cloudflared trên VM) ──> control :8800
+Pi          ──https──> <domain>/api/pi/push  (lệnh trả về trong response)
 ```
 
-Khởi động lại LXC sau khi sửa.
+Pi chết thì `control` báo "Mất kết nối với Pi" sau vài giây và vẫn giữ toàn bộ lịch sử đã nhận. Lệnh gửi khi Pi mất kết nối bị từ chối ngay; lệnh Pi không nhận trong `NT532_CMD_TIMEOUT_S` (mặc định 5 s) bị hủy, không chạy muộn. Hình camera chưa có ở chế độ này.
 
-## 2. DNS và router
+## 1. Trên VM
 
-- Có tên miền: tạo bản ghi A trỏ về IP public nhà bạn. Chưa có thì dùng DuckDNS (`ten.duckdns.org`).
-- Router: chuyển tiếp cổng 80 và 443 (TCP, thêm 443/UDP nếu muốn HTTP/3) về IP LAN của LXC.
-- Cổng 80 bắt buộc mở để Let's Encrypt xác thực và để chuyển hướng sang HTTPS.
-- IP public đổi thường xuyên thì cài cập nhật DuckDNS (cron `curl`) hoặc DDNS của router.
-
-## 3. Chạy script cài đặt
-
-Trong LXC, bằng root:
+Cần Docker và cloudflared đã chạy sẵn. Từ thư mục repo đã clone (ví dụ `/opt/nt532`):
 
 ```bash
-apt-get update && apt-get install -y git curl
-git clone -b feature/homelab-logs https://github.com/knight3007/Project-NT532.R12.git /opt/nt532
-sudo bash /opt/nt532/homelab/deploy/setup-lxc.sh
+cd /opt/nt532 && git pull
+cd homelab/deploy
+cp .env.example .env
 ```
 
-Script cài Docker, compose plugin, Tailscale, bật ufw (22, 80, 443), tạo user `nt532`, kéo mã nguồn về `/opt/nt532`, tạo `.env` từ mẫu rồi dừng để bạn điền. Đổi nguồn bằng biến `NT532_REPO_URL`, `NT532_BRANCH`. Script chạy lại an toàn.
+Điền `.env` (sinh bí mật bằng `openssl rand -hex 32`, mỗi biến một chuỗi riêng):
 
-## 4. Tailscale
-
-Script không tự chạy `tailscale up` vì cần đăng nhập tương tác.
-
-```bash
-# Trên LXC
-sudo tailscale up
-# Trên Pi
-sudo tailscale up
-tailscale ip -4      # ghi lại IP của Pi, dạng 100.x.y.z
-```
-
-Kiểm tra từ LXC: `curl http://<pi-tailscale-ip>:8080/` phải trả lời. Pi chỉ nên nghe trên Tailscale (hoặc LAN của nó), không port-forward ra Internet.
-
-## 5. Điền `.env`
-
-```bash
-sudo -u nt532 nano /opt/nt532/homelab/deploy/.env
-```
-
-Sinh bí mật: `openssl rand -hex 32` (mỗi biến một chuỗi riêng).
-
-| Biến | Ý nghĩa |
+| Biến | Giá trị |
 |---|---|
-| `DOMAIN`, `ACME_EMAIL` | Tên miền và email Let's Encrypt |
-| `NT532_PI_URL` | `http://<pi-tailscale-ip>:8080` |
-| `NT532_SECRET` | Khóa ký phiên |
-| `NT532_ADMIN_USER`, `NT532_ADMIN_PASSWORD_HASH` | Tài khoản admin, mật khẩu đã băm theo hướng dẫn của app control |
-| `NT532_DB` | Đường dẫn DB trong volume `data/` |
-| `NT532_WORKER_TOKEN` | Token cho Colab worker |
-| `NT532_DECIDER_TOKEN` | Token cho bộ ra quyết định |
+| `DOMAIN` | domain public của control (compose bắt buộc có) |
+| `NT532_SECRET` | khóa ký phiên |
+| `NT532_PI_TOKEN` | token Pi gửi kèm mỗi lần push; bật chế độ push |
+| `NT532_HTTPS` | `true` |
+| `NT532_WORKER_TOKEN`, `NT532_DECIDER_TOKEN` | cho worker Colab và bộ quyết định từ xa |
+| `NT532_ADMIN_PASSWORD_HASH` | điền ở bước dưới, đặt trong nháy đơn |
 
-Nếu hash chứa `$` và compose báo lỗi nội suy, gấp đôi thành `$$`.
+`NT532_PI_URL` không dùng ở chế độ push, để nguyên.
 
-## 6. Khởi động và kiểm tra
-
-Chạy lại script (hoặc chạy tay):
+Tạo `compose.override.yaml` cạnh `compose.yaml` (compose tự đọc): mở cổng cho riêng VM và cho app đọc IP thật của người dùng từ header proxy, để giới hạn đăng nhập sai tính theo từng người.
 
 ```bash
-sudo bash /opt/nt532/homelab/deploy/setup-lxc.sh
-# hoặc
-cd /opt/nt532/homelab/deploy && docker compose up -d --build
+cat > compose.override.yaml <<'EOF'
+services:
+  control:
+    ports:
+      - "127.0.0.1:8800:8800"
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8800", "--forwarded-allow-ips", "*"]
+EOF
 ```
 
-Kiểm tra:
+Quyền ghi dữ liệu (container chạy bằng uid 10001), build, tạo mật khẩu admin:
 
 ```bash
-docker compose ps                       # control phải "healthy"
-docker compose logs -f caddy            # thấy "certificate obtained"
-curl -I https://DOMAIN                  # 200/302 và có Strict-Transport-Security
-curl -I http://DOMAIN                   # phải chuyển hướng 308 sang https
-curl https://DOMAIN/healthz
+sudo mkdir -p ../control/data && sudo chown -R 10001:10001 ../control/data
+docker compose build control
+docker compose run --rm control python -m app.hash_password
 ```
 
-Nếu Caddy không lấy được chứng chỉ: kiểm tra DNS trỏ đúng IP public, port 80/443 đã forward, ISP không chặn cổng 80. Thử trước bằng CA staging (thêm `acme_ca https://acme-staging-v02.api.letsencrypt.org/directory` vào khối global của Caddyfile) để tránh bị giới hạn tần suất.
-
-## 7. Cập nhật
+Dán chuỗi `scrypt$...` vào `.env` dạng `NT532_ADMIN_PASSWORD_HASH='scrypt$...'`. Chạy (chỉ `control`; `docker compose up -d` trần sẽ bật cả Caddy và chiếm 80/443):
 
 ```bash
-cd /opt/nt532 && sudo -u nt532 git pull --ff-only
-cd homelab/deploy && docker compose up -d --build
+docker compose up -d control
+curl http://127.0.0.1:8800/healthz
 ```
 
-## 8. Sao lưu
+Trong cloudflared, thêm Public Hostname `<domain>` → `HTTP` → `localhost:8800` (dashboard Zero Trust), hoặc một mục `ingress` với `service: http://localhost:8800` trong `config.yml` rồi `sudo systemctl restart cloudflared`. Kiểm tra `curl https://<domain>/healthz`, mở `https://<domain>` và đăng nhập `admin`.
 
-- Dữ liệu app: thư mục `homelab/control/data/` (SQLite, log). Với SQLite nên dừng container hoặc dùng `sqlite3 .backup` trước khi chép:
+## 2. Trên Pi
 
 ```bash
-cd /opt/nt532/homelab/deploy
+cd ~/nt532/pi   # thư mục pi/ của repo trên Pi
+NT532_PI_TOKEN=<cùng token với VM> uv run --no-sync python scripts/run_station.py --decider rules --control-url https://<domain>
+```
+
+Dòng `Đẩy lên control: https://<domain>` xuất hiện là đang gửi. Dashboard LAN của Pi (`http://<ip-pi>:8080/`) vẫn chạy như cũ. Sai token thì log báo `HTTP 401 (sai token)`; mất mạng thì Pi thử lại, lùi dần tới 10 s, và tự nối lại.
+
+## 3. Cập nhật
+
+```bash
+cd /opt/nt532 && git pull && cd homelab/deploy && docker compose up -d --build control
+docker compose logs -f control
+```
+
+## 4. Sao lưu
+
+Dữ liệu ở `homelab/control/data/` (SQLite). Dừng container trước khi chép:
+
+```bash
 docker compose stop control
 tar czf ~/nt532-data-$(date +%F).tgz -C ../control data
 docker compose start control
 ```
 
-- Chứng chỉ Caddy (tránh xin lại, bị giới hạn): volume `caddy_data`.
+## 5. An ninh
 
-```bash
-docker run --rm -v nt532_caddy_data:/d -v "$PWD":/b alpine tar czf /b/caddy_data.tgz -C /d .
-```
-
-- Tốt nhất là dùng Proxmox backup (vzdump) cho cả LXC theo lịch, thêm `.env` và các bản `.tgz` ở trên sao chép ra máy khác.
-
-## 9. Lưu ý an ninh
-
-- Dashboard công khai: đặt mật khẩu admin dài, ngẫu nhiên; đừng dùng lại mật khẩu khác.
-- Chỉ lộ 80/443. Cổng 22 chỉ mở trong LAN (ufw cho phép toàn bộ ở mức mặc định của script, nên giới hạn thêm: `ufw delete allow 22/tcp; ufw allow from 192.168.1.0/24 to any port 22`). Dùng khóa SSH, tắt đăng nhập mật khẩu.
-- Pi chỉ truy cập qua Tailscale; không port-forward Pi. Có thể dùng Tailscale ACL để chỉ cho LXC gọi cổng 8080 của Pi.
-- Quay vòng token (`NT532_WORKER_TOKEN`, `NT532_DECIDER_TOKEN`, `NT532_SECRET`) định kỳ hoặc khi nghi lộ: sinh mới, sửa `.env`, `docker compose up -d` rồi cập nhật phía Colab. Đổi `NT532_SECRET` sẽ đăng xuất mọi phiên.
-- Giới hạn tần suất đăng nhập nên làm ở app (app control chịu trách nhiệm); Caddy mặc định không có rate-limit, cần plugin riêng nếu muốn thêm.
-- Tùy chọn: `fail2ban` đọc log của Caddy để chặn IP dò mật khẩu; tự động cập nhật bảo mật bằng `unattended-upgrades`.
-- Không commit `.env`. File `.gitignore` trong `homelab/deploy/` đã loại trừ.
-- Điều khiển phần cứng (vòi phun) qua Internet: nếu dashboard bị chiếm, kẻ tấn công điều khiển được trạm. Giữ cơ chế an toàn ở phía Pi (giới hạn thời gian, nút dừng khẩn).
+- Mật khẩu admin dài, ngẫu nhiên: trang này điều khiển được trạm.
+- `NT532_PI_TOKEN` lộ thì người khác giả được Pi và nhận lệnh: sinh mới, sửa `.env` ở VM, `docker compose up -d control`, chạy lại Pi với token mới.
+- Không commit `.env` (đã có trong `homelab/deploy/.gitignore`).
+- Cơ chế an toàn phần cứng (giới hạn thời gian, dừng khẩn) nằm ở phía Pi, không phụ thuộc VM.

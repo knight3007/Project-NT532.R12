@@ -19,7 +19,6 @@ import uuid
 from collections import deque
 from pathlib import Path
 
-import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from itsdangerous import BadSignature, URLSafeTimedSerializer
@@ -501,13 +500,8 @@ async def switch(request: Request, user: str = Depends(require_user)):
     pi = getattr(request.app.state, "pi", None)
     if pi is None:
         return JSONResponse({"ok": False, "error": "chưa có kết nối tới Pi"}, 502)
-    try:
-        r = await pi.http.post("/api/cmd", json=cmd)
-        reply = r.json()
-        ok = r.status_code == 200 and bool(reply.get("ok"))
-        code = 200 if r.status_code == 200 else 502
-    except (httpx.HTTPError, ValueError) as e:
-        reply, ok, code = {"ok": False, "error": f"Pi không phản hồi ({type(e).__name__})"}, False, 502
+    code, reply = await pi.send_cmd(cmd)
+    ok = code == 200 and bool(reply.get("ok"))
     shown = {k: v for k, v in cmd.items() if k not in ("cmd", "url")}
     text = f"{user}: đổi bộ quyết định {json.dumps(shown, ensure_ascii=False)}"
     if not ok:

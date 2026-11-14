@@ -44,11 +44,24 @@ uv run python -m app.hash_password
 
 rồi dán kết quả vào `NT532_ADMIN_PASSWORD_HASH`.
 
+## Pi tự đẩy lên (khuyên dùng khi Pi khác mạng)
+
+Khi Pi ở sau NAT, VM không gọi vào được Pi. Đặt `NT532_PI_TOKEN` (sinh bằng `openssl rand -hex 32`, đặt cùng giá trị ở Pi) thì chế độ push bật: VM không còn gọi `NT532_PI_URL`, Pi là HTTP client.
+
+- Pi `POST /api/pi/push` với `Authorization: Bearer <NT532_PI_TOKEN>`, body `{"boot", "state", "events", "results"}`. `boot` là chuỗi ngẫu nhiên mỗi lần tiến trình Pi khởi động; `state` và `events` y hệt `GET /api/state` và `GET /api/events` của Pi; `results` là `[{"id", "reply"}]` của các lệnh nhận ở lần trước.
+- Response `{"ack": <seq lớn nhất đã nhận trong boot này>, "cmds": [{"id", "cmd", ...}]}`. Pi chỉ gửi lại các sự kiện có seq lớn hơn `ack`. Boot đổi = Pi khởi động lại, VM đồng bộ lại seq.
+- Lệnh từ `/api/cmd` và đổi bộ quyết định vào hàng đợi, chỉ trao cho Pi đúng một lần qua response, kết quả về ở lần push sau. Quá `NT532_CMD_TIMEOUT_S` mà Pi chưa nhận thì lệnh bị xóa (không chạy muộn) và trả 504; Pi mất kết nối trả 502.
+- Sai hoặc thiếu token trả 401; `NT532_PI_TOKEN` rỗng thì endpoint trả 503. Body tối đa 2 MB, tối đa 1000 sự kiện mỗi lần.
+- Không có push trong `max(5, 3 x NT532_POLL_S)` giây thì ghi "Mất kết nối với Pi".
+- Camera chưa có ở chế độ này: `/camera/stream.mjpg` và `/camera/snapshot.jpg` trả 503.
+
 ## Biến môi trường
 
 | Biến | Mặc định | Ý nghĩa |
 | --- | --- | --- |
 | `NT532_PI_URL` | `http://127.0.0.1:8080` | Địa chỉ dashboard của Pi |
+| `NT532_PI_ACCESS_CLIENT_ID` | (trống) | Client ID của service token Cloudflare Access, dùng khi Pi ở sau Access; phải đặt cùng `..._SECRET` |
+| `NT532_PI_ACCESS_CLIENT_SECRET` | (trống) | Client Secret của service token Cloudflare Access (gửi kèm mọi request tới Pi) |
 | `NT532_SECRET` | sinh ngẫu nhiên (có cảnh báo) | Khóa ký cookie phiên; đặt cố định để phiên sống qua lần khởi động lại |
 | `NT532_ADMIN_USER` | `admin` | Tên đăng nhập |
 | `NT532_ADMIN_PASSWORD_HASH` | (bắt buộc, hoặc `NT532_ADMIN_PASSWORD`) | Chuỗi scrypt do `app.hash_password` tạo |
@@ -56,6 +69,8 @@ rồi dán kết quả vào `NT532_ADMIN_PASSWORD_HASH`.
 | `NT532_HTTPS` | `false` | `true` khi chạy sau HTTPS: cookie có cờ `Secure` |
 | `NT532_DB` | `data/control.sqlite` | Đường dẫn SQLite |
 | `NT532_POLL_S` | `1.0` | Chu kỳ hỏi Pi (giây) |
+| `NT532_PI_TOKEN` | (trống: chế độ kéo) | Token Bearer Pi dùng khi tự đẩy lên `/api/pi/push`; khác rỗng thì bật chế độ push |
+| `NT532_CMD_TIMEOUT_S` | `5.0` | Hạn chờ Pi nhận và chạy một lệnh (chế độ push) |
 | `NT532_RETENTION_DAYS` | `14` | Số ngày giữ sự kiện, telemetry và các lượt |
 
 Thiếu cả hai biến mật khẩu thì dịch vụ từ chối khởi động và in hướng dẫn.

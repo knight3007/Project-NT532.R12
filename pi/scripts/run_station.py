@@ -11,12 +11,15 @@
     uv run python scripts/run_station.py --source sim --camera 0.6,-1.0,1.0 --look-at 0.6,0.4,0.2
     uv run python scripts/run_station.py --decider rules                  # phần cứng: webcam + CoAP
 
+    uv run python scripts/run_station.py --source sim --control-url https://<domain> --control-token <token>   # đẩy lên control trên homelab
+
 Thêm --mqtt để đẩy trạm lên Home Assistant (docs/home-assistant.md).
 Mở http://<địa chỉ Pi>:8080/ để xem. Ctrl+C để tắt (gửi /stop tới mọi node trước khi thoát).
 Nhật ký sự kiện ghi thêm vào runs/station/<thời điểm>.jsonl.
 """
 
 import argparse
+import os
 import time
 from datetime import datetime
 
@@ -61,6 +64,10 @@ def main() -> None:
     p.add_argument("--mqtt-port", type=int, default=None, help="ghi đè mqtt.port")
     p.add_argument("--mqtt-user", default=None, help="ghi đè mqtt.username (mật khẩu lấy từ biến môi trường NT532_MQTT_PASSWORD)")
     p.add_argument("--mqtt-station-id", default=None, help="ghi đè mqtt.station_id")
+    p.add_argument("--control-url", default=None, help="đẩy trạng thái lên server control trên homelab, vd https://nt532.example.com")
+    p.add_argument("--control-token", default=os.environ.get("NT532_PI_TOKEN"),
+                   help="token của Pi (mặc định lấy từ biến môi trường NT532_PI_TOKEN)")
+    p.add_argument("--control-period", type=float, default=1.0, help="chu kỳ đẩy, giây")
     add_sim_args(p)
     args = p.parse_args()
     sim = sim_options(args, p)
@@ -70,6 +77,8 @@ def main() -> None:
         parse_stages(args.model_stages)
     except ValueError as e:
         p.error(str(e))
+    if args.control_url and not args.control_token:
+        p.error("--control-url cần --control-token hoặc biến môi trường NT532_PI_TOKEN")
     if args.decider == "remote" and not args.decider_url:
         p.error("--decider remote cần --decider-url")
 
@@ -103,6 +112,12 @@ def main() -> None:
         print(f"MQTT: {cfg.get('host', 'localhost')}:{cfg.get('port', 1883)}")
     dash = Dashboard(st, args.host, args.port).start()
     print(f"Dashboard: {dash.url}  (nhật ký: {log.relative_to(REPO_ROOT)})")
+    pusher = None
+    if args.control_url:
+        from nt532.dashboard.push import ControlPusher
+
+        pusher = ControlPusher(dash, args.control_url, args.control_token, period=args.control_period).start()
+        print(f"Đẩy lên control: {args.control_url}")
     try:
         while True:
             time.sleep(1)
@@ -112,6 +127,8 @@ def main() -> None:
         if bridge:
             bridge.stop()
         st.stop()
+        if pusher:
+            pusher.stop()
         dash.stop()
 
 
