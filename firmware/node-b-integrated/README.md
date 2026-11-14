@@ -1,8 +1,10 @@
 ﻿# Node B integrated Thread/CoAP firmware
 
-Version `b-integrated-0.2.4`, target ESP32-H2, ESP-IDF v5.4.4. Based on 0.2.2, which the user flashed and verified for Pan/Tilt, relay LED, HOME and STOP. This version restores the independently calibrated Pan and Tilt pulse ranges. Thread Auto-Start, DHT11, relay control, and the 0.2.2 STOP/watchdog behavior remain.
+Version `b-integrated-0.2.5`, target ESP32-H2, ESP-IDF v5.4.4. Based on 0.2.2, which the user flashed and verified for Pan/Tilt, relay LED, HOME and STOP. This version restores the independently calibrated Pan and Tilt pulse ranges. Thread Auto-Start, DHT11, relay control, and the 0.2.2 STOP/watchdog behavior remain.
 
 0.2.4: fixes a heartbeat race that could cause a false STOP (clock now sampled inside the lock; a heartbeat newer than `now_ms` counts as fresh) and limits the servo ramp to one 20 µs step per 20 ms in real time.
+
+0.2.5: uses separate HOME pulses, Pan 1500 µs and Tilt 1700 µs, with the same pulse limits and PR #6 guards.
 
 ## Hardware contract
 
@@ -18,7 +20,7 @@ Version `b-integrated-0.2.4`, target ESP32-H2, ESP-IDF v5.4.4. Based on 0.2.2, w
 
 Older documents propose GPIO14 for a laser MOSFET and GPIO10/11 for SHT31. They are proposals, not evidence of the wired Node B. GPIO4 was used for laser in a previous test and is now reserved for Pan servo. **Disconnect any old laser wiring from GPIO4 before powering servos.** GPIO10 drives the relay module input, never the relay coil directly. Verify that its input reliably accepts 3.3 V HIGH and add an external pull-down to keep the relay OFF during reset, before firmware owns the pin. The repository describes the two nodes as H2 Super Mini, so DevKitM-1 connector locations must not be assumed.
 
-Pan accepts **500–2500 µs** and Tilt accepts **600–2500 µs**. HOME is 1500/1500 µs. These are calibrated pulse envelopes, not a guarantee that every position is mechanically clear in the assembled mount. Each 20 ms control step changes at most 20 µs per axis. The first HOME pulse can still move a servo abruptly from an unknown physical position; mechanically align and check clearance before enabling the separate 5 V servo supply.
+Pan accepts **500–2500 µs** and Tilt accepts **600–2500 µs**. HOME is 1500/1700 µs. These are calibrated pulse envelopes, not a guarantee that every position is mechanically clear in the assembled mount. Each 20 ms control step changes at most 20 µs per axis. The first HOME pulse can still move a servo abruptly from an unknown physical position; mechanically align and check clearance before enabling the separate 5 V servo supply.
 
 ## CoAP contract
 
@@ -30,7 +32,7 @@ Pan accepts **500–2500 µs** and Tilt accepts **600–2500 µs**. HOME is 1500
 | `POST /stop` | empty | `2.04 Changed`; disarms servo, stops PWM and drives relay LOW |
 | `GET /pantilt` | none | JSON `armed`, `pwm_active`, current and target µs, `pan_min_us:500`, `pan_max_us:2500`, `tilt_min_us:600`, `tilt_max_us:2500` |
 | `POST /pantilt` | ASCII `ARM` | `2.04` only while attached and heartbeat fresh; does not start PWM |
-| `POST /pantilt` | ASCII `HOME` | `2.04` after ARM; starts 1500/1500 µs PWM or ramps back to HOME |
+| `POST /pantilt` | ASCII `HOME` | `2.04` after ARM; starts 1500/1700 µs PWM or ramps back to HOME |
 | `POST /pantilt` | ASCII `pan_us,tilt_us`, e.g. `1600,1450` | `2.04` only after HOME; Pan must be an integer 500–2500, Tilt an integer 600–2500; task ramps asynchronously |
 | `GET /laser` | none | `available:true`, `mode:"relay_led_simulation"`, `on` is commanded GPIO10 relay state |
 | `POST /laser` | ASCII `ON` | `2.04` only when attached, heartbeat fresh, ARM and HOME completed; drives GPIO10 HIGH |
@@ -45,7 +47,7 @@ The existing USB Serial/JTAG provisioning commands `TLV:<dataset-hex>` and `STAR
 Use `D:\esp\v5.4.4\esp-idf`, `IDF_TOOLS_PATH=D:\Espressif`, and `D:\Espressif\python_env\idf5.4_py3.11_env\Scripts\python.exe` in a process-local ESP-IDF PowerShell environment. From this project directory:
 
 ```powershell
-idf.py --no-ccache -B ../../build-output/node-b-integrated-0.2.4 build
+idf.py --no-ccache -B ../../build-output/node-b-integrated-0.2.5 build
 ```
 
 Host tests cover probe, DHT11, Thread Auto-Start, control state, independent pulse boundaries, STOP GPIO handoff and relay GPIO calls. The accepted 0.2.2 binary remains at `build-output/node-b-integrated-0.2.2/nt532_node_b_integrated.bin`. The v0.2.2 investigation and test results are in `reports/nt532_node_b_stop_relay_2026-11-12.md`; the v0.2.3 range report is `reports/nt532_node_b_full_servo_range_2026-11-13.md`.
@@ -53,10 +55,10 @@ Host tests cover probe, DHT11, Thread Auto-Start, control state, independent pul
 ## Hardware acceptance after separate flash approval
 
 1. Identify Node B by PnP/MAC and verify the current COM port. Keep physical laser and pump disconnected. Confirm GPIO4/5 are servo signals only. Verify the relay input has an external pull-down, its module accepts 3.3 V HIGH and its contacts control only the simulation LED.
-2. Flash **app only** from this directory after separate approval: `idf.py --no-ccache -B ../../build-output/node-b-integrated-0.2.4 -p COM_PORT app-flash`. Do not run project-wide `flash` or erase NVS. On cold boot, check Thread Auto-Start, DHT11, GPIO10 LOW, `/laser` simulation mode and idle `/pantilt`.
+2. Flash **app only** from this directory after separate approval: `idf.py --no-ccache -B ../../build-output/node-b-integrated-0.2.5 -p COM_PORT app-flash`. Do not run project-wide `flash` or erase NVS. On cold boot, check Thread Auto-Start, DHT11, GPIO10 LOW, `/laser` simulation mode and idle `/pantilt`.
 3. With the servo 5 V supply disconnected, record GPIO4/5 using a logic analyzer or oscilloscope at a time scale that resolves short pulses. Send heartbeat, ARM, HOME, a small target, then STOP. Verify the last valid PWM pulse is followed by continuously LOW output with no HIGH spike, pull-up interval or floating level. Repeat for heartbeat timeout and Thread detach. Repeat with the 5 V servo supply only after the signal trace is acceptable; confirm Pan does not move on STOP. If movement remains with a verified LOW signal, inspect servo power, common GND and signal integrity before changing control logic.
 4. With only the relay simulation LED connected, verify `ON` is rejected before heartbeat/ARM/HOME and accepted afterward. Check GPIO10 HIGH, relay and LED ON; `OFF`, STOP, heartbeat timeout and Thread detach must bring GPIO10 LOW, relay and LED OFF. The relay-only watchdog case (PWM state forced inactive while relay is ON) is a host fault-injection test because the normal CoAP contract never permits that state. Reboot and confirm relay OFF before sending commands. Keep a physical laser emitter disconnected.
-5. Move one axis at a time from HOME in small increments while keeping the other at 1500 µs. Check clearance and servo load after each step in both directions; STOP immediately if the mount binds. Do not sweep to 500/2500 µs on the first run. The detailed acceptance sequence is in the v0.2.3 report.
+5. Move one axis at a time from HOME in small increments while keeping Pan at 1500 µs or Tilt at 1700 µs. Check clearance and servo load after each step in both directions; STOP immediately if the mount binds. Do not sweep to 500/2500 µs on the first run. The detailed acceptance sequence is in the v0.2.3 report.
 
 Example Pi commands after obtaining B's current EID (keep heartbeat running every 400–500 ms while authorized):
 
@@ -65,7 +67,7 @@ NODE_B_EID='fd..:..'
 coap-client -m post -e '' "coap://[$NODE_B_EID]/hb"
 coap-client -m post -e ARM "coap://[$NODE_B_EID]/pantilt"
 coap-client -m post -e HOME "coap://[$NODE_B_EID]/pantilt"
-coap-client -m post -e '1550,1500' "coap://[$NODE_B_EID]/pantilt"
+coap-client -m post -e '1550,1700' "coap://[$NODE_B_EID]/pantilt"
 coap-client -m post -e ON "coap://[$NODE_B_EID]/laser"
 coap-client -m get "coap://[$NODE_B_EID]/laser"
 coap-client -m post -e OFF "coap://[$NODE_B_EID]/laser"

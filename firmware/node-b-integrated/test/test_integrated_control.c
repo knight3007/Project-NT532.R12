@@ -7,11 +7,12 @@ int main(void)
 {
     control_state_t state;
     control_init(&state);
+    assert(state.target_pan_us == 1500 && state.target_tilt_us == 1700);
     assert(!state.armed && !state.pwm_active && !state.laser_on);
     char status[256];
     assert(control_pantilt_status_json(&state, status, sizeof(status)));
     assert(strcmp(status, "{\"armed\":false,\"pwm_active\":false,\"pan_us\":null,\"tilt_us\":null,"
-                          "\"target_pan_us\":1500,\"target_tilt_us\":1500,\"pan_min_us\":500,"
+                          "\"target_pan_us\":1500,\"target_tilt_us\":1700,\"pan_min_us\":500,"
                           "\"pan_max_us\":2500,\"tilt_min_us\":600,\"tilt_max_us\":2500}") == 0);
     assert(control_laser_request(&state, "ON", 2, 100) == CONTROL_FORBIDDEN);
     assert(control_pantilt(&state, "ARM", 3, 100) == CONTROL_FORBIDDEN);
@@ -28,9 +29,9 @@ int main(void)
     assert(control_pantilt(&state, "HOME", 4, 100) == CONTROL_OK);
     assert(state.home_requested && !state.pwm_active);
     assert(control_pwm_started(&state));
-    assert(state.pwm_active && state.pan_us == 1500 && state.tilt_us == 1500);
+    assert(state.pwm_active && state.pan_us == 1500 && state.tilt_us == 1700);
     assert(control_pantilt_status_json(&state, status, sizeof(status)));
-    assert(strstr(status, "\"pan_us\":1500,\"tilt_us\":1500") != NULL);
+    assert(strstr(status, "\"pan_us\":1500,\"tilt_us\":1700") != NULL);
     assert(!control_pantilt_status_json(&state, status, 8));
     assert(control_laser_request(&state, "invalid", 7, 100) == CONTROL_BAD_REQUEST);
     assert(!state.laser_on);
@@ -42,10 +43,10 @@ int main(void)
     assert(control_pantilt(&state, "1600,1400", 9, 100) == CONTROL_OK);
     int pan = 0, tilt = 0;
     assert(control_next_step(&state, 100, &pan, &tilt));
-    assert(pan == 1520 && tilt == 1480);
+    assert(pan == 1520 && tilt == 1680);
     assert(control_pantilt(&state, "HOME", 4, 120) == CONTROL_OK);
     assert(control_next_step(&state, 120, &pan, &tilt));
-    assert(pan == 1500 && tilt == 1500);
+    assert(pan == 1500 && tilt == 1700);
 
     const char *valid[] = {
         "500,1500", "2500,1500", "1500,600", "1500,2500", "500,600", "2500,2500",
@@ -69,7 +70,7 @@ int main(void)
 
     assert(control_pantilt(&state, "500,600", 7, 140) == CONTROL_OK);
     uint64_t step_now = 140;
-    for (int i = 0; i < 50; ++i) {
+    for (int i = 0; i < 55; ++i) {
         int previous_pan = state.pan_us, previous_tilt = state.tilt_us;
         step_now += CONTROL_STEP_PERIOD_MS;
         assert(control_next_step(&state, step_now, &pan, &tilt));
@@ -82,7 +83,7 @@ int main(void)
     assert(control_next_step(&state, step_now, &pan, &tilt));
     assert(pan == 520 && tilt == 620);
     assert(control_pantilt(&state, "HOME", 4, 160) == CONTROL_OK);
-    assert(state.target_pan_us == 1500 && state.target_tilt_us == 1500);
+    assert(state.target_pan_us == 1500 && state.target_tilt_us == 1700);
     step_now += CONTROL_STEP_PERIOD_MS;
     assert(control_next_step(&state, step_now, &pan, &tilt));
     assert(pan == 540 && tilt == 640);
@@ -144,14 +145,14 @@ int main(void)
     assert(control_pwm_started(&state));
     assert(control_pantilt(&state, "2500,2500", 9, 2000) == CONTROL_OK);
     assert(control_next_step(&state, 1000, &pan, &tilt)); // first step after HOME is not blocked
-    assert(pan == 1520 && tilt == 1520);
+    assert(pan == 1520 && tilt == 1720);
     assert(!control_next_step(&state, 1005, &pan, &tilt));
-    assert(state.pan_us == 1520 && state.tilt_us == 1520);
+    assert(state.pan_us == 1520 && state.tilt_us == 1720);
     assert(!control_next_step(&state, 1019, &pan, &tilt));
     assert(!control_next_step(&state, 900, &pan, &tilt)); // clock behind last step
     assert(state.pan_us == 1520);
     assert(control_next_step(&state, 1020, &pan, &tilt));
-    assert(pan == 1540 && tilt == 1540);
+    assert(pan == 1540 && tilt == 1740);
     control_stop(&state);
     control_heartbeat(&state, 2010);
     assert(control_pantilt(&state, "ARM", 3, 2010) == CONTROL_OK);
@@ -159,6 +160,6 @@ int main(void)
     assert(control_pwm_started(&state));
     assert(control_pantilt(&state, "2500,2500", 9, 2010) == CONTROL_OK);
     assert(control_next_step(&state, 1021, &pan, &tilt)); // not blocked by pre-STOP step time
-    assert(pan == 1520 && tilt == 1520);
+    assert(pan == 1520 && tilt == 1720);
     return 0;
 }

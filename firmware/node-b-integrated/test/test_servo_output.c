@@ -92,7 +92,7 @@ int main(void)
     assert(pin_level[4] == 0 && pin_level[5] == 0 && pin_level[10] == 0);
     assert(servo_output_start_home() == ESP_OK);
     assert(configured_channels == 2 && fade_api_calls == 0);
-    assert(duty[0] == 1229 && duty[1] == 1229); // 1500 us at 50 Hz / 14 bit.
+    assert(duty[0] == 1229 && duty[1] == 1393); // Pan 1500 us, Tilt 1700 us at 50 Hz / 14 bit.
     assert(servo_output_set_us(1300, 1700) == ESP_OK);
     assert(duty[0] == 1065 && duty[1] == 1393);
     assert(servo_output_set_us(500, 600) == ESP_OK);
@@ -136,7 +136,7 @@ int main(void)
     assert(control_pantilt(&control, "HOME", 4, 200) == CONTROL_OK);
     assert(servo_output_start_home() == ESP_OK);
     assert(control_pwm_started(&control) && control.pwm_active);
-    assert(duty[0] == 1229 && duty[1] == 1229);
+    assert(duty[0] == 1229 && duty[1] == 1393);
     assert(control_laser_request(&control, "ON!", 3, 200) == CONTROL_BAD_REQUEST);
     assert(relay_high_calls == 0 && pin_level[10] == 0);
     assert(control_laser_request(&control, "ON", 2, 200) == CONTROL_OK);

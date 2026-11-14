@@ -3,7 +3,7 @@ $repo = (Resolve-Path (Join-Path $PSScriptRoot '..\..\..')).Path
 $a = Join-Path $repo 'firmware\node-a-integrated'
 $b = Join-Path $repo 'firmware\node-b-integrated'
 $autostart = Join-Path $repo 'firmware\node-a-thread-autostart'
-$out = Join-Path $repo 'build-output\node-a-integrated-0.1.0-host-tests'
+$out = Join-Path $repo 'build-output\node-ab-integrated-20261114-host-tests'
 New-Item -ItemType Directory -Force -Path $out | Out-Null
 $gcc = 'C:\msys64\ucrt64\bin\gcc.exe'
 if (-not (Test-Path $gcc)) { throw "GCC not found: $gcc" }
@@ -26,7 +26,13 @@ $main = Join-Path $a 'main'
 Invoke-HostTest 'mq2_logic' @((Join-Path $a 'test\test_mq2_logic.c'), (Join-Path $main 'mq2_logic.c')) @($main)
 Invoke-HostTest 'mq2_adc' @((Join-Path $a 'test\test_mq2_adc.c'), (Join-Path $main 'mq2_adc.c')) @((Join-Path $a 'test\fake_adc'), $main)
 Invoke-HostTest 'node_a_response' @((Join-Path $a 'test\test_node_a_response.c'), (Join-Path $main 'node_a_response.c'), (Join-Path $main 'mq2_logic.c'), (Join-Path $main 'integrated_control.c')) @($main)
+Invoke-HostTest 'node_a_control' @((Join-Path $b 'test\test_integrated_control.c'), (Join-Path $main 'integrated_control.c')) @($main)
+Invoke-HostTest 'node_a_servo' @((Join-Path $b 'test\test_servo_output.c'), (Join-Path $main 'servo_output.c'), (Join-Path $main 'integrated_control.c')) @((Join-Path $b 'test\fake_driver'), $main)
+$aMain = $main
+$main = Join-Path $b 'main'
 Invoke-HostTest 'integrated_control' @((Join-Path $b 'test\test_integrated_control.c'), (Join-Path $main 'integrated_control.c')) @($main)
 Invoke-HostTest 'servo_output' @((Join-Path $b 'test\test_servo_output.c'), (Join-Path $main 'servo_output.c'), (Join-Path $main 'integrated_control.c')) @((Join-Path $b 'test\fake_driver'), $main)
 Invoke-HostTest 'probe_state' @((Join-Path $b 'test\test_probe_state.c'), (Join-Path $main 'probe_state.c')) @($main)
-Invoke-HostTest 'thread_start' @((Join-Path $autostart 'test\test_thread_start.c'), (Join-Path $main 'thread_start.c')) @((Join-Path $autostart 'test\fake_openthread'), $main)
+Invoke-HostTest 'dht11' @((Join-Path $b 'test\test_dht11.c'), (Join-Path $main 'dht11_logic.c')) @($main)
+Invoke-HostTest 'node_a_thread_start' @((Join-Path $autostart 'test\test_thread_start.c'), (Join-Path $aMain 'thread_start.c')) @((Join-Path $autostart 'test\fake_openthread'), $aMain)
+Invoke-HostTest 'node_b_thread_start' @((Join-Path $b 'test\test_thread_start.c'), (Join-Path $main 'thread_start.c'), (Join-Path $main 'dht11_logic.c')) @((Join-Path $b 'test\fake_openthread'), $main)

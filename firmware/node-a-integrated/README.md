@@ -1,8 +1,10 @@
 # Node A integrated firmware
 
-Version `a-integrated-0.1.1` for ESP32-H2 with ESP-IDF v5.4.4. This is a separate application. It reuses Node A's stored-dataset Thread Auto-Start implementation and Node B 0.2.3's Pan/Tilt, relay, STOP, watchdog, and CoAP control logic. The sensor is MQ-2 on ADC1 channel 0 instead of DHT11.
+Version `a-integrated-0.1.2` for ESP32-H2 with ESP-IDF v5.4.4. This is a separate application. It reuses Node A's stored-dataset Thread Auto-Start implementation and Node B 0.2.3's Pan/Tilt, relay, STOP, watchdog, and CoAP control logic. The sensor is MQ-2 on ADC1 channel 0 instead of DHT11.
 
 0.1.1: fixes a heartbeat race that could cause a false STOP (clock sampled inside the lock; a newer heartbeat counts as fresh), limits the servo ramp to one 20 µs step per 20 ms in real time, and adds the missing `stddef.h` include in `mq2_adc.c`.
+
+0.1.2: uses separate HOME pulses, Pan 1500 µs and Tilt 1700 µs. The PR #6 heartbeat and ramp guards remain.
 
 ## Connections and limits
 
@@ -11,7 +13,7 @@ Version `a-integrated-0.1.1` for ESP32-H2 with ESP-IDF v5.4.4. This is a separat
 | MQ-2 AO through a suitable divider | 1 | ADC1_CH0, 12-bit, 12 dB attenuation; 8 samples averaged every 1 s |
 | MQ-2 DO through a suitable level shifter | 12 | Disabled until wiring and polarity are measured |
 | Pan servo signal | 4 | 50 Hz, 500–2500 µs, HOME 1500 µs |
-| Tilt servo signal | 5 | 50 Hz, 600–2500 µs, HOME 1500 µs |
+| Tilt servo signal | 5 | 50 Hz, 600–2500 µs, HOME 1700 µs |
 | Active-HIGH relay input | 10 | LOW at boot and on STOP, heartbeat timeout, or Thread detach; LED simulation only |
 
 Use a separate 5 V servo supply with common ground. Power the MQ-2 heater from its specified supply, never from a GPIO. **Measure AO and DO voltages after any divider or level shifter before connecting them to the ESP32-H2.** The chip-level GPIO1 ADC capability is confirmed by ESP-IDF; the Super Mini board pin labeling and actual harness still require inspection. GPIO12 was also allocated to a pump in an older plan, so DO stays disabled. Servo travel proven on the B assembly must be checked separately on A.
@@ -34,6 +36,6 @@ Keep heartbeat at 400–500 ms while outputs are authorized. Boot and Thread det
 
 ## Build and checks
 
-From the repository root, run `powershell -ExecutionPolicy Bypass -File firmware/node-a-integrated/test/run_host_tests.ps1`. After exporting ESP-IDF v5.4.4, run `idf.py -B ../../build-output/node-a-integrated-0.1.1 build` from this directory. The CoAP script in [test/node_a_coap_acceptance.sh](test/node_a_coap_acceptance.sh) is for the Raspberry Pi after physical checks; it was created but not run here. It requires an explicit `--allow-outputs` and either `--allow-extremes` or `--watchdog-only`. It always attempts OFF and STOP on exit.
+From the repository root, run `powershell -ExecutionPolicy Bypass -File firmware/node-a-integrated/test/run_host_tests.ps1`. After exporting ESP-IDF v5.4.4, run `idf.py -B ../../build-output/node-a-integrated-0.1.2 build` from this directory. The CoAP script in [test/node_a_coap_acceptance.sh](test/node_a_coap_acceptance.sh) is for the Raspberry Pi after physical checks; it was created but not run here. It requires explicit `--allow-outputs`, uses only small 40 µs moves, and always attempts OFF and STOP on exit.
 
 Use app-only flashing at offset `0x10000` after measuring hardware; the partition-table binary matches the accepted Node A Auto-Start partition table. Do not erase NVS, or flash the generated bootloader or partition table during this update. The firmware does not contain a hardcoded Thread dataset or Network Key and does not form a new Thread network if NVS lacks an active dataset. `START` and `TLV:` provisioning remain available on USB serial when deliberately used.
