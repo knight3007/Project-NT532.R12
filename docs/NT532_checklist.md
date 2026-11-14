@@ -127,6 +127,19 @@ Nguồn ngoài đã kiểm tra: [Samsung S20 camera](https://www.samsung.com/vn/
 - [ ] Đo tỷ lệ nhận diện, độ trễ camera RTMP/RTSP (`stream_latency.py`), độ trễ tổng và sai số laser theo từng `trial_id` và môi trường; không dùng độ trễ quan sát qua RealVNC thay số đo thực.
 - [ ] **Checkpoint 5:** demo ổn định với ít nhất hai bố trí sa bàn, camera độc lập và đứng yên trong từng lượt.
 
+### Mốc 5A: Profile trạm `vision-aim-only` (chỉ ngắm, không bơm) — cập nhật 2026-11-14
+
+Chi tiết và lệnh chạy: `docs/nt532-node-ab-final-and-aim-hold-2026-11-14.md`, mục *Station profile*.
+
+- [x] **Phần mềm trạm (node giả):** `run_station.py --profile vision-aim-only`; trình tự CHECK_CAMERA → CONNECT_NODES (/info s1=A, s2=B) → HEARTBEAT → ARM → HOME 1500/1700 → CALIBRATION/WAIT_OK từng node → READY; camera → Dynamic Mapping `tag_2_table` → `POST /pantilt`; chốt STOP; không bơm. **STATION SOFTWARE E2E PASS** (24 test + demo node giả), **chưa chạy trên phần cứng**.
+- [ ] Điền `calibration/manual_aim_measured.yaml` bằng số đo thật cho cả A và B (thiếu → `CALIBRATION_REQUIRED`, không chạm phần cứng).
+- [ ] Có `calibration/camera.yaml` đúng stream 1280×720; một lô 15 khung Dynamic Mapping PASS, thấy tag 21/22.
+- [ ] Thread: `/info` của A/B đúng phiên bản; địa chỉ qua SRP hoặc `network.nodes`.
+- [ ] Kiểm tra dây relay/đèn ngắm GPIO10, cực tính, hướng tia; rồi chạy WAIT_OK (`OK s1`, `OK s2`) và xác nhận đèn tắt sau OK.
+- [ ] STOP (console và `POST /api/stop`), mất heartbeat, Thread detach: xác nhận PWM/relay tắt trên node thật.
+- [ ] Ít nhất 5 điểm `VERIFY` đo bằng camera cho mỗi node; không có vết thì ghi `NOT MEASURABLE`.
+- [ ] **PHYSICAL HARDWARE E2E PENDING** đến khi các mục trên đạt.
+
 ## Quy ước giữ nguyên
 
 - DevKitM-1: board ESP32-H2 thứ ba, chạy RCP qua USB với Pi; Pi chạy OTBR làm Thread Border Router.

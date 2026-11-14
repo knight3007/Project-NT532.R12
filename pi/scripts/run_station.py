@@ -61,8 +61,27 @@ def main() -> None:
     p.add_argument("--mqtt-port", type=int, default=None, help="ghi đè mqtt.port")
     p.add_argument("--mqtt-user", default=None, help="ghi đè mqtt.username (mật khẩu lấy từ biến môi trường NT532_MQTT_PASSWORD)")
     p.add_argument("--mqtt-station-id", default=None, help="ghi đè mqtt.station_id")
+    p.add_argument("--profile", choices=["station", "vision-aim-only"], default="station",
+                   help="vision-aim-only: camera thật + node A/B integrated, chỉ ngắm, KHÔNG bơm, "
+                        "không selfcal; xem docs/nt532-node-ab-final-and-aim-hold-2026-11-14.md")
+    p.add_argument("--aim-calibration", default=str(REPO_ROOT / "calibration" / "manual_aim_measured.yaml"),
+                   help="vision-aim-only: hiệu chuẩn đo riêng A/B (thiếu -> CALIBRATION_REQUIRED)")
+    p.add_argument("--aim-nodes", default="s1,s2", help="vision-aim-only: node chọn, vd s1,s2 hoặc s1")
+    p.add_argument("--ok-timeout", type=float, default=120.0,
+                   help="vision-aim-only: giây chờ 'OK <node>' ở bước CALIBRATION (hết hạn -> OFF/STOP)")
+    p.add_argument("--verify-light-s", type=float, default=3.0,
+                   help="vision-aim-only: giây bật đèn ngắm khi VERIFY, tối đa 10")
     add_sim_args(p)
     args = p.parse_args()
+    if args.profile == "vision-aim-only":
+        from nt532.aim_only import is_live_source, run_profile
+
+        if not is_live_source(args.source):
+            p.error("--profile vision-aim-only cần --source là camera thật (số webcam hoặc URL stream)")
+        if (args.decider != "rules" or args.mqtt or args.link != "mem" or args.detector != "oracle"
+                or args.camera or args.look_at or args.layout):
+            p.error("--profile vision-aim-only không nhận --decider/--mqtt/--link/--detector/tùy chọn sa bàn")
+        raise SystemExit(run_profile(args))
     sim = sim_options(args, p)
     if args.source != "sim" and (args.camera or args.look_at or args.layout):
         p.error("--camera, --look-at và --layout chỉ dùng với --source sim")

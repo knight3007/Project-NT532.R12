@@ -123,7 +123,7 @@ esp_err_t servo_output_start_home(void)
         else s_tilt_configured = true;
     }
     s_started = true;
-    error = servo_output_set_us(CONTROL_HOME_US, CONTROL_HOME_US);
+    error = servo_output_set_us(CONTROL_HOME_PAN_US, CONTROL_HOME_TILT_US);
     if (error != ESP_OK) servo_output_stop();
     return error;
 }
