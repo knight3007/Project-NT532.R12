@@ -18,7 +18,9 @@ from nt532.vision.calibration import load_intrinsics
 from nt532.vision.camera import open_camera, read_frames
 from nt532.vision.dynamic_mapping import estimate_reference_map
 from nt532.vision.system import Vision
+from nt532.vision.table_frame import estimate_table_frame
 from nt532.vision.tags import _square, detect_tags
+from nt532.vision.types import Target
 
 
 def _pair(value: str) -> tuple[float, float]:
@@ -80,20 +82,29 @@ def _diagnose(observations, intrinsics, size):
             "rejected_tags": rejected, "per_tag_quality": {}}
 
 
-def _debug_image(frame: np.ndarray, vision: Vision, pixel, targets, status: str) -> np.ndarray:
+def _debug_image(frame: np.ndarray, pixel, targets, result: dict, camera) -> np.ndarray:
     image = cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR) if frame.ndim == 2 else frame.copy()
+    status = result["status"]
     cv2.putText(image, status, (16, 32), cv2.FONT_HERSHEY_SIMPLEX, 0.9,
                 (0, 180, 0) if status == "PASS" else (0, 0, 255), 2)
-    if vision.reference_map is None:
+    cv2.putText(image, result["coordinate_frame"], (16, 60), cv2.FONT_HERSHEY_SIMPLEX,
+                0.6, (0, 180, 0) if status == "PASS" else (0, 0, 255), 2)
+    if status != "PASS":
         return image
     from nt532.vision.localize import project
 
-    for tag_id, position in vision.reference_map.references.items():
-        u, v = project(position, vision.camera)
+    for tag_id, xyz in result["references"].items():
+        position = np.asarray(xyz)
+        u, v = project(position, camera)
         cv2.drawMarker(image, (round(u), round(v)), (255, 150, 0), cv2.MARKER_CROSS, 20, 2)
         cv2.putText(image, f"ID {tag_id}: {position[0]:.3f},{position[1]:.3f}",
                     (round(u) + 8, round(v) - 8), cv2.FONT_HERSHEY_SIMPLEX, 0.45,
                     (255, 150, 0), 1)
+    for name, xyz in result["nodes"].items():
+        u, v = project(np.asarray(xyz), camera)
+        cv2.putText(image, f"{name}: {xyz[0]:.3f},{xyz[1]:.3f},{xyz[2]:.3f}",
+                    (round(u) + 8, round(v) - 8), cv2.FONT_HERSHEY_SIMPLEX, 0.45,
+                    (0, 120, 200), 1)
     if pixel is not None:
         cv2.drawMarker(image, tuple(map(round, pixel)), (0, 255, 255), cv2.MARKER_CROSS, 24, 2)
     for target in targets:
@@ -102,6 +113,9 @@ def _debug_image(frame: np.ndarray, vision: Vision, pixel, targets, status: str)
                       (round(d.u + d.w / 2), round(d.v + d.h / 2)), (0, 0, 255), 2)
         cv2.putText(image, f"{target.position[0]:.3f},{target.position[1]:.3f},0",
                     (round(d.u), round(d.v)), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 0, 255), 1)
+        anchor_v = d.v if result["target_anchor"] == "center" else d.v + d.h / 2
+        cv2.drawMarker(image, (round(d.u), round(anchor_v)), (255, 0, 255),
+                       cv2.MARKER_CROSS, 14, 2)
     return image
 
 
@@ -118,13 +132,19 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--yolo", action="store_true", help="optional YOLO fire detections")
     parser.add_argument("--weights", type=Path, help="YOLO weights; default site vision.weights")
     parser.add_argument("--device", help="YOLO device, e.g. cpu")
+    parser.add_argument("--world-origin", type=int, choices=(2, 22), default=2,
+                        help="output frame: legacy solver ID 2 or tabletop ID 22")
+    parser.add_argument("--target-anchor", choices=("bottom_center", "center"),
+                        help="YOLO table contact pixel; default center for ID 22, legacy otherwise")
     parser.add_argument("--json", type=Path, help="write JSON result")
     parser.add_argument("--debug", type=Path, help="write annotated image")
     args = parser.parse_args(argv)
     if args.frames < 1:
         parser.error("--frames must be positive")
     site = load_site(args.site)
-    site["vision"] = {**site["vision"], "reference_mode": "auto"}
+    site["vision"] = {**site["vision"], "reference_mode": "auto",
+                      "tabletop_anchor": args.target_anchor or (
+                          "center" if args.world_origin == 22 else "bottom_center")}
     intrinsics_path = args.intrinsics or REPO_ROOT / site["camera"]["intrinsics"]
     intrinsics = load_intrinsics(intrinsics_path)
     detector = None
@@ -158,21 +178,43 @@ def main(argv: list[str] | None = None) -> int:
         frame = images[-1]
     if any(image.shape[1::-1] != intrinsics.size for image in images):
         raise SystemExit(f"image size differs from calibration {intrinsics.size}")
+    frame_image = frame
     observations = [detect_tags(image) for image in images]
     size = site["tags"]["reference"]["size"]
-    result = {"status": "FAIL", "mode": "auto", "anchor_id": 2, "unit": "m",
+    result = {"status": "FAIL", "mode": "auto", "anchor_id": 2,
+              "operational_origin_id": args.world_origin,
+              "coordinate_frame": f"tag_{args.world_origin}_table",
+              "target_anchor": site["vision"]["tabletop_anchor"], "unit": "m",
               "diagnostics": _diagnose(observations, intrinsics, size)}
     targets = []
+    display_camera = None
+    origin_blocked = False
     try:
         state = vision.commission_corners(observations)
         mapping = vision.reference_map
+        table_frame = None
+        if args.world_origin == 22:
+            try:
+                table_frame = estimate_table_frame(observations, intrinsics, site, size,
+                                                   state.camera)
+            except ValueError:
+                origin_blocked = True
+                raise
+        convert = table_frame.point if table_frame is not None else np.asarray
+        display_camera = (table_frame.camera(state.camera) if table_frame is not None
+                          else state.camera)
         result["diagnostics"]["used_tags"] = sorted(mapping.references)
         result["diagnostics"]["per_tag_quality"] = _quality(mapping.tag_quality)
-        result["references"] = {str(i): _xyz(p) for i, p in sorted(mapping.references.items())}
+        result["references"] = {str(i): _xyz(convert(p))
+                                for i, p in sorted(mapping.references.items())}
         result["missing_references"] = sorted(set(range(4)) - set(mapping.references))
-        result["camera"] = {"position": _xyz(state.camera.position),
-                            "R": state.camera.R.tolist(), "t": _xyz(state.camera.t)}
-        result["nodes"] = {name: _xyz(pose.position) for name, pose in state.nodes.items()}
+        result["camera"] = {"position": _xyz(display_camera.position),
+                            "R": display_camera.R.tolist(), "t": _xyz(display_camera.t)}
+        result["nodes"] = {name: _xyz(convert(pose.position))
+                           for name, pose in state.nodes.items()}
+        if table_frame is not None and "s2" in result["nodes"]:
+            # The tabletop origin deliberately discards PnP height noise.
+            result["nodes"]["s2"] = [0.0, 0.0, 0.0]
         result["quality"] = {"anchor_reprojection_px": round(mapping.anchor_reprojection_px, 3),
                              "joint_reprojection_px": round(mapping.reprojection_px, 3),
                              "metric_error_m": round(mapping.metric_error_m, 5),
@@ -187,21 +229,31 @@ def main(argv: list[str] | None = None) -> int:
             point = vision.localize_table(args.pixel)
             if point is None:
                 raise ValueError("manual pixel does not reliably intersect mapped table area")
-            result["pixel"] = {"uv": list(args.pixel), "xyz": _xyz(point)}
+            result["pixel"] = {"uv": list(args.pixel), "xyz": _xyz(convert(point))}
         if args.yolo:
-            targets = vision.targets(frame)
+            targets = vision.targets(frame_image)
+            if table_frame is not None:
+                targets = [Target(t.detection, table_frame.point(t.position), t.surface)
+                           for t in targets]
             result["fire_targets"] = [
                 {"xyz": _xyz(t.position), "surface": t.surface,
                  "confidence": round(t.detection.conf, 4),
-                 "uv": [t.detection.u, t.detection.v]} for t in targets
+                 "uv": [t.detection.u, t.detection.v],
+                 "bbox_xywh": [t.detection.u, t.detection.v,
+                               t.detection.w, t.detection.h],
+                 "anchor_uv": [t.detection.u, t.detection.v if
+                               site["vision"]["tabletop_anchor"] == "center"
+                               else t.detection.v + t.detection.h / 2]} for t in targets
             ]
         result["status"] = "PASS"
     except (ValueError, RuntimeError) as exc:
+        if origin_blocked:
+            result["status"] = "BLOCKED"
         result["reason"] = str(exc)
     if args.debug is not None:
         args.debug.parent.mkdir(parents=True, exist_ok=True)
-        if not cv2.imwrite(str(args.debug), _debug_image(frame, vision, args.pixel, targets,
-                                                         result["status"])):
+        if not cv2.imwrite(str(args.debug), _debug_image(frame_image, args.pixel, targets,
+                                                         result, display_camera)):
             raise SystemExit(f"cannot write debug image {args.debug}")
     output = json.dumps(result, ensure_ascii=False, indent=2)
     print(output)
