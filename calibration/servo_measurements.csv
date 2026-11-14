@@ -1,0 +1,12 @@
+assembly,node,axis,pulse_us,measured_deg,direction,repeat,notes
+A,s1,pan,1000,135,,,visual_estimate;mechanical_angle;approach_and_repeat_not_recorded;COM19_at_report;firmware_id_unverified
+A,s1,pan,2000,45,,,visual_estimate;mechanical_angle;approach_and_repeat_not_recorded;COM19_at_report;firmware_id_unverified
+A,s1,tilt,1000,45,,,visual_estimate;mechanical_angle;approach_and_repeat_not_recorded;COM19_at_report;firmware_id_unverified
+A,s1,tilt,1500,90,,,visual_estimate;mechanical_angle;HOME;approach_and_repeat_not_recorded;COM19_at_report;firmware_id_unverified
+A,s1,tilt,2000,135,,,visual_estimate;mechanical_angle;approach_and_repeat_not_recorded;COM19_at_report;firmware_id_unverified
+B,s2,pan,500,180,,,visual_estimate;mechanical_angle;approach_and_repeat_not_recorded;COM18_at_report;firmware_id_unverified
+B,s2,pan,1000,135,,,visual_estimate;mechanical_angle;approach_and_repeat_not_recorded;COM18_at_report;firmware_id_unverified
+B,s2,pan,2000,45,,,visual_estimate;mechanical_angle;approach_and_repeat_not_recorded;COM18_at_report;firmware_id_unverified
+B,s2,pan,2500,0,,,visual_estimate;mechanical_angle;approach_and_repeat_not_recorded;COM18_at_report;firmware_id_unverified
+B,s2,tilt,1500,90,,,visual_estimate;mechanical_angle;HOME;approach_and_repeat_not_recorded;COM18_at_report;firmware_id_unverified
+B,s2,tilt,2000,135,,,visual_estimate;mechanical_angle;approach_and_repeat_not_recorded;COM18_at_report;firmware_id_unverified
