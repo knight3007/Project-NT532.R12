@@ -77,6 +77,24 @@ def _url(v):
     return v
 
 
+def _int(lo: int, hi: int):
+    def check(v):
+        if isinstance(v, bool) or not isinstance(v, int) or not lo <= v <= hi:
+            raise ValueError(f"cần số nguyên trong [{lo}, {hi}]")
+        return v
+    return check
+
+
+def _note(v):
+    if not isinstance(v, str) or not 1 <= len(v) <= 120 or any(ord(c) < 32 or ord(c) == 127 for c in v):
+        raise ValueError("ghi chú phải là chuỗi 1-120 ký tự, không có ký tự điều khiển")
+    return v
+
+
+MANUAL_REQUIRED = {"move": ("pan_us", "tilt_us"), "laser": ("on",), "mark": ("note",)}
+
+
+
 def _camera_pose(v):
     return _num(-5, 5)(v)
 
@@ -93,6 +111,9 @@ COMMANDS: dict[str, tuple[dict, tuple, bool]] = {
                  "tau": _num(0, 1), "stages": _regex(r"[a-z_,]{1,60}"), "url": _url, "timeout": _num(0.1, 30)},
                 ("kind",), False),
     "calibrate": ({"node": _choice("all", *NODES)}, (), False),
+    "manual": ({"node": _choice(*NODES), "op": _choice("status", "arm", "home", "move", "laser", "stop", "mark"),
+                "pan_us": _int(500, 2500), "tilt_us": _int(500, 2500), "on": _bool, "note": _note},
+               ("node", "op"), False),
     "fire": ({**_POS, "size": _choice("small", "large")}, (), True),
     "fire_large": (_POS, (), True),
     "lamp": (_POS, (), True),
@@ -142,6 +163,10 @@ def validate_cmd(body, sim: bool) -> dict:
                 clean[k] = check(body[k])
             except ValueError as e:
                 raise ValueError(f"tham số {k}: {e}") from None
+    if cmd == "manual":
+        need = [k for k in MANUAL_REQUIRED.get(clean["op"], ()) if k not in clean]
+        if need:
+            raise ValueError(f"op {clean['op']} cần: {', '.join(need)}")
     return clean
 
 
@@ -234,7 +259,8 @@ def create_app(cfg: config.Settings | None = None, pi_http: httpx.AsyncClient | 
             return FileResponse(f, headers={"Cache-Control": "no-cache"})
         return handler
 
-    for route, name in (("/history", "history.html"), ("/runs", "runs.html")):  # /decider do hub.py phục vụ
+    # /decider do hub.py phục vụ
+    for route, name in (("/history", "history.html"), ("/runs", "runs.html"), ("/manual", "manual.html")):
         app.add_api_route(route, page(name), methods=["GET"], include_in_schema=False)
 
     @app.get("/login", include_in_schema=False)
@@ -313,6 +339,8 @@ def create_app(cfg: config.Settings | None = None, pi_http: httpx.AsyncClient | 
             return JSONResponse({"ok": False, "error": str(e)}, 400)
         params = {k: v for k, v in body.items() if k != "cmd"}
         status, reply = await p.send_cmd(body)
+        if body["cmd"] == "manual" and body["op"] == "status":
+            return JSONResponse(reply, status)  # trang hỏi ~1 lần/giây: không ghi sự kiện
         ok = status == 200 and bool(reply.get("ok"))
         text = f"{user}: {body['cmd']}" + (f" {json.dumps(params, ensure_ascii=False)}" if params else "")
         if not ok:

@@ -335,6 +335,81 @@ class IntegratedLink(CoapLink):
         if not resp.code.is_successful():
             raise LinkError(f"POST /stop tới {node} trả {resp.code}")
 
+    # --- điều khiển tay (trang "Điều khiển tay" của dashboard) --------------------------------------
+
+    def _ok(self, resp, what: str) -> None:
+        if not resp.code.is_successful():
+            raise LinkError(f"{what} trả {resp.code}")
+
+    def _laser_state(self, node: str) -> bool:
+        resp = self._call(node, GET, "laser")
+        self._ok(resp, f"GET /laser từ {node}")
+        try:
+            return bool(json.loads(resp.payload).get("on"))
+        except (ValueError, AttributeError) as e:
+            raise LinkError(f"/laser của {node} sai dạng: {e}") from None
+
+    def manual(self, node: str, op: str, pan_us: int | None = None, tilt_us: int | None = None,
+               on: bool | None = None) -> dict:
+        """Điều khiển tay một node: status|mark|arm|home|stop|laser|move. Không bao giờ ném lỗi."""
+        try:
+            if op in ("status", "mark"):
+                pass
+            elif op == "arm":
+                self._ok(self._call(node, POST, "pantilt", b"ARM"), f"ARM {node}")
+            elif op == "home":
+                self._ok(self._call(node, POST, "pantilt", b"HOME"), f"HOME {node}")
+            elif op == "stop":
+                self._ok(self._call(node, POST, "laser", b"OFF"), f"laser OFF {node}")
+                self._ok(self._call(node, POST, "stop"), f"POST /stop {node}")
+                self._armed[node] = self._pwm[node] = False
+            elif op == "laser":
+                if not isinstance(on, bool):
+                    return {"ok": False, "error": "laser cần on true/false"}
+                if on:
+                    self._ensure_ready(node, self._pantilt(node))
+                resp = self._call(node, POST, "laser", b"ON" if on else b"OFF")
+                if on and resp.code == FORBIDDEN:
+                    raise LinkError(f"{node} từ chối bật laser (4.03): heartbeat cũ hoặc HOME chưa xong")
+                self._ok(resp, f"laser {node}")
+            elif op == "move":
+                self._manual_move(node, pan_us, tilt_us)
+            else:
+                return {"ok": False, "error": f"op {op!r} không hợp lệ"}
+            st = self._pantilt(node)
+            return {"ok": True, "pantilt": st, "laser_on": self._laser_state(node)}
+        except LinkError as e:
+            return {"ok": False, "error": str(e)}
+        except Exception as e:  # noqa: BLE001 - lệnh tay không được làm sập luồng lệnh
+            return {"ok": False, "error": f"{type(e).__name__}: {e}"}
+
+    def _manual_move(self, node: str, pan_us, tilt_us) -> None:
+        for v in (pan_us, tilt_us):
+            if isinstance(v, bool) or not isinstance(v, int):
+                raise LinkError("pan_us và tilt_us phải là số nguyên µs")
+        st = self._pantilt(node)
+        for name, v in (("pan", pan_us), ("tilt", tilt_us)):
+            lo, hi = st.get(f"{name}_min_us"), st.get(f"{name}_max_us")
+            if lo is not None and hi is not None and not lo <= v <= hi:
+                raise LinkError(f"{name}_us {v} ngoài giới hạn node [{lo}, {hi}]")
+        self._ensure_ready(node, st)
+        self._ok(self._call(node, POST, "pantilt", f"{pan_us},{tilt_us}".encode()), f"move {node}")
+
+    def _ensure_ready(self, node: str, st: dict) -> None:
+        """Firmware chỉ cho đặt góc hay bật relay sau ARM và HOME xong."""
+        if not st.get("armed"):
+            self._ok(self._call(node, POST, "pantilt", b"ARM"), f"ARM {node}")
+            self._armed[node] = True
+        if not st.get("pwm_active"):
+            self._ok(self._call(node, POST, "pantilt", b"HOME"), f"HOME {node}")
+            end = time.monotonic() + 2.0
+            while time.monotonic() < end:
+                if self._pantilt(node).get("pwm_active"):
+                    break
+                time.sleep(POLL_S)
+            else:
+                raise LinkError(f"PWM của {node} không bật sau HOME")
+
     # --- info -----------------------------------------------------------------------------------
 
     def _get_info(self, node: str, timeout: float) -> Info:

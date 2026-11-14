@@ -200,11 +200,48 @@ class Dashboard:
                 st.events.emit("config", f"chuyển sang bộ quyết định ở máy {parsed.hostname}")
             st.set_decider(kind, body.get("run", "jev2"), float(body.get("tau", 0.8)),
                            body.get("stages", "verify"))
+        elif cmd == "manual":
+            return self._manual(body)
         elif world is None:
             return {"ok": False, "error": f"lệnh {cmd!r} chỉ có trên sa bàn ảo"}
         else:
             return self._sim(body)
         return {"ok": True}
+
+    def _manual(self, body: dict) -> dict:
+        """Điều khiển tay pan-tilt/laser từng node thật (trang /manual); chỉ khi tắt Tự động."""
+        st = self.st
+        if st.orch.enabled:
+            return {"ok": False, "error": "Tắt chế độ Tự động trước khi điều khiển tay"}
+        fn = getattr(st.link, "manual", None)
+        if fn is None:
+            return {"ok": False, "error": "Chỉ có ở link tích hợp (network.link: integrated)"}
+        node, op = body.get("node"), body.get("op")
+        if node not in getattr(st.link, "nodes", ()):
+            return {"ok": False, "error": f"node {node!r} không có trong link"}
+        note = body.get("note")
+        if op == "mark" and (not isinstance(note, str) or len(note) > 120):
+            return {"ok": False, "error": "ghi chú phải là chuỗi tối đa 120 ký tự"}
+        res = fn(node, "status" if op == "mark" else op, pan_us=body.get("pan_us"),
+                 tilt_us=body.get("tilt_us"), on=body.get("on"))
+        if op != "status":
+            pt = res.get("pantilt") or {}
+            data = {"node": node, "op": op, "ok": bool(res.get("ok")), "pan_us": body.get("pan_us"),
+                    "tilt_us": body.get("tilt_us"), "laser_on": res.get("laser_on"),
+                    "reported_pan_us": pt.get("pan_us"), "reported_tilt_us": pt.get("tilt_us"),
+                    "armed": pt.get("armed")}
+            if op == "mark":
+                data["note"] = note
+                text = f"điều khiển tay {node}: ghi điểm {note!r} tại {pt.get('pan_us')},{pt.get('tilt_us')}"
+            else:
+                what = f"{op} {body['pan_us']},{body['tilt_us']}" if op == "move" else (
+                    f"{op} {'bật' if body.get('on') else 'tắt'}" if op == "laser" else op)
+                text = f"điều khiển tay {node}: {what}"
+            if not res.get("ok"):
+                text += f" — lỗi: {res.get('error')}"
+                data["error"] = res.get("error")
+            st.events.emit("manual", text, level="info" if res.get("ok") else "warn", **data)
+        return res
 
     def _camera_cmd(self, body: dict) -> dict:
         """Lệnh camera của sa bàn ảo: preset, xê dịch ngẫu nhiên, đặt vị trí và điểm nhìn."""
