@@ -18,7 +18,7 @@ from nt532.vision.calibration import load_intrinsics
 from nt532.vision.camera import open_camera, read_frames
 from nt532.vision.dynamic_mapping import estimate_reference_map
 from nt532.vision.system import Vision
-from nt532.vision.table_frame import estimate_table_frame
+from nt532.vision.table_frame import analyze_table_frame
 from nt532.vision.tags import _square, detect_tags
 from nt532.vision.types import Target
 
@@ -119,6 +119,55 @@ def _debug_image(frame: np.ndarray, pixel, targets, result: dict, camera) -> np.
     return image
 
 
+def _origin_overlay(image: np.ndarray, corners: dict, result: dict, camera, mapping) -> np.ndarray:
+    """Explain a BLOCKED ID 22 origin on the latest frame; details stay in the JSON."""
+    from nt532.vision.localize import project
+
+    image = image.copy()
+    origin = result["diagnostics"].get("operational_origin", {})
+    cv2.putText(image, f"{origin.get('reason_code') or 'ID22 BLOCKED'}", (16, 88),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
+    if camera is not None and mapping is not None and len(mapping.references) >= 3:
+        pixels = np.array([project(p, camera) for p in mapping.references.values()], np.float32)
+        hull = cv2.convexHull(pixels).reshape(-1, 2)
+        cv2.polylines(image, [np.round(hull).astype(np.int32)], True, (255, 150, 0), 2)
+    if 22 not in corners:
+        return image
+    quad = np.asarray(corners[22], float)
+    for name, point in zip(("TL", "TR", "BR", "BL"), quad):
+        pixel = np.round(point).astype(int)
+        cv2.circle(image, tuple(pixel), 4, (0, 255, 0), -1)
+        cv2.putText(image, name, tuple(pixel + 5), cv2.FONT_HERSHEY_SIMPLEX, 0.4,
+                    (0, 255, 0), 1)
+    latest = origin.get("frames", [{}])[-1] if origin.get("frames") else {}
+    for point in latest.get("table_pose", {}).get("projected_corners_px", []):
+        cv2.drawMarker(image, tuple(np.round(point).astype(int)), (0, 0, 255),
+                       cv2.MARKER_TILTED_CROSS, 12, 2)
+    center = np.round(quad.mean(axis=0)).astype(int)
+    cv2.drawMarker(image, tuple(center), (0, 255, 255), cv2.MARKER_CROSS, 16, 2)
+    lines = []
+    if "max_edge_error_mm" in latest:
+        lines.append(f"edge {latest['max_edge_error_mm']:.1f}/{origin['thresholds']['edge_mm']:.0f}"
+                     f" mm ({latest['worst_edge']}) diag {latest['max_diagonal_error_mm']:.1f}/"
+                     f"{origin['thresholds']['diagonal_mm']:.0f} mm")
+    if "table_reprojection_px" in latest:
+        lines.append(f"table reproj max {latest['table_reprojection_px']['max']:.1f} px")
+    hull_info = origin.get("reference_hull")
+    if hull_info is not None:
+        lines.append(f"{'inside' if hull_info['inside'] else 'OUTSIDE'} reference hull "
+                     f"{hull_info['signed_distance_m'] * 100:+.1f} cm, "
+                     f"r/rmax {origin.get('image_radius_ratio', float('nan')):.2f}")
+    if "pose_disagreement_mm" in origin:
+        lines.append(f"PnP vs table {origin['pose_disagreement_mm']['xy']:.1f} mm XY, "
+                     f"PnP z {origin['pnp_pose']['position_m'][2] * 1000:+.1f} mm")
+    x = int(np.clip(center[0] - 60, 8, image.shape[1] - 420))
+    y = int(np.clip(center[1] - 80 - 18 * len(lines), 110, image.shape[0] - 18 * len(lines)))
+    for offset, text in enumerate(lines):
+        cv2.putText(image, text, (x, y + 18 * offset), cv2.FONT_HERSHEY_SIMPLEX, 0.45,
+                    (0, 0, 255), 1)
+    return image
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     source = parser.add_mutually_exclusive_group(required=True)
@@ -188,18 +237,21 @@ def main(argv: list[str] | None = None) -> int:
               "diagnostics": _diagnose(observations, intrinsics, size)}
     targets = []
     display_camera = None
+    solver_camera = None
     origin_blocked = False
     try:
         state = vision.commission_corners(observations)
         mapping = vision.reference_map
         table_frame = None
         if args.world_origin == 22:
-            try:
-                table_frame = estimate_table_frame(observations, intrinsics, site, size,
-                                                   state.camera)
-            except ValueError:
+            solver_camera = state.camera
+            table_frame, origin_diagnostics = analyze_table_frame(
+                observations, intrinsics, site, size, state.camera, mapping.references)
+            result["diagnostics"]["operational_origin"] = origin_diagnostics
+            if table_frame is None:
                 origin_blocked = True
-                raise
+                result["reason_code"] = origin_diagnostics["reason_code"]
+                raise ValueError(origin_diagnostics["reason"])
         convert = table_frame.point if table_frame is not None else np.asarray
         display_camera = (table_frame.camera(state.camera) if table_frame is not None
                           else state.camera)
@@ -252,8 +304,11 @@ def main(argv: list[str] | None = None) -> int:
         result["reason"] = str(exc)
     if args.debug is not None:
         args.debug.parent.mkdir(parents=True, exist_ok=True)
-        if not cv2.imwrite(str(args.debug), _debug_image(frame_image, args.pixel, targets,
-                                                         result, display_camera)):
+        debug_image = _debug_image(frame_image, args.pixel, targets, result, display_camera)
+        if origin_blocked:
+            debug_image = _origin_overlay(debug_image, observations[-1], result,
+                                          solver_camera, vision.reference_map)
+        if not cv2.imwrite(str(args.debug), debug_image):
             raise SystemExit(f"cannot write debug image {args.debug}")
     output = json.dumps(result, ensure_ascii=False, indent=2)
     print(output)
