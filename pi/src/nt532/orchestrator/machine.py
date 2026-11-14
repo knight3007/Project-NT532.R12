@@ -569,12 +569,14 @@ class Orchestrator:
             raise Abort(f"góc ({pan:.1f}, {tilt:.1f}) ngoài giới hạn của {node}")
         if self.link.hb_age_ms(node) > HB_MAX_MS:
             raise LinkError(f"mất heartbeat của {node}")
+        # link có giới hạn tốc độ servo (IntegratedLink) thì một lệnh có thể cần lâu hơn status_timeout_s
+        wait_s = self.cfg.status_timeout_s + float(getattr(self.link, "max_aim_s", 0.0) or 0.0)
         cmd = self.link.aim(node, pan, tilt, self.acfg["aim_ttl_ms"])
-        st = self.link.wait(cmd, timeout=self.cfg.status_timeout_s)
+        st = self.link.wait(cmd, timeout=wait_s)
         if st is None:
             # gửi lại tối đa một lần (kế hoạch mục 4) với id mới
             cmd = self.link.aim(node, pan, tilt, self.acfg["aim_ttl_ms"])
-            st = self.link.wait(cmd, timeout=self.cfg.status_timeout_s)
+            st = self.link.wait(cmd, timeout=wait_s)
         if st is None:
             raise LinkError(f"{node} không trả lời lệnh ngắm")
         if st.st != "reached":
@@ -594,6 +596,17 @@ class Orchestrator:
         if spot is None:
             self.events.emit("vision", "không thấy vết laser", level="warn")
         return spot
+
+    @staticmethod
+    def _duplicate_spot(samples, pan: float, tilt: float, spot, tol_m: float = 0.01,
+                        min_cmd_deg: float = 2.0) -> tuple | None:
+        """(pan, tilt) của mẫu trước có vết cách `spot` dưới `tol_m` mà lệnh khác ít nhất `min_cmd_deg`: laser
+        không thể rơi đúng chỗ cũ khi đã quay vài độ, nên đó là servo không quay hoặc khung chụp còn cũ."""
+        p = np.asarray(spot, float)
+        for _tag, p0, t0, s0 in samples:
+            if abs(pan - p0) + abs(tilt - t0) >= min_cmd_deg and np.linalg.norm(p - np.asarray(s0, float)) < tol_m:
+                return p0, t0
+        return None
 
     def _find_spot(self, node: str, on, off):
         """Vết laser, bỏ qua vùng quanh đầu phát của mọi vòi (camera thấy đầu phát sáng đỏ khi bật).
@@ -804,6 +817,12 @@ class Orchestrator:
                 if spot is None:
                     self.events.emit("calib", f"{node}: góc {k}/{len(cmds)} không thấy vết", level="warn",
                                      node=node, stage="shot", index=k, miss_cm=None)
+                    continue
+                if dup := self._duplicate_spot(samples, pan, tilt, spot):
+                    self.events.emit("calib", f"{node}: góc {k}/{len(cmds)} ({pan:+.1f}, {tilt:+.1f}) bỏ vết "
+                                     f"({spot[0]:.3f}, {spot[1]:.3f}): trùng vết của góc ({dup[0]:+.1f}, "
+                                     f"{dup[1]:+.1f}) dù lệnh khác (servo không quay hoặc khung cũ)",
+                                     level="warn", node=node, stage="shot", index=k, miss_cm=None)
                     continue
                 samples.append((tag, pan, tilt, spot))
                 pred = selfcal.predict_spot(self.cal(node), tag, pan, tilt, selfcal.surfaces_of(self.site), 0.1)

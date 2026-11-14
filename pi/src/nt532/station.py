@@ -348,7 +348,8 @@ def _make_link(net: dict, nodes: dict[str, str], actuator: dict | None = None):
     if kind == "integrated":
         return IntegratedLink(nodes, bind, transports=transports,
                               status_poll_s=float(net.get("status_poll_s") or 1.0),
-                              pulse_maps=_pulse_maps(actuator, nodes))
+                              pulse_maps=_pulse_maps(actuator, nodes),
+                              servo_speed_us_s=(actuator or {}).get("servo_speed_us_s"))
     raise ValueError(f"network.link phải là coap hoặc integrated, nhận {kind!r}")
 
 

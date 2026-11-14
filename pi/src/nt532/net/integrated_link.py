@@ -34,6 +34,9 @@ from .protocol import Aim, Alert, Fire, Info, Status, Stop, Telemetry
 
 POLL_S = 0.05  # chu kỳ poll GET /pantilt khi chờ tới đích
 PWM_WAIT_S = 1.0  # chờ PWM bật sau HOME
+RAMP_US, RAMP_MS = 20, 20  # firmware: servo đi tối đa 20 µs mỗi 20 ms (CONTROL ramp)
+RAMP_MARGIN_S = 0.5  # dư cho độ trễ Thread khi poll /pantilt
+STEP_S = 0.1  # khoảng giữa hai đích trung gian khi giới hạn tốc độ phía Pi
 HB_TIMEOUT_MS = 1500  # CONTROL_HB_TIMEOUT_MS của firmware
 ERR_BY_CODE = {FORBIDDEN: "forbidden", BAD_REQUEST: "bad_request"}
 
@@ -50,10 +53,14 @@ class IntegratedLink(CoapLink):
 
     def __init__(self, nodes: dict[str, str], bind: tuple[str, int] = ("::", 5683), timeout_s: float = 2.0,
                  transports: list[str] | None = None, pulse_map: PulseMap | None = None,
-                 status_poll_s: float | None = None, pulse_maps: dict[str, PulseMap] | None = None) -> None:
+                 status_poll_s: float | None = None, pulse_maps: dict[str, PulseMap] | None = None,
+                 servo_speed_us_s: float | None = None) -> None:
         super().__init__(nodes, bind, timeout_s, transports)
         self.map = pulse_map or PulseMap()  # mặc định cho node không có bảng riêng
         self.maps = dict(pulse_maps or {})  # bảng riêng từng node (chiều quay, home khác nhau giữa các cụm)
+        # Giới hạn tốc độ phía Pi (µs/giây), chậm hơn ramp của firmware: gửi đích theo từng bước nhỏ để servo
+        # đi êm, laser không giật, dòng không vọt làm sụt nguồn node. None: gửi thẳng đích như cũ.
+        self.servo_speed_us_s = servo_speed_us_s if servo_speed_us_s and servo_speed_us_s > 0 else None
         self.status_poll_s = status_poll_s  # None/0: không poll /status
         self._poll_halt = threading.Event()
         self._poll_thread: threading.Thread | None = None
@@ -81,14 +88,30 @@ class IntegratedLink(CoapLink):
         super().close()
 
     def _poll_loop(self) -> None:
+        """Mỗi node một luồng poll riêng (khởi trong lần đầu), để node mất liên lạc (mỗi GET chờ hết timeout)
+        không làm trễ telemetry của node kia."""
+        threads = [threading.Thread(target=self._poll_node, args=(n,), daemon=True, name=f"status-poll-{n}")
+                   for n in self.nodes]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+    def _poll_node(self, node: str) -> None:
         while not self._poll_halt.wait(self.status_poll_s):
-            for node in self.nodes:
-                if self._poll_halt.is_set():
-                    return
-                try:
-                    self.poll_once(node)
-                except Exception:  # noqa: BLE001, S110 - một node lỗi không được dừng vòng poll
-                    pass
+            try:
+                self.poll_once(node)
+            except Exception:  # noqa: BLE001, S110 - một lần lỗi không được dừng vòng poll
+                pass
+
+    @property
+    def max_aim_s(self) -> float:
+        """Thời gian dài nhất một lệnh ngắm có thể cần (chạy hết dải 2000 µs theo tốc độ chậm nhất), để bên gọi
+        chờ `wait` đủ lâu khi có giới hạn tốc độ phía Pi."""
+        speed = RAMP_US / (RAMP_MS / 1000)
+        if self.servo_speed_us_s:
+            speed = min(speed, self.servo_speed_us_s)
+        return 2000 / speed + RAMP_MARGIN_S
 
     def poll_once(self, node: str) -> None:
         """`GET /status` một node rồi phát telemetry/cảnh báo. Không tới được node: bỏ qua (không on_rx, nên
@@ -205,16 +228,59 @@ class IntegratedLink(CoapLink):
                 self._pantilt(node)
             if not self._pwm[node]:
                 return self.on_status(node, Status(cmd.id, "fault", err="pwm", n=node))
-        code = self._call(node, POST, "pantilt", f"{pan_us},{tilt_us}".encode()).code
+            st = self._pantilt(node)  # sau HOME: xung hiện tại để tính quãng phải chạy
+        travel_s = self._travel_s(st, pan_us, tilt_us, self.servo_speed_us_s)
+        steps = self._waypoints(st, pan_us, tilt_us, self.servo_speed_us_s)
+        code = self._call(node, POST, "pantilt", f"{steps[0][0]},{steps[0][1]}".encode()).code
         if not code.is_successful():
             return self._reject(node, cmd.id, ERR_BY_CODE.get(code, "node_error"))
         self.on_status(node, Status(cmd.id, "accepted", n=node))
-        threading.Thread(target=self._track, args=(node, cmd, pan_us, tilt_us, gen), daemon=True,
-                         name=f"track-{node}").start()
+        threading.Thread(target=self._track, args=(node, cmd, pan_us, tilt_us, gen, travel_s, steps[1:]),
+                         daemon=True, name=f"track-{node}").start()
 
-    def _track(self, node: str, cmd: Aim, pan_us: int, tilt_us: int, gen: int) -> None:
-        """Poll GET /pantilt tới khi xung bằng đích: reached; quá ttl: fault timeout."""
-        end = time.monotonic() + cmd.ttl / 1000
+    @staticmethod
+    def _travel_s(st: dict | None, pan_us: int, tilt_us: int, speed_us_s: float | None = None) -> float:
+        """Thời gian servo cần để tới đích: theo ramp của firmware (RAMP_US mỗi RAMP_MS) hoặc giới hạn tốc độ phía
+        Pi nếu chậm hơn, cộng dư RAMP_MARGIN_S. Không biết xung hiện tại (vừa ARM) thì coi như chạy hết dải."""
+        def dist(cur, dst):
+            return abs(dst - cur) if isinstance(cur, (int, float)) else 2000
+        st = st or {}
+        us = max(dist(st.get("pan_us"), pan_us), dist(st.get("tilt_us"), tilt_us))
+        speed = RAMP_US / (RAMP_MS / 1000)
+        if speed_us_s:
+            speed = min(speed, speed_us_s)
+        return us / speed + RAMP_MARGIN_S
+
+    @staticmethod
+    def _waypoints(st: dict | None, pan_us: int, tilt_us: int, speed_us_s: float | None) -> list[tuple[int, int]]:
+        """Các đích trung gian cách nhau STEP_S theo `speed_us_s`, kết thúc ở đích; không giới hạn hoặc không biết
+        xung hiện tại thì chỉ một bước (gửi thẳng đích)."""
+        st = st or {}
+        cp, ct = st.get("pan_us"), st.get("tilt_us")
+        if not speed_us_s or not isinstance(cp, (int, float)) or not isinstance(ct, (int, float)):
+            return [(pan_us, tilt_us)]
+        n = max(1, math.ceil(max(abs(pan_us - cp), abs(tilt_us - ct)) / (speed_us_s * STEP_S)))
+        return [(round(cp + (pan_us - cp) * k / n), round(ct + (tilt_us - ct) * k / n)) for k in range(1, n + 1)]
+
+    def _track(self, node: str, cmd: Aim, pan_us: int, tilt_us: int, gen: int, travel_s: float = 0.0,
+               steps: list | None = None) -> None:
+        """Gửi các đích trung gian còn lại (nếu có giới hạn tốc độ), rồi poll GET /pantilt tới khi xung bằng đích:
+        reached; quá ttl + thời gian chạy: fault timeout. Firmware chỉ cho servo chạy RAMP_US mỗi RAMP_MS, nên quãng
+        dài (1000 µs mất 1 s) vượt ttl thuần."""
+        end = time.monotonic() + cmd.ttl / 1000 + travel_s
+        for p, t in steps or ():
+            time.sleep(STEP_S)
+            if not self._current(node, "aim", gen):
+                return self.on_status(node, Status(cmd.id, "fault", err="superseded", n=node))
+            try:
+                self._call(node, POST, "pantilt", f"{p},{t}".encode())
+            except LinkError:
+                pass  # mất một bước trung gian không sao, bước sau hoặc đích cuối vẫn tới
+        if steps:
+            try:  # bảo đảm đích cuối đã gửi dù bước cuối bị mất
+                self._call(node, POST, "pantilt", f"{pan_us},{tilt_us}".encode())
+            except LinkError:
+                pass
         while True:
             if not self._current(node, "aim", gen):
                 return self.on_status(node, Status(cmd.id, "fault", err="superseded", n=node))

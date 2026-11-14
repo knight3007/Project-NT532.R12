@@ -175,3 +175,47 @@ def test_find_spot_excludes_head():
     cv2.circle(mask, (23, 23), 15, 0, -1)
     u, v = find_spot(on, off, mask=mask)
     assert u > 140 and v > 60
+
+
+def test_aim_wait_covers_servo_ramp():
+    """Hạn chờ ngắm cộng thời gian ramp 20 µs/20 ms: 1000 µs mất 1 s, không biết xung hiện tại thì cả dải."""
+    from nt532.net.integrated_link import RAMP_MARGIN_S, IntegratedLink
+
+    t = IntegratedLink._travel_s({"pan_us": 1500, "tilt_us": 1700}, 1500, 2700 - 1000)
+    assert t == pytest.approx(RAMP_MARGIN_S)
+    assert IntegratedLink._travel_s({"pan_us": 1500, "tilt_us": 1700}, 2500, 1700) == pytest.approx(1.0 + RAMP_MARGIN_S)
+    assert IntegratedLink._travel_s({"pan_us": None, "tilt_us": None}, 1500, 1700) == pytest.approx(2.0 + RAMP_MARGIN_S)
+
+
+def test_servo_speed_limit_waypoints():
+    """Giới hạn 300 µs/s, bước 0,1 s: 600 µs chia 20 bước đều, kết thúc đúng đích; thời gian chờ theo tốc độ chậm."""
+    from nt532.net.integrated_link import RAMP_MARGIN_S, IntegratedLink
+
+    st = {"pan_us": 1500, "tilt_us": 1700}
+    w = IntegratedLink._waypoints(st, 2100, 1700, 300)
+    assert len(w) == 20 and w[-1] == (2100, 1700) and w[0] == (1530, 1700)
+    assert IntegratedLink._waypoints(st, 2100, 1700, None) == [(2100, 1700)]
+    assert IntegratedLink._waypoints({"pan_us": None}, 2100, 1700, 300) == [(2100, 1700)]
+    assert IntegratedLink._travel_s(st, 2100, 1700, 300) == pytest.approx(2.0 + RAMP_MARGIN_S)
+    assert IntegratedLink._travel_s(st, 2100, 1700, 5000) == pytest.approx(0.6 + RAMP_MARGIN_S)  # firmware chậm hơn
+
+
+def test_max_aim_s_follows_speed_limit():
+    from nt532.net.integrated_link import RAMP_MARGIN_S, IntegratedLink
+
+    il = IntegratedLink({"s1": "::1"}, ("::1", 5702), servo_speed_us_s=400)
+    assert il.max_aim_s == pytest.approx(5.0 + RAMP_MARGIN_S)
+    il.servo_speed_us_s = None
+    assert il.max_aim_s == pytest.approx(2.0 + RAMP_MARGIN_S)
+
+
+def test_calibration_drops_duplicate_spots():
+    """Vết trùng (dưới 1 cm) của một góc lệnh khác vài độ bị bỏ; góc gần như cùng lệnh thì không."""
+    import numpy as np
+
+    from nt532.orchestrator.machine import Orchestrator
+
+    samples = [(None, -29.6, -14.0, np.array([0.713, 0.477, 0.0]))]
+    assert Orchestrator._duplicate_spot(samples, -29.6, -4.0, np.array([0.713, 0.477, 0.0])) == (-29.6, -14.0)
+    assert Orchestrator._duplicate_spot(samples, -29.6, -4.0, np.array([0.80, 0.50, 0.0])) is None
+    assert Orchestrator._duplicate_spot(samples, -29.5, -14.0, np.array([0.713, 0.477, 0.0])) is None
