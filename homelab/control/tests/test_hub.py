@@ -41,6 +41,13 @@ class StubPi:
     def overview(self, with_events: bool = True) -> dict:
         return {"pi_online": True, "state": self.fake.state()}
 
+    async def send_cmd(self, body: dict) -> tuple[int, dict]:
+        try:
+            r = await self.http.post("/api/cmd", json=body)
+            return (200 if r.status_code == 200 else 502), r.json()
+        except (httpx.HTTPError, ValueError) as e:
+            return 502, {"ok": False, "error": f"Pi không phản hồi ({type(e).__name__})"}
+
     async def record_events(self, events: list[dict]) -> list[dict]:
         self.recorded.extend(events)
         return events

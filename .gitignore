@@ -39,3 +39,6 @@ kaggle/*.zip
 firmware/*/test/test_run
 firmware/sensor-h2/test/libcore.so
 /build-output/
+
+# Local evidence archive is retained locally only.
+/20261114-013713.tar.gz
