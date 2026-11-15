@@ -218,7 +218,7 @@ Chạy nền: `bash pi/deploy/setup_pi.sh --install-services` rồi `sudo system
 - [ ] Không còn chặn: chưa commissioning, node bị dời, pose quá 60 s, mất heartbeat quá 1,5 s, mục tiêu ngoài bảng, góc ngoài giới hạn.
 - [ ] **Cổng tuần 1** (nếu chưa qua): cảnh báo từ sensor thật lên Pi, `/aim` xuống, `/status` về, đủ trong `runs/station/*.jsonl`.
 - [ ] **Cổng tuần 3:** kích cảm biến thật; YOLO thấy bia; laser chỉ vào bia; tia nước chạm bảng (chưa cần vòng kín). Chốt `targeting.tolerance_m` (đang 0,03, "chốt cuối tuần 3").
-- [ ] Vòng CORRECT: `correct_max_iters` 3, `correct_done_m` 0,01 (site.yaml) hoạt động; laser tìm thấy. Không thấy: xem 10.
+- [ ] Vòng CORRECT: `correct_max_iters` 6, `correct_done_m` 0,01 (site.yaml) hoạt động; laser tìm thấy. Không thấy: xem 10.
 - [ ] **Cổng tuần 4 (MVP):** 10 lượt liên tiếp từ cảm biến tới phun nước, ít nhất 8 lượt tia nước trúng thẻ bia. Mọi lỗi tiêm vào đều kết thúc với bơm và laser tắt.
 - [ ] Tiêm lỗi (Hiếu): mất Wi-Fi/Thread, mất heartbeat, lệnh trễ, lệnh trùng, góc ngoài giới hạn, `/stop` giữa chừng. Mỗi lỗi 3 lần, bơm và laser tắt (ghi thời gian tắt).
 - [ ] Nút dừng khẩn cấp trên dashboard hoạt động.

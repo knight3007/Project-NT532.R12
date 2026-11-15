@@ -78,14 +78,28 @@ vision:
   auto_repose_camera: true
   node_moved_m: 0.015           # tag node lệch quá mức này thì coi node bị dời
   laser_min_rise: 40            # kênh đỏ phải tăng ít nhất chừng này mới nhận là vết laser
+  laser_max_blob_px: 400        # CORRECT: bỏ vết lớn hơn (quy theo 1080p); laser_min_aspect 0.3 bỏ vết dẹt; laser_hide_expand 0.15 nới hộp lửa che
   commissioning: calibration/commissioning.yaml
 
 targeting:
   sensor_match_radius_x: 0.35  # chỉ nhận bia cách sensor báo động không quá khoảng này theo X
   localize_timeout_s: 3.0
-  correct_max_iters: 3
-  correct_done_m: 0.01
+  correct_max_iters: 6         # số lần đo vết laser tối đa của CORRECT (visual servoing, xem docs/orchestrator.md)
+  correct_done_m: 0.01         # dừng sớm khi lệch (3D) dưới mức này
+  correct_step_max_deg: 20.0   # kẹp độ lớn một bước góc lệnh của CORRECT (cal sai nặng cần bước lớn)
+  correct_search_m: 0.15       # bán kính tìm vết quanh chỗ dự đoán (nới 2, 4 lần nếu không thấy; vòng đầu gấp đôi)
+  correct_probe_deg: 3.0       # bước dò đo thật khi không tính được Jacobian từ mô hình
   tolerance_m: 0.03            # đề xuất, chốt cuối tuần 3
+  # ENGAGE (một pha liên tục: phun, bám tia, bám lửa, xác nhận dập; xem docs/orchestrator.md)
+  engage_hz: 4                 # số chu kỳ bám mỗi giây
+  engage_gain: 0.7             # hệ số bước servo (delta c = gain x J^-1 e)
+  engage_track_m: 0.15         # lửa trong bán kính này quanh đích cũ mới được coi là cùng đám cháy (EMA 0,5)
+  engage_clear_s: 3.0          # không thấy lửa gần đích liên tục chừng này (và đã trúng đủ) thì coi là đã dập
+  engage_min_hit_s: 1.0        # thời gian trúng (lệch < tolerance_m) cộng dồn tối thiểu trước khi nhận "đã dập"
+  engage_max_hit_s: 15.0       # trúng quá chừng này mà lửa không yếu đi thì gọi người
+  engage_timeout_s: 30.0       # cả pha quá chừng này thì gọi người
+  engage_lost_s: 5.0           # mất vết laser (hoặc mất lửa mà chưa trúng) liên tục quá chừng này thì gọi người
+  engage_verify_s: 3.0         # chu kỳ hỏi bộ quyết định (rules, jev2) trong lúc phun
 
 actuator:
   # Giới hạn để tia nước và laser không ra khỏi bảng; đo riêng cho từng node ở tuần 2.
@@ -118,6 +132,11 @@ selfcal:
   min_samples: 6               # ít hơn thì chỉ khớp yaw0 và tilt0 (giữ pivot, hệ số servo)
   max_rms_cm: 3.0              # khớp xong còn lệch hơn mức này (rms 3D) thì bác kết quả
   pivot_prior_sigma_m: 0.15    # độ tin của pivot giả định khi mẫu đủ trải: yếu để pivot lệch 10-20 cm vẫn tìm lại được
+  # Bác kết quả khớp vô lý (lạc nghiệm khi mẫu hẹp), cả lúc khớp lẫn lúc nạp file; xem selfcal.cal_violations
+  max_pivot_shift_m: 0.15      # tâm quay lệch số mồi (pivot_offset) quá mức này thì bác
+  min_gain: 0.7                # hệ số servo pan/tilt phải nằm trong [min_gain, max_gain]
+  max_gain: 1.3
+  max_angle_offset_deg: 25.0   # |yaw0| hoặc |tilt0| quá mức này thì bác
   learn_from_correct: true     # học tiếp từ vết laser của bước CORRECT mỗi lượt phun
   refit_every: 4               # số mẫu CORRECT mới giữa hai lần khớp lại
   file: calibration/nodes.yaml # kết quả lưu ở đây, lần khởi động sau nạp lại

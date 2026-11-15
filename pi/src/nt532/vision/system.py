@@ -27,6 +27,7 @@ from .calibration import load_intrinsics
 from .dynamic_mapping import DynamicMap, estimate_reference_maps
 from .localize import localize_surfaces, project
 from .spot import find_spot as _find_spot
+from .spot import find_spot_steady as _find_spot_steady
 from .tags import detect_tags, median_corners, reprojection_error, solve_camera
 from .tags import tag_poses as _tag_poses
 from .types import Camera, Detection, Intrinsics, TagPose, Target
@@ -283,25 +284,73 @@ class Vision:
         poses = _tag_poses(corners, self.camera, self.site)
         return {self._node_of[i]: p for i, p in poses.items()}
 
+    def _radius_px(self, point, radius_m: float) -> int:
+        """Bán kính (pixel) của hình tròn bán kính `radius_m` mét quanh `point` (3D) trên ảnh: lấy khoảng cách
+        ảnh lớn nhất khi dời điểm theo từng trục, tối thiểu 20 px."""
+        u0, v0 = project(np.asarray(point, float), self.camera)
+        r = 0.0
+        for d in np.eye(3) * radius_m:
+            u, v = project(np.asarray(point, float) + d, self.camera)
+            r = max(r, float(np.hypot(u - u0, v - v0)))
+        return max(20, int(np.ceil(r)))
+
     def find_spot(self, on: np.ndarray, off: np.ndarray, exclude: list | None = None,
-                  exclude_px: int = 45) -> np.ndarray | None:
+                  exclude_px: int = 45, near=None, near_m: float = 0.15, extra_on: np.ndarray | None = None,
+                  hide_boxes: list | None = None, foot: list | None = None,
+                  foot_px: int = 60) -> np.ndarray | None:
         """Tọa độ sa bàn của vết laser trên bảng, từ một ảnh bật và một ảnh tắt laser.
 
         `exclude`: điểm 3D (hệ sa bàn) cần bỏ qua, ví dụ đầu phát laser của vòi: camera nhìn thẳng vào đầu
         phát thấy nó sáng đỏ khi bật, mạnh hơn cả vết trên nền, và chiếu xuống nền ra một tọa độ giả cố định.
-        Mỗi điểm che một vòng tròn bán kính `exclude_px` pixel quanh hình chiếu của nó."""
+        Mỗi điểm che một vòng tròn bán kính `exclude_px` pixel quanh hình chiếu của nó. `foot` (bán kính
+        `foot_px`) che tương tự chân trụ: đèn relay đỏ bật cùng laser nên chỉ có trong ảnh bật, không bị trừ.
+
+        `near`: điểm 3D mà vết được dự đoán rơi vào; có thì chọn vết gần nó nhất trong bán kính `near_m` mét
+        (chế độ cũ, không có `extra_on`: chỉ tìm trong vòng tròn đó).
+
+        Chế độ laser sáng liên tục (có `extra_on`, một khung bật thứ hai cách khung đầu ~0,1-0,15 s): chỉ giữ
+        pixel tăng ở cả hai khung (video lửa chập chờn, người đi lại bị loại), che các hộp pixel `hide_boxes`
+        (u, v, w, h; hộp lửa, nới lên trên và sang hai bên `laser_hide_expand` nhưng không nới xuống dưới vì
+        laser chạm ngay dưới chân lửa), bỏ vết lớn hơn `laser_max_blob_px` (quy theo độ phân giải 1080p) và vết
+        dẹt (`laser_min_aspect`); không có vết hợp lệ trong bán kính `near_m` thì chọn vết sáng, gọn nhất cả
+        vùng bia thay vì báo không thấy."""
         mask = np.zeros(on.shape[:2], np.uint8)
         for poly in (self.board_polygon(), self.floor_polygon()):
             if len(poly):
                 cv2.fillPoly(mask, [poly.astype(np.int32)], 255)
-        for p in exclude or ():
+        for pts, px in ((exclude, exclude_px), (foot, foot_px)):
+            for p in pts or ():
+                try:
+                    u, v = project(np.asarray(p, float), self.camera)
+                except (cv2.error, ValueError, TypeError):
+                    continue
+                if np.isfinite(u) and np.isfinite(v):
+                    cv2.circle(mask, (round(u), round(v)), int(px), 0, -1)
+        near_px = None
+        if near is not None:
             try:
-                u, v = project(np.asarray(p, float), self.camera)
+                u, v = project(np.asarray(near, float), self.camera)
+                if np.isfinite(u) and np.isfinite(v):
+                    near_px = (float(u), float(v), float(self._radius_px(near, near_m)))
             except (cv2.error, ValueError, TypeError):
-                continue
-            if np.isfinite(u) and np.isfinite(v):
-                cv2.circle(mask, (round(u), round(v)), int(exclude_px), 0, -1)
-        pixel = _find_spot(on, off, min_rise=self.cfg["laser_min_rise"], mask=mask)
+                pass  # không chiếu được thì tìm cả vùng, như khi không có `near`
+        if extra_on is None:
+            if near_px is not None:
+                region = np.zeros_like(mask)
+                cv2.circle(region, (round(near_px[0]), round(near_px[1])), int(near_px[2]), 255, -1)
+                mask = cv2.bitwise_and(mask, region)
+            pixel = _find_spot(on, off, min_rise=self.cfg["laser_min_rise"], mask=mask)
+            return None if pixel is None else self.localize(pixel)
+        ex = float(self.cfg.get("laser_hide_expand", 0.15))
+        for u, v, w, h in hide_boxes or ():
+            x0, x1 = round(u - w / 2 * (1 + 2 * ex)), round(u + w / 2 * (1 + 2 * ex))
+            y0, y1 = round(v - h / 2 - ex * h), round(v + h / 2)  # không nới xuống dưới cạnh đáy
+            cv2.rectangle(mask, (x0, y0), (x1, y1), 0, -1)
+        scale = on.shape[0] * on.shape[1] / (1920 * 1080)
+        pixel = _find_spot_steady(
+            [on, extra_on], off, min_rise=self.cfg["laser_min_rise"], mask=mask, near=near_px,
+            max_area=max(4, int(float(self.cfg.get("laser_max_blob_px", 400)) * scale)),
+            min_aspect=float(self.cfg.get("laser_min_aspect", 0.3)))
         return None if pixel is None else self.localize(pixel)
 
     # --- ghép lại ---------------------------------------------------------------------------

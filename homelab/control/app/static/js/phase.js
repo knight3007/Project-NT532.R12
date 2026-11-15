@@ -1,8 +1,8 @@
 // Dải pha: hàng đèn như bảng báo cháy. Chuỗi pha lấy từ orchestrator/machine.py (Phase).
 import { el, mmss } from "./format.js";
 
-const SEQ = ["IDLE", "LOCALIZE", "DECIDE", "AIM", "CORRECT", "FIRE", "VERIFY"];
-const COLOR = { IDLE: "ok", ALERT: "warn", LOCALIZE: "warn", DECIDE: "water", AIM: "water", CORRECT: "water", FIRE: "ember", VERIFY: "ok" };
+const SEQ = ["IDLE", "LOCALIZE", "DECIDE", "ENGAGE"];
+const COLOR = { IDLE: "ok", ALERT: "warn", LOCALIZE: "warn", DECIDE: "water", AIM: "water", CORRECT: "water", FIRE: "ember", VERIFY: "ok", ENGAGE: "ember" };
 const FAILED = {
   ALARM: "Báo động · không phun được, chờ người",
   HUMAN: "Cần người can thiệp",

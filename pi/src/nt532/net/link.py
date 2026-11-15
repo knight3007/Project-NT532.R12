@@ -20,6 +20,10 @@ class LinkError(RuntimeError):
 
 
 class NodeLink:
+    # Node có bơm không. False (IntegratedLink: firmware chỉ có laser): orchestrator "phun" bằng cách giữ laser
+    # sáng tại lệnh cuối thay vì bật bơm. Orchestrator đọc bằng getattr với mặc định True.
+    has_pump = True
+
     def __init__(self, nodes: list[str], clock: Callable[[], float] = time.monotonic) -> None:
         self.nodes = list(nodes)
         self.clock = clock

@@ -82,6 +82,7 @@ class Track:
     w: float
     h: float
     surface: str = "wall"  # "wall" (bảng đứng) hoặc "floor" (nền)
+    box: tuple | None = None  # hộp pixel (u, v, w, h) của lần phát hiện gần nhất, để che lửa khi tìm vết laser
 
 
 def aggregate(frames: list[list], frame_size: tuple[int, int], join_m: float = JOIN_M) -> list[Track]:
@@ -106,6 +107,8 @@ def aggregate(frames: list[list], frame_size: tuple[int, int], join_m: float = J
             used.add(best)
             tr = tracks[best]
             tr.conf[i] = round(float(t.detection.conf), 2)
+            d = t.detection
+            tr.box = (float(d.u), float(d.v), float(d.w), float(d.h))
             pts[best].append(t.position)
             tr.position = np.mean(pts[best], axis=0)
     return tracks

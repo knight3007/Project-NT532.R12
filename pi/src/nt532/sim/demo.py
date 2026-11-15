@@ -428,7 +428,7 @@ def compact_run(run: dict) -> dict:
     first = (run.get("decisions") or [{}])[0]
     ans = first.get("answers") or {}
     t0 = (run.get("phases") or [[None, run.get("started")]])[0][1]
-    fire = next((p[1] for p in run.get("phases") or [] if p[0] == "FIRE"), None)
+    fire = next((p[1] for p in run.get("phases") or [] if p[0] in ("FIRE", "ENGAGE")), None)
     return {
         "id": run.get("id"), "node": run.get("node"), "outcome": run.get("outcome"),
         "nozzle": run.get("nozzle"), "attempts": run.get("attempts"), "target": run.get("target"),
@@ -445,11 +445,11 @@ def compact_run(run: dict) -> dict:
 
 
 def _estop_during(station, world) -> dict:
-    """Chờ trạm tới CORRECT hoặc FIRE (laser hoặc bơm sắp chạy) rồi bấm dừng khẩn cấp."""
+    """Chờ trạm tới ENGAGE (laser hoặc bơm sắp chạy) rồi bấm dừng khẩn cấp."""
     orch = station.orch
     end = time.time() + 60
     while time.time() < end:
-        if orch.phase in (Phase.CORRECT, Phase.FIRE):
+        if orch.phase in (Phase.ENGAGE, Phase.CORRECT, Phase.FIRE):
             t = time.time()
             orch.emergency_stop("demo")
             return {"stopped_at": t}
@@ -589,7 +589,7 @@ def _scenes() -> dict[str, Scene]:
             expect_outcomes={"ignored", "alarm_only", "extinguished", "human"}),
         Scene(
             "estop", "Nút dừng khẩn cấp giữa lượt phun",
-            "Đám cháy nhỏ; khi trạm tới CORRECT hoặc FIRE thì bấm dừng khẩn cấp. Lượt kết thúc \"stopped\" "
+            "Đám cháy nhỏ; khi trạm tới ENGAGE thì bấm dừng khẩn cấp. Lượt kết thúc \"stopped\" "
             "và mọi bơm, laser tắt trong 1 s.",
             lambda w, st: w.ignite(0.32, 0.30), during=_estop_during, timeout_s=120,
             expect_outcomes={"stopped"}),

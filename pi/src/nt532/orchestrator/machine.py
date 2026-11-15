@@ -1,11 +1,12 @@
 """State machine của orchestrator (kế hoạch mục 4), nối thị giác, cảm biến, bộ quyết định và vòi.
 
-    IDLE -> ALERT -> LOCALIZE -> DECIDE -> AIM -> CORRECT -> FIRE -> VERIFY -> (xong | lặp | HUMAN)
+    IDLE -> ALERT -> LOCALIZE -> DECIDE -> ENGAGE -> (xong | HUMAN)
+    (ENGAGE gộp AIM, CORRECT, FIRE, VERIFY: phun, bám tia, bám lửa, xác nhận dập cùng lúc; pha cũ còn trong enum)
                                        \\-> ALARM (chỉ báo động) hoặc về IDLE (bỏ qua)
     lỗi ở bất kỳ bước nào -> FAULT: gửi /stop, ghi nguyên nhân
 
-Phun hai vòi (đáp án `nozzle` = BOTH): AIM và CORRECT lần lượt từng vòi (mỗi lúc một laser, vì
-`find_spot` so khung tắt/bật), FIRE bật hai bơm cùng lúc, VERIFY coi như một lần phun. Vòi nào hỏng
+Phun hai vòi (đáp án `nozzle` = BOTH): AIM và CORRECT lần lượt từng vòi (mỗi lúc một laser, để hai chấm
+không lẫn nhau), FIRE bật hai bơm (hoặc hai laser, với link không bơm) cùng lúc, VERIFY coi như một lần phun. Vòi nào hỏng
 giữa chừng (mất liên lạc, không trả lời lệnh ngắm) thì bị bỏ và lượt chạy tiếp bằng vòi còn lại.
 
 Mô hình (hoặc luật) chỉ quyết định: có cháy thật không, làm gì, bia nào, vòi nào, sau khi phun
@@ -24,7 +25,6 @@ from typing import ClassVar
 import numpy as np
 
 from ..decider.rules import HB_MAX_MS, POSE_MAX_S
-from ..decider.scenario import MAX_ATTEMPTS
 from ..decider.state_text import ACTIONS, BOTH, NOZZLES, VERIFY, nozzles_of
 from ..net.link import LinkError, NodeLink
 from ..net.protocol import Alert
@@ -54,6 +54,7 @@ class Phase(str, Enum):
     CORRECT = "CORRECT"
     FIRE = "FIRE"
     VERIFY = "VERIFY"
+    ENGAGE = "ENGAGE"  # phun, bám tia, bám lửa và xác nhận dập cùng lúc (thay AIM/CORRECT/FIRE/VERIFY)
     ALARM = "ALARM"  # cháy thật nhưng không phun được: chỉ báo động, chờ người
     HUMAN = "HUMAN"  # đã thử mà không xong: gọi người
     FAULT = "FAULT"
@@ -67,7 +68,12 @@ class Abort(Exception):
 class Settings:
     frames: int = 4  # số khung gộp cho một lần quyết định
     frame_gap_s: float = 0.25
-    laser_ms: int = 700  # thời gian bật laser mỗi lần CORRECT
+    laser_ms: int = 700  # thời gian bật laser của một lần đo đơn lẻ (quét hiệu chuẩn, scripts/aim_point.py)
+    # CORRECT giữ laser sáng liên tục (không chớp): mỗi vòng gia hạn hẹn giờ tắt thêm chừng này, nên nếu Pi chết
+    # giữa chừng laser vẫn tự tắt sau ngần ấy (cộng với heartbeat của node)
+    laser_hold_ms: int = 4000
+    spot_pair_gap_s: float = 0.12  # hai khung bật cách nhau chừng này khi đo vết (lọc theo độ ổn định)
+    laser_settle_s: float = 0.3  # sau khi servo báo reached: chờ khung camera mới có vết ổn định
     status_timeout_s: float = 3.0
     verify_wait_s: float = 3.0  # chờ sau khi phun để cảm biến và camera kịp thay đổi
     health_period_s: float = 10.0  # kiểm tra camera và pose node lúc IDLE
@@ -103,6 +109,7 @@ class Orchestrator:
     selfcal_on = False
     scfg: ClassVar[dict] = {}
     cals: ClassVar[dict] = {}
+    _lit: ClassVar[frozenset] = frozenset()  # vòi mà orchestrator đang giữ laser sáng (thay cả tập, không sửa tại chỗ)
 
     def __init__(self, site: dict, vision: Vision, frames: FrameHub, link: NodeLink, decider,
                  sensors: SensorHistory, events: EventLog, settings: Settings | None = None,
@@ -137,7 +144,10 @@ class Orchestrator:
         # tự hiệu chuẩn vòi (selfcal.py): cal hiện dùng, mẫu (pose tag, góc lệnh, vết laser) gần đây của từng vòi
         self.scfg = site.get("selfcal", {}) or {}
         self.selfcal_on = bool(self.scfg.get("enabled", True))
-        saved = selfcal.load_cals(site) if self.selfcal_on else {}
+        dropped: list[str] = []
+        saved = selfcal.load_cals(site, dropped) if self.selfcal_on else {}
+        for why in dropped:  # cal đã lưu vô lý (lần khớp xấu cũ): dùng số mồi của site thay vì tin nó
+            events.emit("calib", f"bỏ cal đã lưu, dùng số mồi: {why}", level="warn")
         self.cals: dict[str, NodeCal] = {n: saved.get(n) or NodeCal.from_site(site, n) for n in NOZZLES}
         self._cal_state = {n: "ok" if self.cals[n].fitted else "idle" for n in NOZZLES}
         self._cal_samples = {n: deque(maxlen=60) for n in NOZZLES}
@@ -414,6 +424,9 @@ class Orchestrator:
         target = by_id[tid].position
         run.target = {"id": tid, **_point_json(target, by_id[tid].surface)}
         self.overlay["target"] = run.target
+        # hộp pixel của lửa trên nền: che khi tìm vết laser (laser chạm dưới chân lửa). Bia trên bảng thì laser rơi
+        # vào giữa hộp thẻ nên không che.
+        self._fire_box = by_id[tid].box if by_id[tid].surface == "floor" else None
 
         # chặn an toàn cứng; vòi được chọn bị chặn thì thử vòi còn lại
         if nozzle == BOTH:  # hai vòi: vòi nào bị chặn thì bỏ, còn một vòi thì phun như lượt một vòi
@@ -456,104 +469,275 @@ class Orchestrator:
             self.overlay[key] = {**self.overlay.get(key, {}), node: p}
 
     def _engage(self, run, obs, tid, target, nozzles: list[str], pivots: dict) -> str:
-        """AIM/CORRECT/FIRE/VERIFY với một hoặc hai vòi. Mỗi vòi giữ điểm ngắm và độ lệch CORRECT
-        cuối cùng của riêng nó; vòi bị bỏ (lúc AIM/CORRECT hoặc ngay trước khi phun) thì cả lượt chạy
-        tiếp bằng vòi còn lại."""
+        """ENGAGE: một pha liên tục thay AIM/CORRECT/FIRE/VERIFY. Phun, bám tia (visual servoing như
+        `_aim_and_correct`), bám lửa và xác nhận lửa tắt chạy cùng lúc, `engage_hz` lần mỗi giây.
+
+        Bật laser (và bơm, nếu node có) một lần rồi giữ tới hết lượt bằng cách gia hạn hẹn giờ. Mỗi chu kỳ: tìm lại
+        lửa gần đích cũ (trong `engage_track_m`, làm mượt EMA), đo vết laser (lọc ổn định, che hộp lửa và chân
+        trụ), cập nhật Broyden và quay một bước `engage_gain` x J^-1 e. Kết thúc:
+        - đã dập: không thấy lửa gần đích liên tục `engage_clear_s` sau khi trúng tổng cộng >= `engage_min_hit_s`;
+        - gọi người: trúng quá `engage_max_hit_s` mà lửa không yếu đi, cả pha quá `engage_timeout_s`, hoặc mất
+          vết hay mất lửa liên tục quá `engage_lost_s`, hoặc bộ quyết định (hỏi mỗi `engage_verify_s`) bảo bỏ.
+        Bộ quyết định chạy ở luồng nền để không làm chậm việc gia hạn laser. "done" chỉ được nhận khi camera
+        cũng không thấy lửa trong vài khung cuối. Hai vòi: chỉ vòi đầu bám tia (hai chấm không phân biệt được),
+        vòi sau ngắm theo mô hình rồi bật cùng (hạn chế). Bơm và laser dùng chung một góc: chưa bù tia nước."""
+        from concurrent.futures import ThreadPoolExecutor
+
         nozzles = list(nozzles)
-        aim_points = {n: np.asarray(target, float).copy() for n in nozzles}
-        misses: dict[str, float | None] = dict.fromkeys(nozzles)
-        need_aim = True
-        attempt = 0
-        while attempt < MAX_ATTEMPTS:
-            attempt += 1
-            run.attempts = attempt
-            if need_aim:
-                for n in list(nozzles):  # lần lượt: mỗi lúc chỉ một laser
-                    self._check()
-                    try:
-                        aim_points[n], misses[n] = self._aim_and_correct(
-                            run, n, pivots[n], target, aim_points[n], dual=len(nozzles) > 1)
-                    except LinkError as e:
-                        if len(nozzles) < 2:  # một vòi: lỗi ném thẳng (FAULT) như trước
-                            raise
-                        self.events.emit("safety", f"vòi {n} hỏng lúc ngắm ({e}), bỏ vòi này",
-                                         level="warn")
-                        nozzles.remove(n)
-                        aim_points.pop(n)
-                        misses.pop(n)
-                        self._use(run, nozzles)
+        tc = self.tcfg
+        period = 1.0 / max(0.5, float(tc.get("engage_hz", 4)))
+        track_m = float(tc.get("engage_track_m", 0.15))
+        gain = float(tc.get("engage_gain", 0.7))
+        clear_s = float(tc.get("engage_clear_s", 3.0))
+        min_hit_s = float(tc.get("engage_min_hit_s", 1.0))
+        max_hit_s = float(tc.get("engage_max_hit_s", 15.0))
+        timeout_s = float(tc.get("engage_timeout_s", 30.0))
+        lost_s = float(tc.get("engage_lost_s", 5.0))
+        verify_s = float(tc.get("engage_verify_s", 3.0))
+        tol_cm = float(tc.get("tolerance_m", 0.03)) * 100
+        done_cm = float(tc["correct_done_m"]) * 100
+        step_max = float(tc.get("correct_step_max_deg", 20.0))
+        radius_m = float(tc.get("correct_search_m", 0.15))
+        probe = float(tc.get("correct_probe_deg", 3.0))
 
-            # FIRE: ngắm lần cuối cho mọi vòi rồi mới bật bơm, để hai bơm chạy cùng lúc
-            self._set(Phase.FIRE, f"lần {attempt}")
-            cmds = self._final_aim(nozzles, target, pivots, aim_points)
-            if len(cmds) < len(nozzles):
-                nozzles = list(cmds)
-                self._use(run, nozzles)
-            dual = len(nozzles) > 1
-            self._check()
-            with self._lock:
-                self.overlay["active"] = list(nozzles)  # từ đây các bơm chạy
-            t_spray = self.clock()
-            for n in nozzles:
+        target = np.asarray(target, float)
+        tgt = target.copy()  # đích đang bám (lửa có thể xê dịch)
+        surface = self._surface_of(target)
+        idx = np.flatnonzero(self._plane_mask(target))
+        run.attempts = 1
+        self._use(run, nozzles)
+        self._set(Phase.ENGAGE, "ngắm, bật laser" + (" và bơm" if self._has_pump() else ""), active=nozzles)
+        self._engage_state("aiming", None, 0.0, 0.0)
+
+        cmds: dict[str, int] = {}
+        for n in list(nozzles):  # ngắm theo mô hình; vòi nào hỏng thì bỏ (còn một vòi mà hỏng thì lỗi thẳng)
+            try:
+                cmds[n] = self._aim(n, *self._cmd(n, pivots[n], target))
+            except LinkError as e:
+                if len(nozzles) < 2:
+                    raise
+                self.events.emit("safety", f"vòi {n} hỏng lúc ngắm ({e}), bỏ vòi này", level="warn")
+                self._drop_laser(n)
+                nozzles.remove(n)
+        self._use(run, nozzles)
+        node = nozzles[0]  # vòi bám tia; vòi còn lại (nếu có) chỉ ngắm theo mô hình
+        for n in nozzles[1:]:
+            self._mark("aims", n, target)
+        tag = self._tag(node)
+        lim = aiming.limits(self.site, node)
+        c = np.array(self._cmd(node, pivots[node], target), float)
+        with self._lock:
+            self.overlay["active"] = list(nozzles)
+        self._sleep(self.cfg.laser_settle_s)
+        off = self.hub.fresh()  # nền: laser tắt
+        pump = self._has_pump()
+        hold_s = self.acfg["fire_ms"] / 1000
+        t0 = last_fire = last_pump = last_seen = last_t = last_log = self.clock()
+        for n in nozzles:
+            self._laser_on(n, cmds[n])
+            if pump:
                 self.link.fire(n, cmds[n], "pump", self.acfg["fire_ms"])
-            deadline = t_spray + self.acfg["fire_ms"] / 1000 + self.cfg.status_timeout_s
-            status = "ok"
-            for n in nozzles:
-                st = self.link.wait(cmds[n], ("done", "fault", "rejected"),
-                                    max(0.0, deadline - self.clock()))
-                if st is None or st.st != "done":
-                    status = "fault"
-                if st is None:
-                    self.events.emit("fault", f"{n} không báo xong phun", level="warn")
-                elif st.st != "done" and dual:
-                    self.events.emit("fault", f"{n} {st.st} khi phun ({st.err or 'không rõ'})", level="warn")
+        J = self._model_jacobian(node, pivots[node], surface, idx, c, target)
+        if J is None:
+            J = np.zeros((2, 2))
+        probes = [np.array([probe, 0.0]), np.array([0.0, probe])]
+        center, prev = tgt.copy(), None
+        hit_s, miss_cm, state, box = 0.0, None, "aiming", None
+        conf_hist: list = []
+        pool, pending, attempt, next_verify = ThreadPoolExecutor(1), None, 1, t0 + verify_s
+        outcome = None
+        try:
+            while outcome is None:
+                self._check()
+                now = self.clock()
+                if now - t0 > timeout_s:
+                    self.events.emit("engage", f"quá {timeout_s:g} s: gọi người", level="warn")
+                    outcome = "human"
+                    break
+                for n in nozzles:  # gia hạn: laser mỗi chu kỳ, bơm khi hẹn giờ còn dưới 30%
+                    self._laser_on(n, cmds[n])
+                if pump and now - last_pump > 0.7 * hold_s:
+                    for n in nozzles:
+                        self.link.fire(n, cmds[n], "pump", self.acfg["fire_ms"])
+                    last_pump = now
+                # bám lửa
+                frame = self.hub.fresh()
+                try:
+                    found = self.vision.targets(frame) if self.vision.state else []
+                except Exception as e:  # noqa: BLE001 - mất một khung không được làm hỏng pha phun
+                    self.events.emit("vision", f"bám lửa lỗi: {e}", level="warn")
+                    found = []
+                near = [t for t in found if np.linalg.norm(t.position - tgt) <= track_m]
+                if near:
+                    t = min(near, key=lambda t: np.linalg.norm(t.position - tgt))
+                    tgt = 0.5 * tgt + 0.5 * np.asarray(t.position, float)
+                    last_fire = now
+                    box = (t.detection.u, t.detection.v, t.detection.w, t.detection.h)
+                    conf_hist.append(round(float(t.detection.conf), 2))
+                else:
+                    conf_hist.append(None)
+                self._fire_box = box if surface == "floor" else None
+                # bám tia
+                spot = self._observe(node, center, radius_m * (2 if prev is None else 1), off, on=frame)
+                dt, last_t = now - last_t, now
+                if spot is None:
+                    state = "lost"
+                    miss_cm = None
+                    run.shots.append({"round": len(run.shots) + 1, "miss_cm": None, "nozzle": node,
+                                      "t": round(now - t0, 2)})
+                else:
+                    last_seen = now
+                    self._learn(node, tag, (float(c[0]), float(c[1])), spot)
+                    e = tgt - spot
+                    miss_cm = float(np.linalg.norm(e) * 100)
+                    state = "on_target" if miss_cm < tol_cm else "aiming"
+                    if state == "on_target":
+                        hit_s += dt
+                    run.shots.append({"round": len(run.shots) + 1, "miss_cm": round(miss_cm, 2),
+                                      "nozzle": node, "t": round(now - t0, 2)})
+                    self._mark("spots", node, spot)
+                    if prev is not None:  # Broyden: J khớp cặp (dc, ds) vừa đo
+                        dc, ds = c - prev[0], spot[idx] - prev[1]
+                        if float(dc @ dc) > 0.02**2:
+                            J = J + np.outer(ds - J @ dc, dc) / float(dc @ dc)
+                    prev = (c.copy(), spot[idx].copy())
+                    center = tgt.copy()
+                    center[idx] = spot[idx]
+                    if miss_cm >= done_cm:
+                        ill = self._ill(J)
+                        if ill and probes:
+                            dc = probes.pop(0)
+                        elif ill:  # không có J: theo mô hình (dời điểm ngắm đúng bằng độ lệch)
+                            dc = np.array(self._cmd(node, pivots[node], tgt + (tgt - spot) * self._plane_mask(tgt)),
+                                          float) - c
+                        else:
+                            dc = gain * np.linalg.solve(J, e[idx])
+                        n_dc = float(np.linalg.norm(dc))
+                        if n_dc > step_max:
+                            dc = dc * (step_max / n_dc)
+                        c_new = np.array([min(max(c[0] + dc[0], lim.pan[0]), lim.pan[1]),
+                                          min(max(c[1] + dc[1], lim.tilt[0]), lim.tilt[1])])
+                        if float(np.linalg.norm(c_new - c)) >= 0.02:
+                            if not ill:
+                                center[idx] = spot[idx] + J @ (c_new - c)
+                            c = c_new
+                            cmds[node] = self._aim(node, *c)
+                            self._laser_on(node, cmds[node])
+                fwd = self._forward(node, pivots[node], surface, c)
+                self._mark("aims", node, tgt if fwd is None else fwd)
+                self._mark_target(tgt)
+                clear = now - last_fire
+                self._engage_state(state, miss_cm, hit_s, clear)
+                if now - last_log >= 1.0:
+                    last_log = now
+                    self.events.emit("engage", f"{state}: lệch " + ("?" if miss_cm is None else f"{miss_cm:.1f}")
+                                     + f" cm, trúng {hit_s:.1f} s, không thấy lửa {clear:.1f} s")
+                # kết thúc
+                if clear >= clear_s and hit_s >= min_hit_s:
+                    self.events.emit("engage", "không còn thấy lửa gần đích: đã dập")
+                    outcome = "extinguished"
+                elif now - last_seen > lost_s or (clear > lost_s and hit_s < min_hit_s):
+                    why = "mất vết laser" if now - last_seen > lost_s else "mất lửa mà chưa trúng"
+                    self.events.emit("engage", f"{why} quá {lost_s:g} s: gọi người", level="warn")
+                    outcome = "human"
+                elif hit_s > max_hit_s and not self._weakening(conf_hist, period):
+                    self.events.emit("engage", f"trúng {hit_s:.0f} s mà lửa không yếu đi: gọi người",
+                                     level="warn")
+                    outcome = "human"
+                if outcome:
+                    break
+                # bộ quyết định (luồng nền)
+                if pending is not None and pending[0].done():
+                    fut, vobs, vq = pending
+                    pending = None
+                    try:
+                        dec = fut.result()
+                    except Exception as e:  # noqa: BLE001 - bộ quyết định lỗi thì bỏ qua, camera vẫn xét
+                        self.events.emit("decision", f"bộ quyết định lỗi: {e}", level="warn")
+                        dec = None
+                    if dec is not None:
+                        run.decisions.append({"stage": "verify", "attempt": attempt, **dec.to_json()})
+                        nxt = dec.get("after_verify")
+                        self.events.emit("decision", f"{dec.decider} lúc phun (lần {attempt}): {nxt}",
+                                         decision=dec.to_json(), run=run.id, obs=vobs, questions=vq)
+                        seen = [x for x in conf_hist[-3:] if x is not None]
+                        if nxt == VERIFY[0] and not seen and hit_s > 0:
+                            outcome = "extinguished"
+                        elif nxt == VERIFY[3]:
+                            outcome = "human"
+                        attempt += 1
+                        run.attempts = attempt
+                elif pending is None and now >= next_verify:
+                    next_verify = now + verify_s
+                    posts = []
+                    for n in nozzles:
+                        post = [x.temp for x in self.sensors.since(n, t0)][-3:]
+                        post = post or [x.temp for x in self.sensors.samples(n, 1)] or [0.0]
+                        posts.append([round(post[0], 1)] * (3 - len(post)) + [round(v, 1) for v in post])
+                    post = posts[0] if len(posts) == 1 else [round(float(np.mean(v)), 1) for v in zip(*posts)]
+                    tail = ([None] * 3 + conf_hist)[-3:]
+                    vobs = verify_obs(obs, tid, run.nozzle, attempt, "ok", post, tail, miss_cm, self.sensors)
+                    vq = questions_for(vobs)
+                    pending = (pool.submit(self.decider.decide, vobs, vq), vobs, vq)
+                if outcome:
+                    break
+                self._sleep(max(0.0, period - (self.clock() - now)))
+        finally:
+            pool.shutdown(wait=False)
+            self._fire_box = None
+        if outcome == "human":
+            self._set(Phase.HUMAN, f"sau {self.clock() - t0:.0f} s phun")
+        return outcome
 
-            # VERIFY: hai vòi thì coi như một lần phun (nhiệt trung bình, độ lệch lớn nhất)
-            self._set(Phase.VERIFY)
-            self._sleep(self.cfg.verify_wait_s)
-            conf = []
-            for _ in range(3):
-                found = self.vision.targets(self.hub.fresh())
-                near = [t.detection.conf for t in found
-                        if np.linalg.norm(t.position - target) <= 0.05]
-                conf.append(round(max(near), 2) if near else None)
-            posts = []
-            for n in nozzles:
-                post = [s.temp for s in self.sensors.since(n, t_spray)][-3:]
-                post = post or [s.temp for s in self.sensors.samples(n, 1)] or [0.0]
-                posts.append([round(post[0], 1)] * (3 - len(post)) + [round(v, 1) for v in post])
-            post = posts[0] if len(posts) == 1 else [round(float(np.mean(c)), 1) for c in zip(*posts)]
-            marks = [misses[n] for n in nozzles if misses[n] is not None]
-            mark_cm = max(marks) if marks else None
-            vobs = verify_obs(obs, tid, run.nozzle, attempt, status, post, conf, mark_cm, self.sensors)
-            vq = questions_for(vobs)
-            dec = self.decider.decide(vobs, vq)
-            run.decisions.append({"stage": "verify", "attempt": attempt, **dec.to_json()})
-            nxt = dec.get("after_verify")
-            self.events.emit("decision", f"{dec.decider} sau lần phun {attempt}: {nxt}",
-                             decision=dec.to_json(), run=run.id, obs=vobs, questions=vq)
-            if nxt == VERIFY[0]:
-                return "extinguished"
-            if nxt == VERIFY[3]:
-                break
-            need_aim = nxt == VERIFY[1]
-        self._set(Phase.HUMAN, f"sau {attempt} lần phun")
-        return "human"
+    def _engage_state(self, state: str, miss_cm, hit_s: float, clear_s: float) -> None:
+        """Trạng thái con của ENGAGE cho dashboard; ghi sự kiện `engage` khi đổi trạng thái."""
+        prev = self.overlay.get("engage", {}).get("state")
+        info = {"state": state, "miss_cm": None if miss_cm is None else round(miss_cm, 1),
+                "hit_s": round(hit_s, 1), "clear_s": round(clear_s, 1)}
+        with self._lock:
+            self.overlay["engage"] = info
+        if prev is not None and prev != state:
+            self.events.emit("engage", f"{prev} -> {state}")
 
-    def _final_aim(self, nozzles: list[str], target, pivots: dict, aim_points: dict) -> dict[str, int]:
-        """AIM cuối (đã bù góc tia nước) cho từng vòi, trả {vòi: id lệnh} để /fire. Hai vòi thì kiểm lại
+    def _mark_target(self, tgt) -> None:
+        """Đích đang bám (đã làm mượt) lên overlay."""
+        with self._lock:
+            self.overlay["target"] = {**self.overlay.get("target", {}), **_point_json(tgt, self._surface_of(tgt))}
+
+    @staticmethod
+    def _weakening(conf_hist: list, period: float) -> bool:
+        """Lửa yếu đi: conf trung bình (khung thấy lửa) ~3 s cuối thấp hơn 70% của ~3 s đầu."""
+        n = max(3, int(3 / max(period, 1e-3)))
+        first = [c for c in conf_hist[:n] if c is not None]
+        last = [c for c in conf_hist[-n:] if c is not None]
+        return bool(first) and (not last or float(np.mean(last)) < 0.7 * float(np.mean(first)))
+
+    def _final_aim(self, nozzles: list[str], target, pivots: dict, aim_points: dict,
+                   held: dict | None = None) -> dict[str, int]:
+        """AIM cuối cho từng vòi, trả {vòi: id lệnh} để /fire. Lệnh là lệnh CORRECT đã hội tụ của vòi đó (`held`:
+        cái đang giữ laser, nên node không phải quay thêm, laser không giật) cộng phần bù tia nước nếu vòi có
+        bơm. Vòi chưa có lệnh CORRECT (CORRECT không thấy vết) thì tính từ `aim_points`. Hai vòi thì kiểm lại
         ngay trước khi phun: vòi nào mất heartbeat, bị chặn hoặc không trả lời lệnh ngắm bị bỏ và
         phun bằng vòi còn lại; một vòi thì lỗi ném thẳng (FAULT) như trước."""
         dual = len(nozzles) > 1
+        held = held or {}
+        pump = self._has_pump()
         cmds: dict[str, int] = {}
         for n in nozzles:
             try:
                 if dual and (why := self._blocked(n, target, pivots)):
                     raise LinkError("; ".join(why))
-                # bù tia nước theo khoảng cách ngang (mặt phẳng XY) tới bia, đúng cho cả bảng lẫn nền; cộng vào
-                # tilt hình học trước khi đổi sang góc lệnh (tính cả tilt0 và hệ số servo đã học)
-                water = aiming.water_tilt(self.site, n, aiming.horizontal_distance(pivots[n], aim_points[n]))
-                cmds[n] = self._aim(n, *self._cmd(n, pivots[n], aim_points[n], water))
+                # bù tia nước theo khoảng cách ngang (mặt phẳng XY) tới bia, đúng cho cả bảng lẫn nền. Bù là góc
+                # HÌNH HỌC (độ thật của tia), còn lệnh tilt đo bằng độ lệnh: thật = tilt_gain x lệnh, nên cộng
+                # bù/tilt_gain vào lệnh. Vòi không bơm thì không bù: laser thay cho tia nước và không rơi theo
+                # quỹ đạo, bù sẽ làm chấm laser lệch khỏi bia đã CORRECT.
+                water = (aiming.water_tilt(self.site, n, aiming.horizontal_distance(pivots[n], aim_points[n]))
+                         if pump else 0.0)
+                if n in held:
+                    pan, tilt = held[n][0], held[n][1] + water / self._tilt_gain(n)
+                else:
+                    pan, tilt = self._cmd(n, pivots[n], aim_points[n], water)
+                cmds[n] = self._aim(n, pan, tilt)
             except LinkError as e:
                 if not dual:
                     raise
@@ -562,6 +746,17 @@ class Orchestrator:
         if not cmds:
             raise LinkError("không vòi nào ngắm được trước khi phun")
         return cmds
+
+    def _has_pump(self) -> bool:
+        """Link có bơm không (IntegratedLink: không, chỉ laser). Link không khai báo thì coi là có."""
+        return bool(getattr(self.link, "has_pump", True))
+
+    def _tilt_gain(self, node: str) -> float:
+        """Hệ số servo tilt (độ thật trên độ lệnh) đang dùng cho `node`; 1 khi không có pose tag (ngắm hình học thuần)."""
+        if self._tag(node) is None:
+            return 1.0
+        g = self.cal(node).tilt_gain
+        return g if abs(g) > 1e-6 else 1.0
 
     def _aim(self, node: str, pan: float, tilt: float) -> int:
         self._check()
@@ -608,53 +803,219 @@ class Orchestrator:
                 return p0, t0
         return None
 
-    def _find_spot(self, node: str, on, off):
-        """Vết laser, bỏ qua vùng quanh đầu phát của mọi vòi (camera thấy đầu phát sáng đỏ khi bật).
-        Bán kính che `selfcal.head_mask_px` (mặc định 45; 0 là tắt)."""
+    def _find_spot(self, node: str, on, off, near=None, near_m: float = 0.15, on2=None, box=None):
+        """Vết laser, bỏ qua vùng quanh đầu phát của mọi vòi (camera thấy đầu phát sáng đỏ khi bật) và chân trụ
+        (đèn relay đỏ bật cùng laser). Bán kính che đầu `selfcal.head_mask_px` (mặc định 45; 0 là tắt), che chân
+        `selfcal.foot_mask_px` (mặc định 60). `near` (điểm 3D dự đoán) và `near_m`: tìm quanh `near` (CORRECT, laser
+        sáng liên tục, xem `Vision.find_spot`). `on2`: khung bật thứ hai để lọc theo độ ổn định; `box`: hộp pixel
+        (u, v, w, h) của đám cháy, được che."""
         r = int(self.scfg.get("head_mask_px", 45))
-        heads = []
-        if r > 0:
-            for n in NOZZLES:
-                tag = self._tag(n)
-                if tag is not None:
-                    try:
-                        heads.append(self.cal(n).pivot_world(tag))
-                    except Exception as e:  # noqa: BLE001 - thiếu cal/pose thì không che, như trước
-                        self.events.emit("calib", f"không che được đầu phát {n}: {e}", level="warn")
-        if not heads:
+        rf = int(self.scfg.get("foot_mask_px", 60))
+        heads, feet = [], []
+        for n in NOZZLES:
+            tag = self._tag(n)
+            if tag is None:
+                continue
+            if rf > 0 and getattr(tag, "position", None) is not None:
+                feet.append(np.asarray(tag.position, float))
+            if r > 0:
+                try:
+                    heads.append(self.cal(n).pivot_world(tag))
+                except Exception as e:  # noqa: BLE001 - thiếu cal/pose thì không che, như trước
+                    self.events.emit("calib", f"không che được đầu phát {n}: {e}", level="warn")
+        kw = {}
+        if heads:
+            kw.update(exclude=heads, exclude_px=r)
+        if near is not None:
+            kw.update(near=near, near_m=near_m)
+        if on2 is not None:
+            kw.update(extra_on=on2)
+            if feet:
+                kw.update(foot=feet, foot_px=rf)
+            if box is not None:
+                kw.update(hide_boxes=[box])
+        if not kw:
             return self.vision.find_spot(on, off)
         try:
-            return self.vision.find_spot(on, off, exclude=heads, exclude_px=r)
-        except TypeError:  # vision giả trong test không nhận tham số che
+            return self.vision.find_spot(on, off, **kw)
+        except TypeError:  # vision giả trong test không nhận tham số che và vùng tìm
             return self.vision.find_spot(on, off)
 
+    # --- laser sáng liên tục trong CORRECT và FIRE ---------------------------------------------
+
+    def _laser_on(self, node: str, cmd: int) -> None:
+        """Bật (hoặc gia hạn) laser của `node` thêm `laser_hold_ms`. Lệnh mới thay lệnh cũ mà không qua trạng thái
+        tắt (link không được gửi OFF của lệnh cũ), nên gọi mỗi vòng CORRECT thì laser không chớp."""
+        self.link.fire(node, cmd, "laser", self.cfg.laser_hold_ms)
+        self._lit = self._lit | {node}
+
+    def _laser_off(self, node: str, cmd: int) -> None:
+        """Tắt laser mà không dừng servo (`stop` sẽ nhả servo): lệnh laser 1 ms thay hẹn giờ cũ và tắt ngay.
+        Không làm gì nếu orchestrator không giữ laser của node này."""
+        if node not in self._lit:
+            return
+        self._lit = self._lit - {node}
+        self.link.fire(node, cmd, "laser", 1)
+
+    def _drop_laser(self, node: str) -> None:
+        """Vòi bị bỏ giữa lượt: tắt laser hết sức (không có lệnh ngắm hợp lệ để dùng `_laser_off`)."""
+        if node in self._lit:
+            self._lit = self._lit - {node}
+            try:
+                self.link.stop(node)
+            except Exception as e:  # noqa: BLE001 - vòi đã hỏng; lượt kết thúc vẫn gọi link.stop()
+                self.events.emit("fault", f"không tắt được laser {node}: {e}", level="warn")
+
+    # --- CORRECT: visual servoing trong không gian lệnh ----------------------------------------
+
+    def _forward(self, node: str, pivot, surface: str, c) -> np.ndarray | None:
+        """Mô hình tiến của `node`: điểm 3D laser rơi trên mặt phẳng `surface` khi ra lệnh c = (pan, tilt), theo cal
+        đang dùng (không có pose tag thì hình học thuần: tâm quay `pivot`, hướng `_yaw`, hệ số 1)."""
+        surfaces = selfcal.surfaces_of(self.site)
+        tag = self._tag(node)
+        if tag is not None:
+            return selfcal.forward_spot(self.cal(node), tag, float(c[0]), float(c[1]), surface, surfaces)
+        return selfcal.plane_spot(pivot, selfcal.direction_of(self._yaw(node), float(c[0]), float(c[1])),
+                                  surface, surfaces)
+
+    def _model_jacobian(self, node: str, pivot, surface: str, idx, c, target, h: float = 1.0):
+        """J (2x2, mét trên độ lệnh) của vết trên mặt `surface` theo (pan, tilt), bằng sai phân trung tâm của mô
+        hình tiến quanh `c`; `idx` là hai thành phần của mặt (sàn: x, y; bảng: x, z). Tia tại `c` không chạm mặt thì
+        lấy quanh lệnh hướng vào `target` (luôn chạm). None nếu vẫn không tính được hoặc không hữu hạn."""
+        for c0 in (np.asarray(c, float), np.asarray(self._cmd(node, pivot, target), float)):
+            cols = []
+            for d in (np.array([h, 0.0]), np.array([0.0, h])):
+                p, m = self._forward(node, pivot, surface, c0 + d), self._forward(node, pivot, surface, c0 - d)
+                if p is None or m is None:
+                    break
+                cols.append((p - m)[idx] / (2 * h))
+            else:
+                J = np.column_stack(cols)
+                if np.all(np.isfinite(J)):
+                    return J
+        return None
+
+    @staticmethod
+    def _ill(J) -> bool:
+        """J suy biến hoặc điều kiện xấu: không đủ tin để đảo."""
+        return not np.all(np.isfinite(J)) or abs(np.linalg.det(J)) < 1e-9 or np.linalg.cond(J) > 1e3
+
+    def _observe(self, node: str, center, radius_m: float, off, on=None):
+        """Một khung "bật" mới, tìm vết so với khung nền `off` trong vòng quanh `center`; không thấy thì nới bán
+        kính 2 rồi 4 lần (cùng một khung). None nếu không thấy."""
+        on = self.hub.fresh() if on is None else on
+        self._sleep(getattr(self.cfg, "spot_pair_gap_s", 0.0))
+        on2 = self.hub.fresh()  # khung bật thứ hai: chỉ pixel tăng ở cả hai khung mới là vết laser
+        box = getattr(self, "_fire_box", None)
+        for k in (1, 2, 4):
+            spot = self._find_spot(node, on, off, near=center, near_m=radius_m * k, on2=on2, box=box)
+            if spot is not None:
+                return np.asarray(spot, float)
+        return None
+
     def _aim_and_correct(self, run, node, pivot, target, aim_point, dual=False):
-        """AIM rồi CORRECT bằng vết laser; trả (điểm ngắm đã bù, độ lệch đo được cuối cùng cm).
-        `dual`: lượt hai vòi, ghi tên vòi vào pha và dòng sự kiện."""
+        """AIM rồi CORRECT bằng vết laser; trả (điểm ngắm hiệu dụng, độ lệch đo được cuối cùng cm, góc lệnh
+        (pan, tilt) đang giữ laser). `dual`: lượt hai vòi, ghi tên vòi vào pha và dòng sự kiện.
+
+        CORRECT là visual servoing trong không gian lệnh. Biến điều khiển là góc lệnh c = (pan, tilt), phép đo là
+        vết laser s trên mặt của bia (sàn: x, y; bảng: x, z), sai lệch e = bia - s. Jacobian J = ds/dc (2x2, m/độ)
+        khởi tạo bằng sai phân của mô hình tiến theo cal hiện tại, rồi cập nhật Broyden sau mỗi lần đo
+        (J += ((ds - J dc) dc^T) / |dc|^2) nên học ngay hệ số servo và hướng thật của node dù cal sai nặng; bước
+        dc = J^-1 e, kẹp `correct_step_max_deg` và giới hạn góc. (Cách cũ dời điểm ngắm 3D đúng bằng độ lệch
+        đo, tức giả định mô hình góc đúng; cal sai thì chấm nhích một phần nhỏ mỗi vòng và không hội tụ.)
+
+        Laser sáng liên tục từ vòng đo đầu tới hết FIRE (không có khung bật/tắt mỗi vòng): khung nền chụp một lần
+        lúc laser tắt, mỗi vòng gia hạn laser, ngắm, chờ reached cộng `laser_settle_s`, chụp khung mới và tìm vết
+        quanh chỗ J dự đoán (lửa chập chờn làm kênh đỏ đổi giữa các khung nên không tìm cả ảnh). Hai vòi: tắt laser
+        vòi này khi xong để chấm hai vòi không lẫn nhau (hạn chế: giữa CORRECT vòi này và FIRE laser của vòi
+        này tắt); FIRE bật lại cả hai."""
+        target = np.asarray(target, float)
         self._set(Phase.AIM, node if dual else "", active=[node])
-        ang = self._cmd(node, pivot, aim_point)
-        cmd = self._aim(node, *ang)
+        c = np.array(self._cmd(node, pivot, aim_point), float)
+        cmd = self._aim(node, *c)
         self._set(Phase.CORRECT, node if dual else "", active=[node])
-        miss_cm = None
-        for i in range(self.tcfg["correct_max_iters"]):
-            tag = self._tag(node)
-            spot = self._laser_spot(node, cmd)
+        tc = self.tcfg
+        max_iters = int(tc["correct_max_iters"])
+        done_cm = float(tc["correct_done_m"]) * 100
+        step_max = float(tc.get("correct_step_max_deg", 20.0))
+        radius_m = float(tc.get("correct_search_m", 0.15))
+        lim = aiming.limits(self.site, node)
+        surface = self._surface_of(target)
+        idx = np.flatnonzero(self._plane_mask(target))
+        tag = self._tag(node)
+        probe = float(tc.get("correct_probe_deg", 3.0))
+        probes = [np.array([probe, 0.0]), np.array([0.0, probe])]  # J không dùng được: đo thật từng cột
+        J = self._model_jacobian(node, pivot, surface, idx, c, target)
+        if J is None:
+            J = np.zeros((2, 2))  # Broyden sẽ điền dần từ hai bước dò
+        center, prev, best = target, None, None  # prev: (c, s2); best: (c, s2, miss_cm)
+        miss_cm: float | None = None
+        aim_pt = np.asarray(aim_point, float)
+        self._sleep(self.cfg.laser_settle_s)
+        off = self.hub.fresh()  # nền: laser tắt, chụp trước khi bật lần đầu
+        for i in range(max_iters):
+            self._laser_on(node, cmd)  # lần đầu bật, các lần sau gia hạn; không tắt giữa các vòng
+            self._sleep(self.cfg.laser_settle_s)
+            spot = self._observe(node, center, radius_m * (2 if i == 0 else 1), off)
+            if spot is not None and prev is not None and not self._ill(J):
+                pred = prev[1] + J @ (c - prev[0])
+                dev = float(np.linalg.norm(spot[idx] - pred))
+                moved = float(np.linalg.norm(pred - prev[1]))
+                if dev > 3 * moved and dev > 0.15:  # xa dự đoán quá: có thể là lửa chập chờn, đo lại một lần
+                    self.events.emit("vision", f"vết lệch {dev * 100:.0f} cm so với dự đoán, đo lại", level="warn")
+                    self._sleep(self.cfg.laser_settle_s)
+                    again = self._observe(node, center, radius_m * 2, off)
+                    if again is not None:
+                        spot = again
             if spot is None:
+                self.events.emit("vision", "không thấy vết laser", level="warn")
                 run.shots.append({"round": i + 1, "miss_cm": None, "nozzle": node})
                 break
-            self._learn(node, tag, ang, spot)
-            miss = np.asarray(target, float) - spot
+            self._learn(node, tag, (float(c[0]), float(c[1])), spot)
+            miss = target - spot
             miss_cm = float(np.linalg.norm(miss) * 100)  # 3D: bia và vết đều nằm trên bảng hoặc nền
             run.shots.append({"round": i + 1, "miss_cm": round(miss_cm, 2), "nozzle": node})
             self._mark("spots", node, spot)
             self.events.emit("correct", f"vòng {i + 1}: lệch {miss_cm:.1f} cm" + (f" ({node})" if dual else ""))
-            if miss_cm < self.tcfg["correct_done_m"] * 100 or i == self.tcfg["correct_max_iters"] - 1:
+            if best is None or miss_cm < best[2]:
+                best = (c.copy(), spot[idx].copy(), miss_cm)
+            if prev is not None:  # Broyden: J mới khớp đúng cặp (dc, ds) vừa đo
+                dc, ds = c - prev[0], spot[idx] - prev[1]
+                if float(dc @ dc) > 0.02**2:
+                    J = J + np.outer(ds - J @ dc, dc) / float(dc @ dc)
+            prev = (c.copy(), spot[idx].copy())
+            if miss_cm < done_cm or i == max_iters - 1:
                 break
-            aim_point = aim_point + miss * self._plane_mask(target)
-            ang = self._cmd(node, pivot, aim_point)
-            cmd = self._aim(node, *ang)
-        self._mark("aims", node, aim_point)
-        return aim_point, miss_cm
+            ill = self._ill(J)
+            if ill and probes:
+                dc = probes.pop(0)
+            elif ill:  # không có J: theo mô hình như cách cũ (dời điểm ngắm đúng bằng độ lệch)
+                aim_pt = aim_pt + miss * self._plane_mask(target)
+                dc = np.array(self._cmd(node, pivot, aim_pt), float) - c
+            else:
+                dc = np.linalg.solve(J, miss[idx])
+            n = float(np.linalg.norm(dc))
+            if n > step_max:
+                dc = dc * (step_max / n)
+            c_new = np.array([min(max(c[0] + dc[0], lim.pan[0]), lim.pan[1]),
+                              min(max(c[1] + dc[1], lim.tilt[0]), lim.tilt[1])])
+            if float(np.linalg.norm(c_new - c)) < 0.02:
+                break  # kẹt ở giới hạn góc: không còn bước nào
+            center = target.copy()
+            center[idx] = spot[idx] + J @ (c_new - c) if not ill else target[idx]
+            c = c_new
+            cmd = self._aim(node, *c)  # laser vẫn sáng khi servo quay
+        if best is not None and miss_cm is not None and best[2] < miss_cm \
+                and float(np.linalg.norm(best[0] - c)) > 0.02:
+            c, miss_cm = best[0], best[2]  # vòng cuối tệ hơn vòng tốt nhất: quay về lệnh đã đo tốt nhất
+            cmd = self._aim(node, *c)
+        # điểm ngắm hiệu dụng: chỗ mô hình tin lệnh c rơi vào (cho overlay và khoảng cách bù tia nước)
+        fwd = self._forward(node, pivot, surface, c)
+        aim_pt = target if fwd is None else fwd
+        if dual:
+            self._laser_off(node, cmd)  # lần lượt từng vòi: laser vòi này không được lẫn với vòi sau
+        self._mark("aims", node, aim_pt)
+        return aim_pt, miss_cm, (float(c[0]), float(c[1]))
 
     # --- tự hiệu chuẩn vòi ------------------------------------------------------------------
 
@@ -695,6 +1056,8 @@ class Orchestrator:
                               baseline=self.cals[node])
             if cal.fitted:
                 self._offer_cal(node, cal, "CORRECT")
+            elif "vô lý" in cal.note:
+                self.events.emit("calib", f"{node}: {cal.note}", level="warn", node=node)
         except Exception as e:  # noqa: BLE001 - học nền hỏng không được ảnh hưởng lượt phun
             self.events.emit("calib", f"{node}: khớp lại lỗi {type(e).__name__}: {e}", level="warn", node=node)
         finally:
@@ -801,8 +1164,10 @@ class Orchestrator:
                 return fail("; ".join(why))
             self._abort.clear()
             tag = self._tag(node)
+            # cal hiện tại hỏng thì không chọn nổi góc: sweep_commands tự lùi về số mồi của site
             cmds = selfcal.sweep_commands(self.cal(node), tag, self.site, aiming.limits(self.site, node),
-                                          int(self.scfg.get("sweep_points", 8)))
+                                          int(self.scfg.get("sweep_points", 8)),
+                                          prior=NodeCal.from_site(self.site, node))
             if len(cmds) < 3:
                 return fail(f"chỉ chọn được {len(cmds)} góc quét trong vùng nhìn thấy")
             self.events.emit("calib", f"{node}: bắt đầu quét {len(cmds)} góc", node=node, stage="start",

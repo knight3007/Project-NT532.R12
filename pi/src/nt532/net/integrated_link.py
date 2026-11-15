@@ -51,6 +51,8 @@ def _num(v) -> float | None:
 class IntegratedLink(CoapLink):
     """Như CoapLink nhưng nói hợp đồng của firmware node B tích hợp. `pulse_map` giống bên node."""
 
+    has_pump = False  # firmware chỉ có laser: orchestrator "phun" bằng cách giữ laser sáng
+
     def __init__(self, nodes: dict[str, str], bind: tuple[str, int] = ("::", 5683), timeout_s: float = 2.0,
                  transports: list[str] | None = None, pulse_map: PulseMap | None = None,
                  status_poll_s: float | None = None, pulse_maps: dict[str, PulseMap] | None = None,
@@ -71,6 +73,7 @@ class IntegratedLink(CoapLink):
         self._pwm = dict.fromkeys(nodes, False)
         self._gen = {(n, k): 0 for n in nodes for k in ('aim', 'fire')}  # lệnh mới nhất; việc cũ tự huỷ
         self._gen_lock = threading.Lock()
+        self._stop_gen = dict.fromkeys(nodes, 0)  # giá trị gen "fire" ngay sau /stop gần nhất của node
 
     # --- telemetry bằng poll /status ---------------------------------------------------------------
 
@@ -303,33 +306,46 @@ class IntegratedLink(CoapLink):
     def _fire(self, node: str, cmd: Fire) -> None:
         if cmd.dev != "laser":  # firmware không có bơm, relay chỉ mô phỏng laser
             return self._reject(node, cmd.id, "no_pump")
-        gen = self._new_gen(node, "fire")
+        gen = self._new_gen(node, "fire")  # lệnh laser mới thay lệnh cũ: luồng cũ thôi hẹn giờ và KHÔNG gửi OFF
         code = self._call(node, POST, "laser", b"ON").code
         if not code.is_successful():
+            # luồng cũ (nếu laser đang sáng) đã bị thay nên không còn ai tắt: tắt ở đây cho chắc
+            try:
+                self._call(node, POST, "laser", b"OFF")
+            except LinkError:
+                pass
             return self._reject(node, cmd.id, ERR_BY_CODE.get(code, "node_error"))
         self.on_status(node, Status(cmd.id, "accepted", n=node))
         threading.Thread(target=self._laser_off, args=(node, cmd, gen), daemon=True,
                          name=f"laser-{node}").start()
 
     def _laser_off(self, node: str, cmd: Fire, gen: int) -> None:
+        """Giữ laser tới hết `cmd.ms` rồi tắt. Bị một lệnh laser mới thay (gen đổi) thì thôi, không gửi OFF: nếu
+        gửi, laser đang được lệnh mới giữ sẽ chớp tắt giữa hai lần ngắm của CORRECT. Chỉ khi /stop là việc gần nhất
+        mới gửi OFF (node đã tắt laser theo /stop, đây là dây an toàn thứ hai)."""
         end = time.monotonic() + cmd.ms / 1000
         while time.monotonic() < end and self._current(node, "fire", gen):
             time.sleep(0.01)
-        stopped = not self._current(node, "fire", gen)
-        for _ in range(3):  # OFF luôn được node nhận; thử lại nếu mất gói
-            try:
-                self._call(node, POST, "laser", b"OFF")
-                break
-            except LinkError:
-                continue
-        self.on_status(node, Status(cmd.id, "fault" if stopped else "done", err="stopped" if stopped else None,
-                                    n=node))
+        with self._gen_lock:
+            latest = self._gen[node, "fire"]
+            stopped = self._stop_gen[node] >= gen
+            superseded = latest != gen and not (stopped and latest == self._stop_gen[node])
+        if not superseded:
+            for _ in range(3):  # OFF luôn được node nhận; thử lại nếu mất gói
+                try:
+                    self._call(node, POST, "laser", b"OFF")
+                    break
+                except LinkError:
+                    continue
+        err = "stopped" if stopped else "superseded" if superseded else None
+        self.on_status(node, Status(cmd.id, "fault" if err else "done", err=err, n=node))
 
     # --- stop -----------------------------------------------------------------------------------
 
     def _stop(self, node: str, cmd: Stop) -> None:
         for kind in ("aim", "fire"):  # huỷ việc theo dõi và hẹn tắt laser
-            self._new_gen(node, kind)
+            gen = self._new_gen(node, kind)
+        self._stop_gen[node] = gen  # (vòng cuối là "fire")
         self._armed[node] = self._pwm[node] = False
         resp = self._call(node, POST, "stop")
         if not resp.code.is_successful():

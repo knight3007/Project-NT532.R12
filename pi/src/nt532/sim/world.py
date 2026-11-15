@@ -376,6 +376,7 @@ class SimLink(NodeLink):
         # id /stop lớn nhất đã nhận; /aim, /fire có id nhỏ hơn là lệnh cũ (gói đến sau /stop) và bị từ chối
         self._last_stop = dict.fromkeys(world.nodes, 0)
         self._lock = threading.Lock()
+        self._laser_gen = dict.fromkeys(world.nodes, 0)  # lệnh laser mới nhất; lệnh cũ không được tắt laser
 
     def heartbeat(self, node: str) -> None:
         if self.world.online[node]:
@@ -418,13 +419,17 @@ class SimLink(NodeLink):
                     return
                 self._cancel[node].clear()
                 if msg.dev == "laser":
+                    self._laser_gen[node] += 1
+                    laser_gen = self._laser_gen[node]
                     self.world.laser(node, True)
                 else:
                     self.world.pumping[node] = True
             self._reply(node, msg.id, "accepted")
             if msg.dev == "laser":
                 self._cancel[node].wait(msg.ms / 1000)
-                self.world.laser(node, False)
+                with self._lock:  # lệnh laser mới đã thay lệnh này (CORRECT gia hạn liên tục): để nó giữ laser
+                    if self._laser_gen[node] == laser_gen:
+                        self.world.laser(node, False)
             else:
                 # ghi nước theo thời gian thật đã trôi (không phải 0.1 s cố định): vòng lặp có thể bị
                 # kẹt lâu khi `world.lock` đang bận dựng khung hình; tối đa SPRAY_CREDIT_MAX_S mỗi

@@ -49,7 +49,7 @@ def test_station_starts_and_nodes_answer_info(station):
     assert wait_for(lambda: all(station.link.hb_age_ms(n) < 1500 for n in station.link.nodes), 5)
 
 
-def test_station_full_run_aims_and_fires_laser_but_pump_is_rejected(station):
+def test_station_full_run_aims_and_sprays_with_laser_since_node_has_no_pump(station):
     station.world.ignite(0.32, 0.30)
     assert wait_for(lambda: station.orch.runs, 90), "không có lượt nào hoàn tất"
     run = station.orch.runs[0]
@@ -57,7 +57,9 @@ def test_station_full_run_aims_and_fires_laser_but_pump_is_rejected(station):
     node_events = [e["text"] for e in station.events.since(0, 10_000) if e["kind"] == "node"]
     assert any("/pantilt" in t and "-> 0" in t for t in node_events)  # ngắm được chấp nhận
     assert any("/laser ON" in t for t in node_events)
-    # firmware không có bơm: lệnh phun bị từ chối nên lượt không thể "extinguished" bằng nước
-    assert run.outcome != "extinguished", run.to_json()
-    assert not any(station.world.truth()["lasers"].values())
-    assert not any(station.world.pumping.values())
+    # firmware không có bơm: FIRE giữ laser sáng (không gửi lệnh bơm nào), lượt vẫn có kết luận bình thường
+    assert run.outcome in ("extinguished", "human"), run.to_json()
+    assert any(x["miss_cm"] is not None and x["miss_cm"] < 3 for x in run.shots), run.shots
+    assert not any(e["kind"] == "fault" and "phun" in e["text"] for e in station.events.since(0, 10_000))
+    assert wait_for(lambda: not any(station.world.truth()["lasers"].values())
+                    and not any(station.world.pumping.values()), 3)

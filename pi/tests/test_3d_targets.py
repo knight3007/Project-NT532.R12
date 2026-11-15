@@ -84,7 +84,7 @@ def test_water_tilt_uses_horizontal_xy_distance_for_floor_and_wall():
 def bare_orchestrator(site, spot):
     o = Orchestrator.__new__(Orchestrator)
     o.site, o.tcfg = site, {"correct_max_iters": 1, "correct_done_m": 0.02}
-    o.cfg = SimpleNamespace(laser_ms=100)
+    o.cfg = SimpleNamespace(laser_ms=100, laser_hold_ms=1000, laser_settle_s=0.0)
     o.overlay, o._lock, o.events = {}, threading.Lock(), EventLog()
     o.hub = SimpleNamespace(fresh=lambda: None)
     o.link = SimpleNamespace(fire=lambda *a, **k: None, wait=lambda *a, **k: None)
@@ -101,7 +101,7 @@ def test_miss_is_3d_norm():
     spot = np.array([0.43, 0.54, 0.0])  # lệch 3 cm theo X, 4 cm theo Y: chuẩn 5 cm
     o = bare_orchestrator(site, spot)
     run = SimpleNamespace(shots=[])
-    _, miss_cm = o._aim_and_correct(run, "s1", PIVOT, goal, goal.copy())
+    _, miss_cm, _ = o._aim_and_correct(run, "s1", PIVOT, goal, goal.copy())
     assert miss_cm == pytest.approx(5.0)
     assert run.shots[0]["miss_cm"] == pytest.approx(5.0)
     assert o.overlay["spots"]["s1"] == {"x": 0.43, "y": 0.54, "z": 0.0, "surface": "floor"}
