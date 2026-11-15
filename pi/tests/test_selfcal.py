@@ -2,6 +2,7 @@
 
 import threading
 import time
+from dataclasses import replace
 
 import numpy as np
 import pytest
@@ -79,7 +80,8 @@ def test_fit_recovers_pivot_far_from_prior():
             if spot is not None:
                 samples.append((tag, float(pan), float(tilt), spot + rng.normal(0, 0.005, 3)))
     assert len(samples) >= 10
-    cal = selfcal.fit(samples, PRIOR, SITE)
+    wide = {**SITE, "selfcal": {**(SITE.get("selfcal") or {}), "max_pivot_shift_m": 0.5}}  # pivot thật cách mồi 27 cm
+    cal = selfcal.fit(samples, PRIOR, wide)
     assert cal.fitted, cal.note
     assert np.linalg.norm(np.array(cal.pivot) - true.pivot) < 0.015, cal.pivot
 
@@ -116,7 +118,7 @@ def test_sweep_commands_spread_and_visible():
 
 def test_yaml_round_trip(tmp_path):
     site = {**SITE, "selfcal": {"file": str(tmp_path / "nodes.yaml")}}
-    cal = NodeCal((0.1, 0.0, 0.35), 1.2, -0.7, 1.01, 0.99, 9, 0.8, True, 123.0)
+    cal = NodeCal((0.05, 0.0, 0.12), 1.2, -0.7, 1.01, 0.99, 9, 0.8, True, 123.0)
     selfcal.save_cals(site, {"s1": cal, "s2": NodeCal((0, 0, 0.08))})
     got = selfcal.load_cals(site)
     assert set(got) == {"s1"}  # chỉ cal đã khớp được lưu
@@ -151,6 +153,8 @@ def first_round_miss(st, node, target):
     t = np.asarray(target, float)
     orch._aim_and_correct(run, node, pivot, t, t.copy())
     orch.phase = Phase.IDLE
+    orch.link.stop(node)  # như cuối một lượt thật: CORRECT để laser sáng, không để nó lẫn vào khung nền của lần quét sau
+    time.sleep(0.5)
     return run.shots[0]["miss_cm"]
 
 
@@ -239,3 +243,89 @@ def test_dashboard_calibrate_command(rig):
     truth = st.world.calib_truth()["s2"]
     assert abs(c["yaw0_deg"] - truth["yaw0_deg"]) < 0.5 and abs(c["tilt0_deg"] - truth["tilt0_deg"]) < 0.5
     assert set(selfcal.load_cals(st.site)) == {"s1", "s2"}
+
+
+# --- bác kết quả khớp vô lý, bỏ cal vô lý khi nạp, quét lùi về số mồi -----------------------------------
+
+# hai kết quả vô lý có thật đã lưu trên Pi: tilt_gain gần 0; tâm quay cách số mồi gần 1 m và dưới sàn
+BAD_S1 = NodeCal((-0.0075, -0.3268, 0.1123), tilt_gain=0.0003, fitted=True, rms_cm=5.31)
+BAD_S2 = NodeCal((-0.3755, 0.7611, -0.0191), yaw0_deg=-15.3, fitted=True, rms_cm=7.89)
+PI_PRIOR = NodeCal((0.02, -0.29, 0.36))
+
+
+def test_cal_violations_each_limit():
+    assert selfcal.cal_violations(PI_PRIOR, PI_PRIOR, SITE) == []
+    assert any("tâm quay" in v for v in selfcal.cal_violations(BAD_S2, PI_PRIOR, SITE))
+    assert any("tilt_gain" in v for v in selfcal.cal_violations(BAD_S1, PI_PRIOR, SITE))
+    assert any("pan_gain" in v for v in selfcal.cal_violations(replace(PI_PRIOR, pan_gain=1.4), PI_PRIOR, SITE))
+    assert any("yaw0" in v for v in selfcal.cal_violations(replace(PI_PRIOR, yaw0_deg=-26.0), PI_PRIOR, SITE))
+    assert any("tilt0" in v for v in selfcal.cal_violations(replace(PI_PRIOR, tilt0_deg=30.0), PI_PRIOR, SITE))
+    assert selfcal.cal_violations(replace(PI_PRIOR, pan_gain=1.25, yaw0_deg=-20.0, tilt0_deg=24.0), PI_PRIOR, SITE) == []
+    # ngưỡng đọc từ site.yaml mục selfcal
+    loose = {**SITE, "selfcal": {**SITE["selfcal"], "max_pivot_shift_m": 2.0, "min_gain": 0.0, "max_angle_offset_deg": 90}}
+    assert selfcal.cal_violations(BAD_S2, PI_PRIOR, loose) == []
+
+
+def test_fit_rejects_absurd_but_low_rms_solution():
+    """Mẫu sinh từ pivot thật cách mồi 27 cm: rms thấp nhưng vô lý theo ngưỡng mặc định, nên bị bác và ghi lý do."""
+    true = NodeCal((0.10, 0.0, 0.35), yaw0_deg=1.5, tilt0_deg=-2.0)
+    tag = TagPose(22, np.array([0.0, 0.0, 0.0]), yaw_rot(-36.87))
+    rng = np.random.default_rng(3)
+    samples = []
+    for pan in np.linspace(-30, 30, 5):
+        for tilt in (-35, -22, -10, 5):
+            spot = selfcal.predict_spot(true, tag, pan, tilt, SURF)
+            if spot is not None:
+                samples.append((tag, float(pan), float(tilt), spot + rng.normal(0, 0.005, 3)))
+    cal = selfcal.fit(samples, PRIOR, SITE)
+    assert not cal.fitted and "vô lý" in cal.note and "tâm quay" in cal.note
+    assert cal.pivot == PRIOR.pivot  # trả baseline
+
+
+def test_load_cals_drops_absurd_saved_cal_and_reports(tmp_path):
+    site = {**SITE, "selfcal": {**SITE["selfcal"], "file": str(tmp_path / "nodes.yaml")},
+            "actuator": {**SITE["actuator"], "nodes": {"s1": {"pivot_offset": [0.02, -0.29, 0.36]},
+                                                        "s2": {"pivot_offset": [0.0, -0.28, 0.31]}}}}
+    good = NodeCal((0.03, -0.30, 0.35), 1.0, -1.0, 1.02, 0.98, 9, 0.8, True, 1.0)
+    selfcal.save_cals(site, {"s1": BAD_S1, "s2": good})
+    out: list = []
+    got = selfcal.load_cals(site, out)
+    assert set(got) == {"s2"} and len(out) == 1 and out[0].startswith("s1:") and "tilt_gain" in out[0]
+    selfcal.save_cals(site, {"s1": good, "s2": BAD_S2})
+    out = []
+    assert set(selfcal.load_cals(site, out)) == {"s1"} and "tâm quay" in out[0]
+
+
+def test_orchestrator_startup_warns_and_uses_prior_for_absurd_saved_cal(tmp_path):
+    from types import SimpleNamespace
+
+    from nt532.orchestrator.events import EventLog
+    from nt532.orchestrator.machine import Orchestrator
+    site = {**SITE, "selfcal": {**SITE["selfcal"], "file": str(tmp_path / "nodes.yaml")},
+            "actuator": {**SITE["actuator"], "nodes": {"s1": {"pivot_offset": [0.02, -0.29, 0.36]},
+                                                        "s2": {"pivot_offset": [0.0, -0.28, 0.31]}}}}
+    selfcal.save_cals(site, {"s1": BAD_S1, "s2": BAD_S2})
+    ev = EventLog()
+    orch = Orchestrator(site, SimpleNamespace(nodes={}), None, None, None, None, ev)
+    assert not orch.cals["s1"].fitted and orch.cals["s1"].pivot == (0.02, -0.29, 0.36)
+    assert not orch.cals["s2"].fitted and orch.cals["s2"].pivot == (0.0, -0.28, 0.31)
+    warns = [e for e in ev.since(0) if e["kind"] == "calib" and e["level"] == "warn"]
+    assert len(warns) == 2 and "bỏ cal đã lưu" in warns[0]["text"]
+
+
+def test_sweep_falls_back_to_prior_when_saved_cal_is_absurd():
+    lim = aiming.Limits((-70, 70), (-35, 45))
+    # cal hỏng (tilt_gain ~ 0) dự đoán mọi vết ra ngoài vùng: không có đường lui thì "0 góc quét"
+    assert selfcal.sweep_commands(BAD_S1, TAG, SITE, lim, 8) == []
+    cmds = selfcal.sweep_commands(BAD_S1, TAG, SITE, lim, 8, prior=PRIOR)
+    assert len(cmds) == 8
+    assert all(selfcal.predict_spot(PRIOR, TAG, *c, SURF, -0.10) is not None for c in cmds)  # chọn theo số mồi
+
+
+def test_sweep_relaxes_margin_to_zero_before_giving_up():
+    lim = aiming.Limits((-70, 70), (-35, 45))
+    assert selfcal.sweep_commands(PRIOR, TAG, SITE, lim, 8, margin_m=0.35) != []  # lề 0,35 m không chọn nổi: nới về 0
+    assert len(selfcal.sweep_commands(PRIOR, TAG, SITE, lim, 8, margin_m=0.35)) == 8
+    assert len(selfcal.sweep_commands(PRIOR, TAG, SITE, lim, 8, margin_m=0.10)) == 8  # đủ góc thì giữ nguyên lề
+    # cả cal hỏng lẫn lề: thử đủ cả bốn tổ hợp
+    assert len(selfcal.sweep_commands(BAD_S1, TAG, SITE, lim, 8, margin_m=0.35, prior=PRIOR)) == 8
