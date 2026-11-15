@@ -43,3 +43,6 @@ firmware/node-b-integrated/test/libintegrated.so
 firmware/node-b-integrated/test/integrated.dll
 firmware/node-b-integrated/test/test_shim_bin
 firmware/node-b-integrated/test/test_shim
+
+# Local evidence archive is retained locally only.
+/20261114-013713.tar.gz

@@ -1,0 +1,35 @@
+{
+  "evidence": "SYNTHETIC_ONLY",
+  "example_camera": {
+    "height_m": 0.8,
+    "down_angle_deg": 55
+  },
+  "origin22_xyz_m": [
+    0.0,
+    0.0,
+    0.0
+  ],
+  "node21_xyz_m": [
+    -0.00043,
+    0.27047,
+    0.00011
+  ],
+  "target_xyz_m": [
+    0.12027,
+    0.15046,
+    0.0
+  ],
+  "legacy_bbox_bottom_error_cm": 1.267,
+  "tabletop_bbox_center_error_cm": 0.0,
+  "camera_layouts_all_six_visible": 11,
+  "camera_layouts_tested": 16,
+  "aim_coverage": {
+    "grid_points": 63,
+    "reachable_points": {
+      "s1": 47,
+      "s2": 43
+    },
+    "status": "SYNTHETIC_ONLY"
+  },
+  "occlusion": "NOT_VERIFIED: enclosure dimensions and final mounts unknown"
+}

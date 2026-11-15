@@ -1,0 +1,29 @@
+{
+  "recorded_on": "2026-10-25",
+  "source": "user_provided",
+  "signal": "servo_pwm_pulse_width",
+  "pan_tilt_A": {
+    "pan": {
+      "min_us": 500,
+      "home_us": 1500,
+      "max_us": 2500
+    },
+    "tilt": {
+      "min_us": 600,
+      "home_us": 1500,
+      "max_us": 2500
+    }
+  },
+  "pan_tilt_B": {
+    "pan": {
+      "min_us": 500,
+      "home_us": 1500,
+      "max_us": 2500
+    },
+    "tilt": {
+      "min_us": 600,
+      "home_us": 1500,
+      "max_us": 2500
+    }
+  }
+}

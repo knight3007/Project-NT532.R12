@@ -1,26 +1,17 @@
-"""Cổng tuần 2: gõ tọa độ điểm trên bảng, Pi tính góc, node quay, bắn laser và đo vết (CSV).
+"""Manual A/B tabletop aim with an explicit measured mount and operator confirmation.
 
-    uv run --no-sync python scripts/aim_point.py --node s1 --x 0.30 --z 0.20
-    uv run --no-sync python scripts/aim_point.py --node s1 --points diem.csv --repeat 3
-    uv run --no-sync python scripts/aim_point.py --node s2 --grid                  # lưới 3x3 trong bảng
-    uv run python scripts/aim_point.py --source sim --node s1 --x 0.30 --z 0.20    # thử trên sa bàn ảo
-    uv run python scripts/aim_point.py --source sim --camera left --node s1 --surface floor --grid
-    uv run --no-sync python scripts/aim_point.py --node s1 --surface floor --grid  # lưới trên nền
-    uv run --no-sync python scripts/aim_point.py --node s1 --surface floor --x 0.40 --y 0.50
+Real camera mode accepts one (x,y,0) target in tag_2_table and defaults to dry run.
+Only --execute can send ARM/HOME/pulse/relay commands to an integrated node.
+The relay is a simulation output until a physical emitter is wired and checked.
+An observed tabletop spot or post-OFF ruler measurement is required for error_cm.
 
---points là CSV có cột x,z (m, hệ sa bàn; thêm cột node để đổi vòi từng điểm). Với `--surface floor`
-(bia trên mặt bàn, Z = 0) điểm là (x, y): --y thay --z, CSV cần cột x,y, và --grid chỉ lấy các điểm nền
-mà node với tới được (kiểm theo giới hạn pan/tilt 3D); kết quả có thêm cột target_y và spot_y. Mỗi lượt: tính
-(pan, tilt) từ tâm quay của node (pose tag + actuator.pivot_offset), kiểm giới hạn góc (ngoài
-giới hạn thì báo và bỏ qua, không gửi /aim), /aim, chờ reached, bật laser laser_ms, đo vết bằng
-ảnh tắt/bật laser rồi so với điểm đích. Qua nếu lệch không quá --gate-cm (mặc định 5 cm).
-Với --source sim: --camera PRESET|x,y,z, --look-at x,y,z, --layout corners|posts (mặc định corners) chọn camera và bố cục node.
---no-laser chỉ quay node, không đo. --water cộng góc bù tilt của vòi (water_tilt_table/water_tilt_deg) vào tilt như lúc phun
-(vết laser sẽ nằm cao hơn đích đúng góc đó). Luôn gửi /stop khi thoát. Không chạy orchestrator.
-Ghi thêm vào runs/measure/aim_<thời điểm>.csv (đổi bằng --out).
+Legacy --source sim measurement helpers remain available only with --execute;
+they use the older virtual board/wall path and never contact physical nodes.
+See docs/nt532-node-ab-final-and-aim-hold-2026-11-14.md for the Pi runbook.
 """
 
 import argparse
+import copy
 import csv
 import time
 from pathlib import Path
@@ -146,14 +137,15 @@ def run_points(st, points, args, out: Path) -> list[dict]:
 
 
 def main() -> None:
-    p = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+    p = argparse.ArgumentParser(description="Dry-run tabletop aim in tag_2_table; --execute requires measured A/B calibration and operator OK")
     p.add_argument("--node", default="s1")
     p.add_argument("--x", type=float, help="X điểm đích trên bảng (m)")
     p.add_argument("--z", type=float, help="Z điểm đích trên bảng (m)")
     p.add_argument("--y", type=float, help="Y điểm đích trên nền (m), dùng với --surface floor")
-    p.add_argument("--surface", choices=["wall", "floor"], default="wall",
-                   help="bia trên bảng đứng (mặc định) hay trên nền")
-    p.add_argument("--points", type=Path, help="CSV cột x,z (và node) thay cho --x/--z")
+    p.add_argument("--surface", choices=["wall", "floor"], default=None,
+                   help="real: floor (default); legacy simulation: wall (default)")
+    p.add_argument("--points", type=Path,
+                   help="real: CSV x,y[,node]; legacy sim: CSV x,z[,node]")
     p.add_argument("--grid", action="store_true", help="lưới 3x3 trong bảng (kế hoạch: 9 vị trí)")
     p.add_argument("--repeat", type=int, default=1, help="số lượt mỗi điểm")
     p.add_argument("--water", action="store_true", help="cộng water_tilt_deg vào tilt")
@@ -162,16 +154,62 @@ def main() -> None:
     p.add_argument("--source", default=None, help="sim, số webcam, file video hoặc URL stream")
     p.add_argument("--link", choices=["mem", "coap"], default="mem", help="chỉ cho --source sim")
     p.add_argument("--out", type=Path, default=None, help="mặc định runs/measure/aim_<thời điểm>.csv")
+    p.add_argument("--frame", default="tag_2_table", help="manual real-node mode: tag_2_table only")
+    p.add_argument("--calibration", type=Path, default=REPO_ROOT / "calibration" /
+                   "manual_aim_measured.yaml", help="measured A/B laser mount and pulse gains")
+    p.add_argument("--intrinsics", type=Path, help="camera.yaml for this camera and image size")
+    p.add_argument("--hold-seconds", type=float, default=30.0, help="relay hold, 0 < seconds <= 120")
+    p.add_argument("--execute", action="store_true", help="permit real motion after all gates")
     add_sim_args(p)
     args = p.parse_args()
 
-    from nt532.sim import sim_options
-    from nt532.station import build_real, build_sim
-
     sim = args.source == "sim"
+    if args.surface is None:
+        args.surface = "wall" if sim else "floor"
+    if not sim:
+        from nt532.config import load_site
+        from nt532.manual_aim import manual_points, run_manual, save_rows
+
+        if args.water or args.grid or args.no_laser:
+            p.error("--water, --grid and --no-laser are unavailable in real manual mode")
+        out = args.out or OUT_DIR / f"aim_{time.strftime('%Y%m%d-%H%M%S')}.csv"
+        args.out = out
+        try:
+            requested = (manual_points(args.points, args.node) if args.points
+                         else [(args.node, args.x, args.y)])
+        except (Exception, KeyboardInterrupt) as exc:  # noqa: BLE001 - record any hardware/camera failure
+            requested = []
+            rows = [{"status": "BLOCKED", "node": args.node, "frame": args.frame,
+                     "source": args.source, "error": f"{type(exc).__name__}: {exc}",
+                     "physical_localization": "NOT VERIFIED"}]
+            print(rows[0]["error"])
+        else:
+            rows = []
+            for index, (node, x, y) in enumerate(requested, start=1):
+                point_args = copy.copy(args)
+                point_args.node, point_args.x, point_args.y, point_args.points = node, x, y, None
+                try:
+                    rows.append(run_manual(point_args, load_site()))
+                except (Exception, KeyboardInterrupt) as exc:  # noqa: BLE001 - preserve every trial
+                    rows.append({"status": "BLOCKED", "node": node, "frame": args.frame,
+                                 "source": args.source, "point_index": index,
+                                 "target_m": [x, y, 0.0],
+                                 "error": f"{type(exc).__name__}: {exc}",
+                                 "physical_localization": "NOT VERIFIED"})
+        save_rows(out, rows)
+        print(f"{len(rows)} trial(s); evidence: {out.with_suffix('.json')}")
+        if any(row["status"] == "BLOCKED" for row in rows):
+            raise SystemExit(1)
+        return
+    if not args.execute:
+        print("DRY RUN: simulation commands disabled; use --execute for the legacy simulator")
+        return
+    from nt532.sim import sim_options
+    from nt532.station import build_sim
+
     if not sim and (args.camera or args.look_at or args.layout):
         p.error("--camera, --look-at và --layout chỉ dùng với --source sim")
-    st = build_sim(link=args.link, **sim_options(args, p)) if sim else build_real(source=args.source)
+    st = build_sim(link=args.link, **sim_options(args, p))
     try:
         floor = args.surface == "floor"
         if args.points:

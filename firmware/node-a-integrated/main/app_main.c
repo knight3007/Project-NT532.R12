@@ -110,8 +110,9 @@ static void servo_task(void *unused)
     bool hardware_active = false;
     for (;;) {
         ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(20));
-        uint64_t now_ms = (uint64_t)esp_timer_get_time() / 1000;
         portENTER_CRITICAL(&s_control_lock);
+        // Sample the clock inside the lock so a heartbeat handled meanwhile is never newer than now_ms.
+        uint64_t now_ms = (uint64_t)esp_timer_get_time() / 1000;
         bool timed_out = control_watchdog(&s_control, now_ms);
         esp_err_t relay_error = relay_apply_locked();
         bool start_home = s_control.home_requested;
@@ -151,7 +152,7 @@ static void servo_task(void *unused)
         int pan_us = 0, tilt_us = 0;
         portENTER_CRITICAL(&s_control_lock);
         bool active = s_control.pwm_active;
-        bool changed = active && control_next_step(&s_control, &pan_us, &tilt_us);
+        bool changed = active && control_next_step(&s_control, now_ms, &pan_us, &tilt_us);
         portEXIT_CRITICAL(&s_control_lock);
         if (!active) {
             servo_output_stop();

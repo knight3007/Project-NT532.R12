@@ -1,0 +1,229 @@
+{
+  "status": "PASS",
+  "mode": "auto",
+  "anchor_id": 2,
+  "operational_origin_id": 22,
+  "coordinate_frame": "tag_22_table",
+  "target_anchor": "center",
+  "unit": "m",
+  "diagnostics": {
+    "detection_rate": {
+      "0": 1.0,
+      "1": 1.0,
+      "2": 1.0,
+      "3": 1.0,
+      "21": 1.0,
+      "22": 1.0
+    },
+    "frame_results": [
+      {
+        "frame": 1,
+        "detected_tags": [
+          0,
+          1,
+          2,
+          3,
+          21,
+          22
+        ],
+        "reference_tags": [
+          0,
+          1,
+          2,
+          3
+        ],
+        "pixel_quality": {
+          "0": {
+            "min_edge_px": 90.55,
+            "max_edge_px": 99.82
+          },
+          "1": {
+            "min_edge_px": 55.9,
+            "max_edge_px": 78.26
+          },
+          "2": {
+            "min_edge_px": 90.55,
+            "max_edge_px": 99.82
+          },
+          "3": {
+            "min_edge_px": 55.9,
+            "max_edge_px": 78.26
+          }
+        },
+        "anchor_pose_candidates": [
+          {
+            "reprojection_px": 0.024,
+            "camera_height_m": 0.79873
+          },
+          {
+            "reprojection_px": 1.284,
+            "camera_height_m": 0.79707
+          }
+        ],
+        "status": "PASS",
+        "metric_error_m": 0.00047,
+        "reprojection_px": 0.169,
+        "per_tag_quality": {
+          "0": {
+            "rms_corner_px": 0.18284,
+            "max_corner_px": 0.21352,
+            "downweighted_corners": 0.0,
+            "square_error_m": 0.00031
+          },
+          "1": {
+            "rms_corner_px": 0.15326,
+            "max_corner_px": 0.22435,
+            "downweighted_corners": 0.0,
+            "square_error_m": 0.00047
+          },
+          "2": {
+            "rms_corner_px": 0.183,
+            "max_corner_px": 0.21303,
+            "downweighted_corners": 0.0,
+            "square_error_m": 0.0
+          },
+          "3": {
+            "rms_corner_px": 0.15324,
+            "max_corner_px": 0.22428,
+            "downweighted_corners": 0.0,
+            "square_error_m": 0.00047
+          }
+        }
+      }
+    ],
+    "used_tags": [
+      0,
+      1,
+      2,
+      3
+    ],
+    "rejected_tags": {},
+    "per_tag_quality": {
+      "0": {
+        "rms_corner_px": 0.18284,
+        "max_corner_px": 0.21352,
+        "downweighted_corners": 0.0,
+        "square_error_m": 0.00031
+      },
+      "1": {
+        "rms_corner_px": 0.15326,
+        "max_corner_px": 0.22435,
+        "downweighted_corners": 0.0,
+        "square_error_m": 0.00047
+      },
+      "2": {
+        "rms_corner_px": 0.183,
+        "max_corner_px": 0.21303,
+        "downweighted_corners": 0.0,
+        "square_error_m": 0.0
+      },
+      "3": {
+        "rms_corner_px": 0.15324,
+        "max_corner_px": 0.22428,
+        "downweighted_corners": 0.0,
+        "square_error_m": 0.00047
+      }
+    }
+  },
+  "references": {
+    "0": [
+      -0.08017,
+      -0.15008,
+      0.0
+    ],
+    "1": [
+      0.32177,
+      -0.15022,
+      0.0
+    ],
+    "2": [
+      -0.08088,
+      0.45053,
+      0.0
+    ],
+    "3": [
+      0.32106,
+      0.45162,
+      0.0
+    ]
+  },
+  "missing_references": [],
+  "camera": {
+    "position": [
+      -0.44415,
+      0.14979,
+      0.7994
+    ],
+    "R": [
+      [
+        0.001184777868703369,
+        -0.9999992981424588,
+        -3.998947534620005e-06
+      ],
+      [
+        -0.8169014274849822,
+        -0.0009655409109247527,
+        -0.5767764952767649
+      ],
+      [
+        0.5767760866006846,
+        0.0006866187727416726,
+        -0.8169019980880574
+      ]
+    ],
+    "t": [
+      0.15032,
+      0.0984,
+      0.90911
+    ]
+  },
+  "nodes": {
+    "s1": [
+      -0.00043,
+      0.27047,
+      0.00011
+    ],
+    "s2": [
+      0.0,
+      0.0,
+      0.0
+    ]
+  },
+  "quality": {
+    "anchor_reprojection_px": 1.284,
+    "joint_reprojection_px": 0.169,
+    "metric_error_m": 0.00047,
+    "initial_metric_error_m": 0.2784,
+    "pose_ambiguity_m": 0.0,
+    "reference_hull_area_m2": 0.24166,
+    "stability_m": 0.0,
+    "holdout_m": null,
+    "frames_used": 1
+  },
+  "pixel": {
+    "uv": [
+      639.9999999999999,
+      360.0
+    ],
+    "xyz": [
+      0.12027,
+      0.15046,
+      0.0
+    ]
+  },
+  "fire_targets": [
+    {
+      "xyz": [
+        0.12027,
+        0.15046,
+        0.0
+      ],
+      "surface": "floor",
+      "confidence": 0.9,
+      "uv": [
+        639.9999999999999,
+        360.0
+      ]
+    }
+  ]
+}

@@ -7,14 +7,15 @@
 int main(void)
 {
     char body[512];
-    assert(node_a_info_json("a-integrated-0.1.0", body, sizeof(body)));
-    assert(strcmp(body, "{\"n\":\"A\",\"fw\":\"a-integrated-0.1.0\","
+    assert(node_a_info_json("a-integrated-0.1.2", body, sizeof(body)));
+    assert(strcmp(body, "{\"n\":\"A\",\"fw\":\"a-integrated-0.1.2\","
                         "\"mode\":\"integrated\",\"sensor\":\"mq2\","
                         "\"outputs\":\"servo_gated;relay_led_simulation;laser_disabled\"}") == 0);
-    assert(!node_a_info_json("a-integrated-0.1.0", body, 8));
+    assert(!node_a_info_json("a-integrated-0.1.2", body, 8));
 
     control_state_t control;
     control_init(&control);
+    assert(control.target_pan_us == 1500 && control.target_tilt_us == 1700);
     const mq2_policy_t policy = {
         .warmup_ms = MQ2_WARMUP_MS, .max_sample_age_ms = MQ2_MAX_SAMPLE_AGE_MS,
         .alarm_threshold_raw = MQ2_ALARM_THRESHOLD_RAW,
@@ -36,6 +37,7 @@ int main(void)
     assert(control_pantilt(&control, "ARM", 3, 100) == CONTROL_OK);
     assert(control_pantilt(&control, "HOME", 4, 100) == CONTROL_OK);
     assert(control_pwm_started(&control));
+    assert(control.pan_us == 1500 && control.tilt_us == 1700);
     assert(control_laser_request(&control, "ON", 2, 100) == CONTROL_OK);
     mq2_logic_record(&mq2, 1234, false, 0, false, 0, 100);
     assert(node_a_status_json("router", 0, 2, &control, &mq2, 100, body, sizeof(body)));

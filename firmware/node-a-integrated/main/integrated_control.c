@@ -3,10 +3,10 @@
 #include <stdio.h>
 #include <string.h>
 
-_Static_assert(CONTROL_PAN_CAL_MIN_US <= CONTROL_HOME_US &&
-               CONTROL_HOME_US <= CONTROL_PAN_CAL_MAX_US &&
-               CONTROL_TILT_CAL_MIN_US <= CONTROL_HOME_US &&
-               CONTROL_HOME_US <= CONTROL_TILT_CAL_MAX_US,
+_Static_assert(CONTROL_PAN_CAL_MIN_US <= CONTROL_HOME_PAN_US &&
+               CONTROL_HOME_PAN_US <= CONTROL_PAN_CAL_MAX_US &&
+               CONTROL_TILT_CAL_MIN_US <= CONTROL_HOME_TILT_US &&
+               CONTROL_HOME_TILT_US <= CONTROL_TILT_CAL_MAX_US,
                "HOME must fit both calibrated servo pulse ranges");
 
 void control_stop(control_state_t *state)
@@ -15,11 +15,13 @@ void control_stop(control_state_t *state)
     state->home_requested = false;
     state->pwm_active = false;
     state->laser_on = false;
+    state->step_seen = false;
+    state->last_step_ms = 0;
     state->hb_seen = false; // A fresh heartbeat is required before the next ARM.
     state->pan_us = 0; // Physical position is unknown when no pulse is sent.
     state->tilt_us = 0;
-    state->target_pan_us = CONTROL_HOME_US;
-    state->target_tilt_us = CONTROL_HOME_US;
+    state->target_pan_us = CONTROL_HOME_PAN_US;
+    state->target_tilt_us = CONTROL_HOME_TILT_US;
 }
 
 void control_init(control_state_t *state)
@@ -42,8 +44,9 @@ void control_heartbeat(control_state_t *state, uint64_t now_ms)
 
 static bool hb_fresh(const control_state_t *state, uint64_t now_ms)
 {
-    return state->hb_seen && now_ms >= state->hb_ms &&
-           now_ms - state->hb_ms <= CONTROL_HB_TIMEOUT_MS;
+    // now_ms < hb_ms: a heartbeat landed after the caller sampled the clock; treat as age 0.
+    return state->hb_seen &&
+           (now_ms < state->hb_ms || now_ms - state->hb_ms <= CONTROL_HB_TIMEOUT_MS);
 }
 
 bool control_watchdog(control_state_t *state, uint64_t now_ms)
@@ -87,8 +90,8 @@ control_result_t control_pantilt(control_state_t *state, const char *body, size_
     if (length == 4 && memcmp(body, "HOME", 4) == 0) {
         if (!state->attached || !hb_fresh(state, now_ms) || !state->armed)
             return CONTROL_FORBIDDEN;
-        state->target_pan_us = CONTROL_HOME_US;
-        state->target_tilt_us = CONTROL_HOME_US;
+        state->target_pan_us = CONTROL_HOME_PAN_US;
+        state->target_tilt_us = CONTROL_HOME_TILT_US;
         if (!state->pwm_active) state->home_requested = true;
         return CONTROL_OK;
     }
@@ -125,8 +128,10 @@ bool control_pwm_started(control_state_t *state)
     if (!state->armed || !state->home_requested || !state->attached) return false;
     state->home_requested = false;
     state->pwm_active = true;
-    state->pan_us = CONTROL_HOME_US;
-    state->tilt_us = CONTROL_HOME_US;
+    state->step_seen = false;
+    state->last_step_ms = 0;
+    state->pan_us = CONTROL_HOME_PAN_US;
+    state->tilt_us = CONTROL_HOME_TILT_US;
     return true;
 }
 
@@ -137,14 +142,20 @@ static int step_toward(int current, int target)
     return current;
 }
 
-bool control_next_step(control_state_t *state, int *pan_us, int *tilt_us)
+bool control_next_step(control_state_t *state, uint64_t now_ms, int *pan_us, int *tilt_us)
 {
     if (!state->pwm_active) return false;
+    if (state->step_seen &&
+        (now_ms < state->last_step_ms ||
+         now_ms - state->last_step_ms < CONTROL_STEP_PERIOD_MS))
+        return false;
     int next_pan = step_toward(state->pan_us, state->target_pan_us);
     int next_tilt = step_toward(state->tilt_us, state->target_tilt_us);
     if (next_pan == state->pan_us && next_tilt == state->tilt_us) return false;
     state->pan_us = next_pan;
     state->tilt_us = next_tilt;
+    state->step_seen = true;
+    state->last_step_ms = now_ms;
     *pan_us = next_pan;
     *tilt_us = next_tilt;
     return true;

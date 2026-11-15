@@ -1,0 +1,37 @@
+# Copy to manual_aim_measured.yaml only after independently measuring every value.
+# A null field blocks motion. Coordinates and yaw use tag_2_table (metres, degrees).
+# tag_to_pivot_m is expressed in the node tag's local axes.
+# emitter_offset_m is expressed in the laser HOME axes relative to the pivot.
+# pan/tilt_us_per_deg are signed measured pulse gains relative to HOME.
+frame: tag_2_table
+nodes:
+  s1:
+    tag_to_pivot_m: null
+    emitter_offset_m: null
+    home_yaw_deg: null
+    home_elevation_deg: null
+    pan_sign: null
+    tilt_sign: null
+    pan_gain: null
+    tilt_gain: null
+    pan_limits_deg: null
+    tilt_limits_deg: null
+    pan_home_us: 1500
+    tilt_home_us: 1700
+    pan_us_per_deg: null
+    tilt_us_per_deg: null
+  s2:
+    tag_to_pivot_m: null
+    emitter_offset_m: null
+    home_yaw_deg: null
+    home_elevation_deg: null
+    pan_sign: null
+    tilt_sign: null
+    pan_gain: null
+    tilt_gain: null
+    pan_limits_deg: null
+    tilt_limits_deg: null
+    pan_home_us: 1500
+    tilt_home_us: 1700
+    pan_us_per_deg: null
+    tilt_us_per_deg: null
