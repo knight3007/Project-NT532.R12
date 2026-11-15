@@ -441,8 +441,13 @@ class Vision:
             if self.reference_map is None or self.blockers():
                 return np.empty((0, 2))
             refs = np.array([p[:2] for p in self.reference_map.references.values()], np.float32)
-            hull = cv2.convexHull(refs).reshape(-1, 2)
-            return np.array([project((x, y, 0), self.camera) for x, y in hull])
+            hull = cv2.convexHull(refs).reshape(-1, 2).astype(np.float64)
+            # Tâm tag nằm ngay trên đỉnh vùng bao, nên vùng bao trần cắt mất nửa chấm laser khi ngắm vào tag
+            # (từng báo "không thấy vết" dù chấm nằm rõ cạnh tag). Nới ra `floor_margin_m` theo hướng từ tâm.
+            margin = float(self.cfg.get("floor_margin_m", 0.2))
+            c = hull.mean(axis=0)
+            out = hull + margin * (hull - c) / np.maximum(np.linalg.norm(hull - c, axis=1, keepdims=True), 1e-9)
+            return np.array([project((x, y, 0), self.camera) for x, y in out])
         floor = self._floor()
         if floor is None:
             return np.empty((0, 2))

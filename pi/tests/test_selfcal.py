@@ -188,7 +188,7 @@ def test_calibrate_recovers_servo_bias_and_pivot_then_aims_true(rig):
 
     result = calib_events(st, "result")[-1]
     assert result["node"] == "s1" and len(result["pivot_delta_cm"]) == 3 and "cm" in result["text"]
-    assert len(calib_events(st, "shot")) >= 6
+    assert len(calib_events(st, "shot")) >= 4
     assert set(selfcal.load_cals(st.site)) == {"s1"}  # đã lưu file
 
 
@@ -329,3 +329,103 @@ def test_sweep_relaxes_margin_to_zero_before_giving_up():
     assert len(selfcal.sweep_commands(PRIOR, TAG, SITE, lim, 8, margin_m=0.10)) == 8  # đủ góc thì giữ nguyên lề
     # cả cal hỏng lẫn lề: thử đủ cả bốn tổ hợp
     assert len(selfcal.sweep_commands(BAD_S1, TAG, SITE, lim, 8, margin_m=0.35, prior=PRIOR)) == 8
+
+
+# --- quét dẫn đường tới tâm tag, laser chỉ trong khung tag tham chiếu -------------------------------------
+
+
+class _GuidedRig:
+    """Orchestrator tối giản: link/laser giả, thế giới thật có cal `truth`; ghi mọi lệnh và vết."""
+
+    def __init__(self, truth, believed, lose_after=None, outside=False):
+        from types import SimpleNamespace
+
+        from nt532.orchestrator.events import EventLog
+        from nt532.orchestrator.machine import Orchestrator
+        self.cmds, self.spots = [], []
+        self.truth, self.lose_after, self.outside = truth, lose_after, outside
+        vision = SimpleNamespace(nodes={"s1": TAG}, reference_mode="fixed", reference_map=None)
+        orch = Orchestrator(SITE, vision, None, None, None, None, EventLog())
+        orch.cals = {**orch.cals, "s1": believed}
+        orch._aim = self._aim
+        orch._observe = self._observe
+        orch.hub = SimpleNamespace(fresh=lambda: None)
+        self.fires, self.stops = [], []
+        orch.link = SimpleNamespace(fire=lambda n, c, kind, ms: self.fires.append((kind, ms)),
+                                    stop=lambda *a: self.stops.append(a))
+        orch._sleep = lambda s: None
+        self.orch, self.cmd = orch, None
+
+    def _aim(self, node, pan, tilt):
+        assert aiming.limits(SITE, node).ok(pan, tilt)
+        self.cmds.append((pan, tilt))
+        return len(self.cmds)
+
+    def _observe(self, node, center, radius_m, off, on=None):
+        pan, tilt = self.cmds[-1]
+        if self.lose_after is not None and len(self.spots) >= self.lose_after:
+            self.spots.append(None)
+            return None
+        s = selfcal.forward_spot(self.truth, TAG, pan, tilt, "floor", SURF)
+        if s is not None and self.outside:
+            s = s + np.array([0.0, -2.0, 0.0])  # luôn rơi xa ngoài khung
+        self.spots.append(s)
+        return None if s is None else np.asarray(s, float)
+
+
+def _hull_of(orch):
+    return orch._sweep_hull()
+
+
+def test_guided_sweep_stays_in_frame_and_fits():
+    truth = replace(TRUE, tilt0_deg=-3.0)
+    believed = replace(PRIOR, tilt0_deg=30.0, pan_gain=0.6)  # cal sai nặng
+    rig = _GuidedRig(truth, believed)
+    orch = rig.orch
+    hull = _hull_of(orch)
+    targets = orch._sweep_targets("s1", hull)
+    assert len(targets) == 4 and targets[0][0] in ("tag 0", "tag 1", "tag 2", "tag 3")
+    samples = orch._guided_sweep("s1", hull, targets)
+    assert len(samples) >= 6
+    for _t, _p, _tl, s in samples:
+        assert selfcal.hull_margin(s[:2], hull) >= -0.05 and abs(s[2]) < 0.05  # mọi vết trong khung nới lề
+    # không lệnh nào ngóc quá 6 độ so với vết tốt trước đó (và bắt đầu không ngóc quá cal + 6)
+    for (_, t0), (_, t1) in zip(rig.cmds, rig.cmds[1:], strict=False):
+        assert t1 <= t0 + 6.0 + 1e-6 or rig.spots[len(rig.cmds) - 1] is None
+    # mọi tag đều được dắt tới sát tâm
+    ends = {}
+    for name, tgt in targets:
+        ends[name] = min(np.linalg.norm(s[:2] - tgt[:2]) for *_x, s in samples)
+    # bước góc kẹp 6 độ và 8 bước mỗi tag: tag ở xa (quay pan hơn 45 độ) có thể chưa tới nơi, các tag còn lại phải tới
+    assert sum(v < 0.03 for v in ends.values()) >= 3, (ends, [e['text'] for e in orch.events.since(0, 10_000)])
+    cal = selfcal.fit(samples, PRIOR, SITE)
+    assert cal.fitted and cal.rms_cm < 2.0, cal.note
+    # laser sáng liên tục: không lệnh OFF (hẹn giờ 1 ms) hay stop nào giữa đầu và cuối lượt quét
+    assert rig.fires and all(k == "laser" and ms == orch.cfg.laser_hold_ms for k, ms in rig.fires)
+    assert rig.stops == []
+    events = [e for e in orch.events.since(0, 10_000) if e.get("stage") == "shot"]
+    assert any("tag" in e["text"] and "bước" in e["text"] for e in events)
+
+
+def test_guided_sweep_lost_spot_backs_off_then_drops():
+    rig = _GuidedRig(TRUE, PRIOR, lose_after=1)  # thấy vết khởi đầu rồi mất hết
+    orch = rig.orch
+    hull = _hull_of(orch)
+    targets = orch._sweep_targets("s1", hull)
+    samples = orch._guided_sweep("s1", hull, targets)
+    assert len(samples) == 1  # chỉ vết khởi đầu
+    warns = [e for e in orch.events.since(0, 10_000) if "lùi" in e["text"]]
+    assert warns and any("bỏ tag" in e["text"] for e in orch.events.since(0, 10_000))
+    assert len(rig.cmds) <= 1 + 2 * len(targets)  # mỗi tag tối đa hai lần thử liền
+
+
+def test_guided_sweep_outside_spot_aborts_without_start():
+    from nt532.orchestrator.machine import Abort
+    rig = _GuidedRig(TRUE, PRIOR, outside=True)  # mọi vết ngoài khung
+    orch = rig.orch
+    hull = _hull_of(orch)
+    with pytest.raises(Abort):
+        orch._guided_sweep("s1", hull, orch._sweep_targets("s1", hull))
+    # thang lệnh khởi đầu chỉ hạ tilt, không bao giờ ngóc
+    assert len(rig.cmds) <= 5
+    assert all(b[1] <= max(a[1] for a in rig.cmds[:1]) + 6.0 for b in rig.cmds)

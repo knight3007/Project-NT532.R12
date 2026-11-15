@@ -52,10 +52,14 @@ def find_spot_steady(
     kính đó; không có vết hợp lệ trong bán kính (hoặc không có `near`) thì chọn vết sáng và gọn nhất cả vùng
     `mask`. Trả pixel (u, v) theo trọng tâm có trọng số độ sáng, None nếu không còn vết nào."""
     diffs = [cv2.GaussianBlur(cv2.subtract(on[:, :, 2], off[:, :, 2]), (blur, blur), 0) for on in ons]
-    steady = diffs[0]
-    for d in diffs[1:]:
-        steady = np.minimum(steady, d)
+    # Chấm laser thật có thể xê vài pixel giữa hai khung (servo còn rung, nén H.264), nên không AND từng
+    # pixel: giữ pixel vượt ngưỡng ở khung cuối mà ở các khung kia có pixel vượt ngưỡng trong vòng ~4 px.
+    # AND từng pixel từng làm mất chấm rõ ràng trên sa bàn thật (15/11).
+    steady = diffs[-1]
     binary = (steady >= min_rise).astype(np.uint8)
+    near_kernel = np.ones((9, 9), np.uint8)
+    for d in diffs[:-1]:
+        binary &= cv2.dilate((d >= min_rise).astype(np.uint8), near_kernel)
     if mask is not None:
         binary[mask == 0] = 0
     n, labels, stats, _ = cv2.connectedComponentsWithStats(binary, connectivity=8)
