@@ -56,7 +56,14 @@ class Station:
             # sa bàn ảo mặc định tắt: detector giả dùng chung bộ số ngẫu nhiên với kịch bản
             hz = float(self.site["vision"].get("live_detect_hz", 0.0 if self.world is not None else 5.0))
             if hz > 0 and self.live is None:
-                self.live = LiveDetector(self, hz).start()
+                v = self.site["vision"]
+                auto = None
+                if v.get("auto_trigger", self.world is None):  # sa bàn ảo mặc định tắt, trạm thật bật
+                    auto = {"trigger_s": float(v.get("auto_trigger_s", 15.0)),
+                            "gap_s": float(v.get("auto_trigger_gap_s", 0.6)),
+                            "cooldown_s": float(v.get("auto_trigger_cooldown_s", 15.0)),
+                            "conf": float(v.get("detect_conf", 0.35))}
+                self.live = LiveDetector(self, hz, auto=auto).start()
         return self
 
     def stop(self) -> None:

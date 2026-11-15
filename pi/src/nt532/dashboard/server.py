@@ -94,6 +94,7 @@ class Dashboard:
             "board": {"width": st.site["board"]["width"], "height": st.site["board"]["height"]},
             "floor": self._floor_json(),
             "live_fire": self._live_fire(),
+            "auto_trigger": self._auto_trigger(),  # {enabled, seen_s, need_s, next_allowed_in_s} hoặc None
         }
         if st.world is not None:
             out["truth"] = {**st.world.truth(), **self._sim_camera()}
@@ -103,6 +104,10 @@ class Dashboard:
         """Hộp lửa của bộ nhận diện nền còn tươi: [{conf, box, point, surface, age_s}] (rỗng nếu không chạy)."""
         live = getattr(self.st, "live", None)
         return live.latest() if live is not None else []
+
+    def _auto_trigger(self) -> dict | None:
+        live = getattr(self.st, "live", None)
+        return live.auto_status() if live is not None else None
 
     def _draw_live(self, img: np.ndarray) -> None:
         """Vẽ hộp lửa nền: khung cam, độ tin cậy, chấm neo và tọa độ sàn (hoặc "ngoài vùng")."""

@@ -499,6 +499,17 @@ class Orchestrator:
         step_max = float(tc.get("correct_step_max_deg", 20.0))
         radius_m = float(tc.get("correct_search_m", 0.15))
         probe = float(tc.get("correct_probe_deg", 3.0))
+        sweep_on = bool(tc.get("engage_sweep", True))
+        sweep_step = float(tc.get("engage_sweep_step_m", 0.04))
+        dwell_s = float(tc.get("engage_dwell_s", 0.4))
+        serpentine = bool(tc.get("engage_serpentine", False))
+        enter_m = float(tc.get("engage_sweep_enter_m", 0.06))
+        hide_in_sweep = bool(tc.get("engage_sweep_hide_box", False))
+        enter_meas, lost_pts_max = 4, 3
+        escalate_s = float(tc.get("engage_escalate_s", 30.0))
+        escalated = len(nozzles) > 1 or escalate_s <= 0  # chỉ gọi thêm vòi một lần, và chỉ khi lượt đang dùng một vòi
+        pivots = dict(pivots)
+        sec_pts: dict[str, np.ndarray] = {}  # điểm vòi phụ đang ngắm (dự đoán chấm của nó) để loại khỏi phép đo
 
         target = np.asarray(target, float)
         tgt = target.copy()  # đích đang bám (lửa có thể xê dịch)
@@ -507,6 +518,8 @@ class Orchestrator:
         run.attempts = 1
         self._use(run, nozzles)
         self._set(Phase.ENGAGE, "ngắm, bật laser" + (" và bơm" if self._has_pump() else ""), active=nozzles)
+        with self._lock:
+            self.overlay["engage"] = {}  # bỏ lưới quét của lượt trước
         self._engage_state("aiming", None, 0.0, 0.0)
 
         cmds: dict[str, int] = {}
@@ -544,6 +557,8 @@ class Orchestrator:
         center, prev = tgt.copy(), None
         hit_s, miss_cm, state, box = 0.0, None, "aiming", None
         conf_hist: list = []
+        extra: dict = {}
+        mode, n_meas, bias, sw, passes, lost_pts = "approach", 0, np.zeros(2), None, 0, 0
         pool, pending, attempt, next_verify = ThreadPoolExecutor(1), None, 1, t0 + verify_s
         outcome = None
         try:
@@ -554,6 +569,10 @@ class Orchestrator:
                     self.events.emit("engage", f"quá {timeout_s:g} s: gọi người", level="warn")
                     outcome = "human"
                     break
+                if not escalated and now - t0 >= escalate_s:
+                    escalated = True
+                    self._escalate(run, nozzles, node, tgt if mode != "sweep" else sw["pts"][(sw["i"] + 4) % len(sw["pts"])][2],
+                                   pivots, cmds, pump, hold_s, sec_pts)
                 for n in nozzles:  # gia hạn: laser mỗi chu kỳ, bơm khi hẹn giờ còn dưới 30%
                     self._laser_on(n, cmds[n])
                 if pump and now - last_pump > 0.7 * hold_s:
@@ -576,11 +595,87 @@ class Orchestrator:
                     conf_hist.append(round(float(t.detection.conf), 2))
                 else:
                     conf_hist.append(None)
-                self._fire_box = box if surface == "floor" else None
-                # bám tia
-                spot = self._observe(node, center, radius_m * (2 if prev is None else 1), off, on=frame)
+                self._fire_box = box if surface == "floor" and (mode == "approach" or hide_in_sweep) else None
                 dt, last_t = now - last_t, now
-                if spot is None:
+                if mode == "sweep":
+                    # quét vùng cháy: mỗi điểm chuyển, chờ ổn định, đo một lần, rồi dừng `dwell_s`
+                    if sw["phase"] == "dwell" and self.clock() - sw["t_arrive"] >= dwell_s:
+                        sw["i"] += 1
+                        sw["phase"] = "move"
+                        if sw["i"] >= len(sw["pts"]):  # hết lưới: dựng lại vùng theo hộp lửa mới nhất
+                            passes += 1
+                            nsw = self._new_pass(node, pivots[node], box, passes, sweep_step, serpentine)
+                            if nsw is None:
+                                mode, n_meas, prev, center = "approach", 0, None, tgt.copy()
+                                self.events.emit("engage", "không dựng lại được vùng cháy: về dắt vào điểm neo")
+                            else:
+                                sw = nsw
+                    if mode == "sweep" and sw["phase"] == "move":
+                        P = sw["pts"][sw["i"]][2]
+                        c = np.array([min(max(v, lo), hi) for v, (lo, hi) in
+                                      zip(np.array(self._cmd(node, pivots[node], P), float) + bias,
+                                          (lim.pan, lim.tilt))])
+                        cmds[node] = self._aim(node, *c)  # chờ reached rồi mới đo: không đo lúc đang chuyển
+                        self._laser_on(node, cmds[node])
+                        self._sleep(self.cfg.laser_settle_s)
+                        spot = self._observe(node, P, radius_m * (2 if sw["first"] else 1), off)
+                        sw["first"] = False
+                        sec_then = list(sec_pts.values())  # chấm vòi phụ lúc đo (trước khi nó chuyển sang điểm mới)
+                        if len(nozzles) > 1:  # vòi phụ đi trước vòi chính 4 điểm của lưới (gần nửa hàng, chấm cách >= 12 cm; không đo vết của nó)
+                            nxt = sw["pts"][(sw["i"] + 4) % len(sw["pts"])][2]
+                            for n2 in nozzles[1:]:
+                                self._aim_extra(n2, pivots[n2], nxt, cmds, nozzles, sec_pts)
+                        sw["t_arrive"], sw["phase"], sw["hit"] = self.clock(), "dwell", False
+                        # hai chấm laser: vết sát chấm vòi phụ (gần nó hơn gần điểm quét, trong 8 cm) có thể là chấm
+                        # của vòi phụ, không phân biệt được thì bỏ lần đo, giữ bù đã học, không tính là mất vết
+                        ambiguous = False
+                        if spot is not None and sec_then:
+                            d_sec = min(float(np.linalg.norm(spot[:2] - q[:2])) for q in sec_then)
+                            ambiguous = d_sec < 0.08 and d_sec < float(np.linalg.norm(spot[:2] - P[:2]))
+                        if ambiguous:
+                            self.events.emit("vision", f"vết sát chấm vòi phụ ({d_sec * 100:.0f} cm), bỏ lần đo này, cách điểm quét {float(np.linalg.norm(spot[:2] - P[:2])) * 100:.0f} cm", level="warn")
+                        elif spot is None:
+                            lost_pts += 1
+                            sw["state"], miss_cm = "lost", None
+                            run.shots.append({"round": len(run.shots) + 1, "miss_cm": None, "nozzle": node,
+                                              "t": round(now - t0, 2)})
+                            if lost_pts > lost_pts_max:
+                                mode, n_meas, prev, center, lost_pts = "approach", 0, None, tgt.copy(), 0
+                                self.events.emit("engage", f"mất vết quá {lost_pts_max} điểm: về dắt vào điểm neo",
+                                                 level="warn")
+                        else:
+                            lost_pts, last_seen = 0, now
+                            self._learn(node, tag, (float(c[0]), float(c[1])), spot)
+                            e = P - spot
+                            miss_cm = float(np.linalg.norm(e) * 100)  # lệch so với điểm quét, không phải điểm neo
+                            if prev is not None:  # Broyden: học J từ các bước nhảy giữa điểm quét
+                                dc, ds = c - prev[0], spot[idx] - prev[1]
+                                if float(dc @ dc) > 0.02**2:
+                                    J = J + np.outer(ds - J @ dc, dc) / float(dc @ dc)
+                            prev = (c.copy(), spot[idx].copy())
+                            if not self._ill(J):  # phần bù đã học: điểm quét sau dùng lệnh mô hình + bù
+                                db = gain * np.linalg.solve(J, e[idx])
+                                n_db = float(np.linalg.norm(db))
+                                bias = bias + (db * (step_max / n_db) if n_db > step_max else db)
+                            sw["hit"] = zone_contains(sw["zone"], spot, tol_cm / 100)
+                            sw["state"] = "on_target" if sw["hit"] else "aiming"
+                            run.shots.append({"round": len(run.shots) + 1, "miss_cm": round(miss_cm, 2),
+                                              "nozzle": node, "t": round(now - t0, 2)})
+                            self._mark("spots", node, spot)
+                            if sw["hit"]:
+                                hit_s += dt
+                    elif mode == "sweep" and sw.get("hit"):
+                        hit_s += dt  # đứng yên ở điểm đã đo trúng: tiếp tục tính trúng
+                    if mode == "sweep":
+                        state = sw["state"]
+                        extra = {"row": sw["pts"][sw["i"]][0], "col": sw["pts"][sw["i"]][1]}
+                        spot = False  # đã xử lý xong, bỏ qua nhánh bám tia điểm neo
+                # bám tia (dắt vào điểm neo; cũng là chế độ cũ khi không quét)
+                if mode == "approach":
+                    spot = self._observe(node, center, radius_m * (2 if prev is None else 1), off, on=frame)
+                if spot is False:  # nhánh quét đã xử lý xong khung này
+                    pass
+                elif spot is None:
                     state = "lost"
                     miss_cm = None
                     run.shots.append({"round": len(run.shots) + 1, "miss_cm": None, "nozzle": node,
@@ -623,11 +718,21 @@ class Orchestrator:
                             c = c_new
                             cmds[node] = self._aim(node, *c)
                             self._laser_on(node, cmds[node])
+                    n_meas += 1
+                    # đủ gần điểm neo (hoặc đã đo đủ lần): chuyển sang quét vùng cháy (chỉ bia trên sàn)
+                    if sweep_on and surface == "floor" and box is not None \
+                            and (miss_cm < enter_m * 100 or n_meas >= enter_meas):
+                        nsw = self._new_pass(node, pivots[node], box, passes, sweep_step, serpentine)
+                        if nsw is not None:
+                            mode, lost_pts = "sweep", 0
+                            bias = c - np.array(self._cmd(node, pivots[node], tgt), float)  # bù đã học khi dắt vào
+                            sw = nsw
+                            self.events.emit("engage", f"vết lệch {miss_cm:.1f} cm: bắt đầu quét vùng cháy")
                 fwd = self._forward(node, pivots[node], surface, c)
                 self._mark("aims", node, tgt if fwd is None else fwd)
                 self._mark_target(tgt)
                 clear = now - last_fire
-                self._engage_state(state, miss_cm, hit_s, clear)
+                self._engage_state(state, miss_cm, hit_s, clear, extra if mode == "sweep" else None)
                 if now - last_log >= 1.0:
                     last_log = now
                     self.events.emit("engage", f"{state}: lệch " + ("?" if miss_cm is None else f"{miss_cm:.1f}")
@@ -689,11 +794,102 @@ class Orchestrator:
             self._set(Phase.HUMAN, f"sau {self.clock() - t0:.0f} s phun")
         return outcome
 
-    def _engage_state(self, state: str, miss_cm, hit_s: float, clear_s: float) -> None:
-        """Trạng thái con của ENGAGE cho dashboard; ghi sự kiện `engage` khi đổi trạng thái."""
-        prev = self.overlay.get("engage", {}).get("state")
+    def _aim_extra(self, n: str, pivot, point, cmds: dict, nozzles: list, sec_pts: dict) -> bool:
+        """Vòi phụ ngắm `point` theo mô hình (không đo vết), laser sáng liên tục. Lỗi link thì bỏ vòi phụ."""
+        lim = aiming.limits(self.site, n)
+        c = [min(max(v, lo), hi) for v, (lo, hi) in zip(self._cmd(n, pivot, point), (lim.pan, lim.tilt))]
+        try:
+            cmds[n] = self._aim(n, *c)
+            self._laser_on(n, cmds[n])
+            sec_pts[n] = np.asarray(point, float).copy()
+            return True
+        except LinkError as e:
+            self.events.emit("safety", f"vòi phụ {n} hỏng ({e}), bỏ vòi này", level="warn")
+            self._drop_laser(n)
+            sec_pts.pop(n, None)
+            if n in nozzles:
+                nozzles.remove(n)
+            return False
+
+    def _escalate(self, run, nozzles: list, node: str, tgt, pivots: dict, cmds: dict, pump: bool, hold_s: float,
+                  sec_pts: dict):
+        """Lửa chưa tắt sau `engage_escalate_s`: gọi thêm vòi còn lại nếu khỏe (heartbeat, pose) và không bị chặn.
+        Vòi phụ ngắm theo mô hình vào điểm neo, laser (và bơm) sáng liên tục; chỉ vòi chính đo vết và bám tia."""
+        escalate_s = float(self.tcfg.get("engage_escalate_s", 30.0))
+        others = [n for n in NOZZLES if n not in nozzles]
+        if not others:
+            return
+        other = others[0]
+        tag = self._tag(other)
+        if other not in pivots and tag is not None:
+            pivots[other] = self.cal(other).pivot_world(tag)
+        reasons = self._not_ready(other)
+        reasons += [r for r in self._blocked(other, tgt, pivots) if r not in reasons]
+        if reasons:
+            self.events.emit("engage", f"lửa chưa tắt sau {escalate_s:g} s nhưng không gọi thêm vòi {other}: "
+                                       + "; ".join(reasons), level="warn")
+            return
+        nozzles.append(other)
+        if not self._aim_extra(other, pivots[other], tgt, cmds, nozzles, sec_pts):
+            return
+        if pump:
+            self.link.fire(other, cmds[other], "pump", self.acfg["fire_ms"])
+        self._use(run, nozzles)
+        with self._lock:
+            self.overlay["active"] = list(nozzles)
+        self.events.emit("engage", f"lửa chưa tắt sau {escalate_s:g} s, gọi thêm vòi {other}")
+
+    def _new_pass(self, node: str, pivot, box, passno: int, step: float, serpentine: bool) -> dict | None:
+        """Dựng một lượt quét từ hộp lửa mới nhất `box` (u, v, w, h): chiếu hai góc ĐÁY hộp xuống sàn bằng
+        `vision.localize` được bề ngang và mép gần (không chiếu góc trên: ngọn lửa cao, chiếu xuống sẽ ra quá xa).
+        Mép xa = mép gần + `engage_depth_ratio` x bề ngang, theo hướng từ vòi tới lửa; cả hai kích thước kẹp
+        [4, 40] cm. Ghi overlay `engage.pattern` và sự kiện `engage`. None nếu không chiếu được (vision giả, góc
+        rơi ngoài sàn): khi đó giữ chế độ bám một điểm."""
+        loc = getattr(self.vision, "localize", None)
+        if loc is None or box is None:
+            return None
+        u, v, w, h = box
+        try:
+            left, right = loc((u - w / 2, v + h / 2)), loc((u + w / 2, v + h / 2))
+        except Exception as e:  # noqa: BLE001 - chiếu lỗi thì quay về một điểm neo
+            self.events.emit("vision", f"không chiếu được vùng cháy: {e}", level="warn")
+            return None
+        if left is None or right is None:
+            return None
+        left, right = np.asarray(left, float), np.asarray(right, float)
+        m = (left + right) / 2
+        fwd = m[:2] - np.asarray(pivot, float)[:2]
+        if float(np.linalg.norm(fwd)) < 1e-6:
+            return None
+        fwd = fwd / np.linalg.norm(fwd)
+        right_v = np.array([fwd[1], -fwd[0]])  # bên phải khi nhìn từ vòi về lửa (z hướng lên)
+
+        def clamp(x):
+            return min(max(float(x), ZONE_MIN_M), ZONE_MAX_M)
+
+        width = clamp(abs(float((right - left)[:2] @ right_v)))
+        depth = clamp(float(self.tcfg.get("engage_depth_ratio", 0.6)) * width)
+        zone = {"m": np.array([m[0], m[1], 0.0]), "fwd": fwd, "right": right_v, "width": width, "depth": depth}
+        pts = sweep_pattern(zone, step, serpentine)
+        rows, cols = pts[-1][0] + 1, max(c for _, c, _ in pts) + 1
+        with self._lock:
+            self.overlay["engage"] = {**self.overlay.get("engage", {}), "rows": rows, "cols": cols,
+                                      "pattern": [[round(float(p[0]), 3), round(float(p[1]), 3)] for _, _, p in pts],
+                                      "zone_cm": [round(width * 100, 1), round(depth * 100, 1)]}
+        self.events.emit("engage", f"lượt quét {passno + 1}: {rows} hàng x {cols} cột, vùng "
+                                   f"{width * 100:.0f} x {depth * 100:.0f} cm")
+        return {"zone": zone, "pts": pts, "i": 0, "phase": "move", "first": True, "hit": False,
+                "state": "aiming", "t_arrive": 0.0}
+
+    def _engage_state(self, state: str, miss_cm, hit_s: float, clear_s: float, extra: dict | None = None) -> None:
+        """Trạng thái con của ENGAGE cho dashboard; ghi sự kiện `engage` khi đổi trạng thái. `extra`: hàng/cột
+        đang quét; lưới (`pattern`, `rows`, `cols`) giữ lại từ lần dựng lượt quét."""
+        old = self.overlay.get("engage", {})
+        prev = old.get("state")
         info = {"state": state, "miss_cm": None if miss_cm is None else round(miss_cm, 1),
                 "hit_s": round(hit_s, 1), "clear_s": round(clear_s, 1)}
+        info.update({k: old[k] for k in ("pattern", "rows", "cols", "zone_cm") if k in old})
+        info.update(extra or {})
         with self._lock:
             self.overlay["engage"] = info
         if prev is not None and prev != state:
@@ -1136,6 +1332,171 @@ class Orchestrator:
             reasons.append(f"chưa có pose của {node}")
         return reasons
 
+    def _sweep_refs(self) -> dict:
+        """Tâm (x, y) các tag tham chiếu trên sàn: auto lấy từ bản đồ tag đang nhìn thấy, fixed lấy từ
+        site["tags"]["reference"]["positions"]."""
+        rmap = getattr(self.vision, "reference_map", None)
+        if getattr(self.vision, "reference_mode", "fixed") == "auto":
+            return {} if rmap is None else {i: np.asarray(p, float)[:2] for i, p in rmap.references.items()}
+        pos = (self.site.get("tags", {}).get("reference", {}) or {}).get("positions", {}) or {}
+        return {i: np.asarray(p, float)[:2] for i, p in pos.items() if p is not None}
+
+    def _sweep_hull(self) -> np.ndarray:
+        """Vùng bao lồi (k x 2) của các tag tham chiếu; rỗng nếu chưa đủ 3 tag."""
+        return selfcal.convex_hull(list(self._sweep_refs().values()))
+
+    def _sweep_targets(self, node: str, hull: np.ndarray) -> list:
+        """Đích quét: tâm từng tag tham chiếu (tag gần vòi trước), cộng tâm tag node khác nếu nằm trên sàn và
+        trong khung (nới lề). Mỗi đích là (tên, điểm 3D)."""
+        tag = self._tag(node)
+        base = np.asarray(self.cal(node).pivot_world(tag), float)[:2]
+        outside = float(self.scfg.get("sweep_outside_m", 0.05))
+        cand = [(f"tag {i}", np.array([*p, 0.0])) for i, p in self._sweep_refs().items()]
+        for n in NOZZLES:
+            t = self._tag(n)
+            if n != node and t is not None and getattr(t, "position", None) is not None:
+                q = np.asarray(t.position, float)
+                if abs(q[2]) <= 0.03 and selfcal.hull_margin(q[:2], hull) >= -outside:
+                    cand.append((f"tag {getattr(t, 'tag_id', n)}", np.array([q[0], q[1], 0.0])))
+        return sorted(cand, key=lambda t: float(np.linalg.norm(t[1][:2] - base)))
+
+    def _guided_sweep(self, node: str, hull: np.ndarray, targets: list) -> list:
+        """Quét dẫn đường tới tâm từng tag (`targets`: [(tên, điểm 3D)], gần vòi trước); laser chỉ đi trong khung tag tham chiếu
+        (`hull`, nới `selfcal.sweep_outside_m` = 0,05).
+        1) Điểm đầu: lệnh tới tâm khung theo cal hiện tại (bỏ qua nếu cal vô lý); không có vết trong khung thì
+        thử số mồi (`NodeCal.from_site`) rồi hạ tilt 5, 10, 15 độ quanh pan đó; không bao giờ nâng tilt khi chưa
+        có vết. 2) Từ vết đã thấy, đi tới từng đích bằng visual servoing (J từ mô hình, cập nhật Broyden, tối đa
+        `selfcal.sweep_max_steps` = 8 bước mỗi tag, dừng khi lệch dưới 1,5 cm, kẹp `selfcal.sweep_step_max_deg` = 6 độ). Mỗi vết đo được là một mẫu. 3) Vết ra ngoài khung hoặc mất
+        vết: về lệnh tốt gần nhất, giảm nửa bước, hai lần liền thì bỏ đích. Tilt không bao giờ vượt tilt lệnh tốt
+        gần nhất quá 6 độ. Trả danh sách mẫu (tag, pan, tilt, vết)."""
+        sc = self.scfg
+        step_max = float(sc.get("sweep_step_max_deg", 6.0))
+        outside = float(sc.get("sweep_outside_m", 0.05))
+        lim = aiming.limits(self.site, node)
+        tag = self._tag(node)
+        prior = NodeCal.from_site(self.site, node)
+        centre = np.array([*hull.mean(axis=0), 0.0])
+        samples: list = []
+        good: list = [None]  # [(c, spot)] của vết tốt gần nhất
+
+        def clamp(c, tilt_cap):
+            return np.array([min(max(float(c[0]), lim.pan[0]), lim.pan[1]),
+                             min(max(float(c[1]), lim.tilt[0]), min(lim.tilt[1], tilt_cap))])
+
+        def in_region(spot, tol):
+            return spot is not None and abs(float(spot[2])) <= 0.05 and selfcal.hull_margin(spot[:2], hull) >= -tol
+
+        radius_m = float(self.tcfg.get("correct_search_m", 0.15))
+        self._sleep(self.cfg.laser_settle_s)
+        off = self.hub.fresh()  # khung nền: laser tắt, chụp một lần trước khi bật
+
+        def shoot(c, center=None):
+            """Ngắm c (laser đang sáng liên tục, không tắt giữa các lần đo), chờ ổn định, đo vết bằng hai khung bật
+            quanh `center` (None: cả ảnh); thêm mẫu nếu thấy. Trả vết hoặc None."""
+            if not self._queue.empty():
+                raise Abort("có cảnh báo, nhường cho xử lý cháy")
+            cmd = self._aim(node, float(c[0]), float(c[1]))
+            self._laser_on(node, cmd)  # lần đầu bật, các lần sau gia hạn (lệnh mới thay lệnh cũ, không OFF)
+            self._sleep(self.cfg.laser_settle_s)
+            spot = self._observe(node, center, radius_m, off)
+            if spot is None:
+                self.events.emit("vision", "không thấy vết laser", level="warn")
+                return None
+            spot = np.asarray(spot, float)
+            if self._duplicate_spot(samples, float(c[0]), float(c[1]), spot):
+                self.events.emit("calib", f"{node}: bỏ vết ({spot[0]:.3f}, {spot[1]:.3f}) trùng vết cũ dù lệnh khác "
+                                 "(servo không quay hoặc khung cũ)", level="warn", node=node)
+                return None
+            samples.append((self._tag(node), float(c[0]), float(c[1]), spot))
+            return spot
+
+        # 1) điểm khởi đầu an toàn
+        starts = []
+        if not selfcal.cal_violations(self.cal(node), prior, self.site):
+            starts.append(("cal", np.array(selfcal.command_for(self.cal(node), tag, centre), float)))
+        else:
+            self.events.emit("calib", f"{node}: cal hiện tại vô lý, bắt đầu từ số mồi", level="warn", node=node)
+        pc = np.array(selfcal.command_for(prior, tag, centre), float)
+        starts.append(("số mồi", pc))
+        starts += [(f"số mồi hạ tilt {d} độ", pc - [0.0, d]) for d in (5, 10, 15)]
+        tilt_cap = starts[0][1][1] + 6.0
+        tried: list = []
+        for label, c0 in starts:
+            c = clamp(c0, tilt_cap)
+            if any(np.linalg.norm(c - t) < 0.5 for t in tried):
+                continue
+            tried.append(c)
+            spot = shoot(c)
+            if in_region(spot, 0.0):
+                good[0] = (c, spot)
+                self.events.emit("calib", f"{node}: điểm khởi đầu ({label}) lệnh ({c[0]:+.1f}, {c[1]:+.1f}) vết "
+                                 f"({spot[0]:.3f}, {spot[1]:.3f})", node=node, stage="shot", index=0)
+                break
+            self.events.emit("calib", f"{node}: điểm khởi đầu ({label}) lệnh ({c[0]:+.1f}, {c[1]:+.1f}) "
+                             + ("không thấy vết" if spot is None else f"vết ({spot[0]:.3f}, {spot[1]:.3f}) ngoài khung"),
+                             level="warn", node=node)
+        if good[0] is None:
+            raise Abort("không tìm được vết laser trong khung tag tham chiếu, dừng quét")
+
+        # 2) đi tới từng đích
+        max_steps = int(sc.get("sweep_max_steps", 8))
+        remaining = list(targets)
+        for k in range(1, len(targets) + 1):
+            # tag đầu là tag gần vòi nhất (thứ tự của `targets`), các tag sau chọn tag gần vết hiện tại nhất
+            if k == 1:
+                tname, target = remaining.pop(0)
+            else:
+                j = int(np.argmin([np.linalg.norm(t[1][:2] - good[0][1][:2]) for t in remaining]))
+                tname, target = remaining.pop(j)
+            c, s = good[0][0].copy(), good[0][1].copy()
+            J = self._model_jacobian(node, None, "floor", [0, 1], c, target)
+            scale, fails, steps, dropped = 1.0, 0, 0, False
+            for _ in range(max_steps):
+                e = target[:2] - s[:2]
+                if float(np.linalg.norm(e)) < 0.015:
+                    break
+                if J is None or self._ill(J):
+                    dc = np.array(self._cmd(node, None, target), float) - c
+                else:
+                    dc = np.linalg.solve(J, e)
+                n = float(np.linalg.norm(dc))
+                lim_step = step_max * scale
+                if n > lim_step:
+                    dc = dc * (lim_step / n)
+                c_new = clamp(c + dc, good[0][0][1] + 6.0)
+                if float(np.linalg.norm(c_new - c)) < 0.02:
+                    break
+                steps += 1
+                center = None
+                if J is not None and not self._ill(J):
+                    center = np.array([*(s[:2] + J @ (c_new - c)), 0.0])
+                spot = shoot(c_new, center if center is not None else target)
+                if not in_region(spot, outside):
+                    fails += 1
+                    scale /= 2
+                    self.events.emit("calib", f"{node}: {tname} bước {steps} "
+                                     + ("mất vết" if spot is None else f"vết ({spot[0]:.3f}, {spot[1]:.3f}) ngoài khung")
+                                     + ", lùi về lệnh tốt gần nhất", level="warn", node=node)
+                    if fails >= 2:
+                        dropped = True
+                        break
+                    c, s = good[0][0].copy(), good[0][1].copy()
+                    continue
+                fails = 0
+                if J is not None:  # Broyden: J khớp cặp (dc, ds) vừa đo
+                    dcm, ds = c_new - c, spot[:2] - s[:2]
+                    if float(dcm @ dcm) > 0.02**2:
+                        J = J + np.outer(ds - J @ dcm, dcm) / float(dcm @ dcm)
+                c, s = c_new, spot.copy()
+                good[0] = (c.copy(), s.copy())
+            miss = float(np.linalg.norm(target[:2] - good[0][1][:2]))
+            self.events.emit("calib", f"{node}: {tname} ({target[0]:.2f}, {target[1]:.2f}) "
+                             + ("bỏ tag: vết ra ngoài khung hoặc mất vết hai lần liền" if dropped else f"vết ({good[0][1][0]:.3f}, {good[0][1][1]:.3f}), "
+                                f"lệch cuối {miss * 100:.1f} cm, {steps} bước"),
+                             node=node, stage="shot", index=k, steps=steps, dropped=dropped,
+                             miss_cm=None if dropped else round(miss * 100, 2))
+        return samples
+
     def calibrate(self, node: str) -> dict:
         """Quét hiệu chuẩn một vòi: bắn laser tới vài góc, đo vết, khớp và lưu. Chỉ chạy lúc IDLE, orchestrator
         bật, vòi sẵn sàng; nhường (bỏ quét) khi có cảnh báo hoặc dừng khẩn cấp. Trả {"ok", "reason", ...}.
@@ -1163,39 +1524,16 @@ class Orchestrator:
             if why := self._not_ready(node):
                 return fail("; ".join(why))
             self._abort.clear()
-            tag = self._tag(node)
-            # cal hiện tại hỏng thì không chọn nổi góc: sweep_commands tự lùi về số mồi của site
-            cmds = selfcal.sweep_commands(self.cal(node), tag, self.site, aiming.limits(self.site, node),
-                                          int(self.scfg.get("sweep_points", 8)),
-                                          prior=NodeCal.from_site(self.site, node))
-            if len(cmds) < 3:
-                return fail(f"chỉ chọn được {len(cmds)} góc quét trong vùng nhìn thấy")
-            self.events.emit("calib", f"{node}: bắt đầu quét {len(cmds)} góc", node=node, stage="start",
-                             points=len(cmds))
-            samples = []
-            for k, (pan, tilt) in enumerate(cmds, 1):
-                if not self._queue.empty():
-                    return fail("có cảnh báo, nhường cho xử lý cháy")
-                tag = self._tag(node)
-                cmd = self._aim(node, pan, tilt)
-                spot = self._laser_spot(node, cmd)
-                if spot is None:
-                    self.events.emit("calib", f"{node}: góc {k}/{len(cmds)} không thấy vết", level="warn",
-                                     node=node, stage="shot", index=k, miss_cm=None)
-                    continue
-                if dup := self._duplicate_spot(samples, pan, tilt, spot):
-                    self.events.emit("calib", f"{node}: góc {k}/{len(cmds)} ({pan:+.1f}, {tilt:+.1f}) bỏ vết "
-                                     f"({spot[0]:.3f}, {spot[1]:.3f}): trùng vết của góc ({dup[0]:+.1f}, "
-                                     f"{dup[1]:+.1f}) dù lệnh khác (servo không quay hoặc khung cũ)",
-                                     level="warn", node=node, stage="shot", index=k, miss_cm=None)
-                    continue
-                samples.append((tag, pan, tilt, spot))
-                pred = selfcal.predict_spot(self.cal(node), tag, pan, tilt, selfcal.surfaces_of(self.site), 0.1)
-                miss = None if pred is None else round(float(np.linalg.norm(pred - spot)) * 100, 2)
-                self.events.emit("calib", f"{node}: góc {k}/{len(cmds)} ({pan:+.1f}, {tilt:+.1f}) vết "
-                                 f"({spot[0]:.3f}, {spot[1]:.3f}, {spot[2]:.3f})"
-                                 + ("" if miss is None else f", lệch dự đoán {miss:.1f} cm"),
-                                 node=node, stage="shot", index=k, miss_cm=miss)
+            hull = self._sweep_hull()
+            if len(hull) < 3:
+                return fail("không có khung tag tham chiếu (cần ít nhất 3 tag) để giới hạn vùng quét laser")
+            targets = self._sweep_targets(node, hull)
+            if len(targets) < 3:
+                return fail(f"chỉ chọn được {len(targets)} tag làm đích quét")
+            self.events.emit("calib", f"{node}: bắt đầu quét dẫn đường tới {len(targets)} tag: "
+                             + ", ".join(t[0] for t in targets),
+                             node=node, stage="start", points=len(targets))
+            samples = self._guided_sweep(node, hull, targets)
             if len(samples) < 3:
                 return fail(f"chỉ thấy {len(samples)} vết laser")
             self._cal_samples[node].clear()  # quét mới thay mẫu cũ (vòi có thể đã dời)
@@ -1214,6 +1552,7 @@ class Orchestrator:
         finally:
             if self._cal_state[node] == "sweeping":
                 self._cal_state[node] = "ok" if self.cals[node].fitted else "idle"
+            self._lit = self._lit - {node}  # laser chỉ tắt ở đây: xong lượt quét, dừng hoặc lỗi
             self.link.stop(node)
 
     # --- tiện ích ---------------------------------------------------------------------------
@@ -1263,6 +1602,35 @@ def _point_json(point, surface: str) -> dict:
     """Điểm 3D cho dashboard và log: x, y, z (m) và mặt ("wall" | "floor")."""
     return {"x": round(float(point[0]), 3), "y": round(float(point[1]), 3),
             "z": round(float(point[2]), 3), "surface": surface}
+
+
+ZONE_MIN_M, ZONE_MAX_M = 0.04, 0.40  # kẹp bề ngang và chiều sâu vùng cháy
+
+
+def sweep_pattern(zone: dict, step: float, serpentine: bool = False) -> list[tuple[int, int, np.ndarray]]:
+    """Lưới quét vùng cháy: [(hàng, cột, điểm 3D)], hàng từ mép gần ra mép xa, mỗi hàng từ trái sang phải
+    (nhìn từ vòi về lửa). `serpentine`: hàng lẻ đi ngược (phải sang trái); `cột` vẫn là vị trí ngang."""
+    step = max(float(step), 1e-3)
+    rows = max(1, round(zone["depth"] / step) + 1)
+    cols = max(1, round(zone["width"] / step) + 1)
+    depths = np.linspace(0.0, zone["depth"], rows) if rows > 1 else np.zeros(1)
+    lats = np.linspace(-zone["width"] / 2, zone["width"] / 2, cols) if cols > 1 else np.zeros(1)
+    m, fwd, right = np.asarray(zone["m"], float), np.asarray(zone["fwd"], float), np.asarray(zone["right"], float)
+    out = []
+    for r, b in enumerate(depths):
+        order = range(cols - 1, -1, -1) if serpentine and r % 2 else range(cols)
+        for c in order:
+            p = m.copy()
+            p[:2] = m[:2] + b * fwd + lats[c] * right
+            out.append((r, c, p))
+    return out
+
+
+def zone_contains(zone: dict, p, tol: float = 0.0) -> bool:
+    """Điểm `p` (x, y) nằm trong vùng cháy (nới `tol` mét mọi phía)."""
+    d = np.asarray(p, float)[:2] - np.asarray(zone["m"], float)[:2]
+    a, b = float(d @ np.asarray(zone["right"], float)), float(d @ np.asarray(zone["fwd"], float))
+    return abs(a) <= zone["width"] / 2 + tol and -tol <= b <= zone["depth"] + tol
 
 
 def _track_json(t) -> dict:
