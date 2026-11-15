@@ -111,6 +111,7 @@ COMMANDS: dict[str, tuple[dict, tuple, bool]] = {
                  "tau": _num(0, 1), "stages": _regex(r"[a-z_,]{1,60}"), "url": _url, "timeout": _num(0.1, 30)},
                 ("kind",), False),
     "calibrate": ({"node": _choice("all", *NODES)}, (), False),
+    "test_alert": ({"node": _choice(*NODES)}, ("node",), False),
     "manual": ({"node": _choice(*NODES), "op": _choice("status", "arm", "home", "move", "laser", "stop", "mark"),
                 "pan_us": _int(500, 2500), "tilt_us": _int(500, 2500), "on": _bool, "note": _note},
                ("node", "op"), False),

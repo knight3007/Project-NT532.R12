@@ -13,15 +13,38 @@ import json
 import logging
 import os
 import secrets
+import tempfile
 import threading
+import time
 import urllib.error
 import urllib.request
+from pathlib import Path
 
 from .server import _clean, _default
 
 log = logging.getLogger("nt532.push")
 MAX_BACKOFF = 10.0
 JPEG_QUALITY = 70
+
+
+def alive_path() -> Path:
+    """File nhịp tim: trạm chạm vào mỗi lần đẩy hình thành công để `push_camera.py` nhường nguồn hình."""
+    return Path(os.environ.get("NT532_STATION_ALIVE") or Path(tempfile.gettempdir()) / "nt532-station-frames.alive")
+
+
+def frame_delay(period: float, elapsed: float) -> float:
+    """Chờ phần còn lại của chu kỳ sau khi đã tốn `elapsed` giây xử lý, để đạt gần đúng frame_fps."""
+    return max(0.0, period - elapsed)
+
+
+def shrink_to_width(img, max_width: int):
+    """Thu ảnh về chiều rộng tối đa `max_width` (giữ tỉ lệ, INTER_AREA); 0 hoặc ảnh đã nhỏ hơn thì giữ nguyên."""
+    h, w = img.shape[:2]
+    if max_width <= 0 or w <= max_width:
+        return img
+    import cv2  # import lười như _run_frames
+
+    return cv2.resize(img, (max_width, max(1, round(h * max_width / w))), interpolation=cv2.INTER_AREA)
 
 
 def _read_json(resp) -> dict:
@@ -62,8 +85,9 @@ class ControlPusher:
         self.endpoint = url.rstrip("/") + "/api/pi/push"
         self.frame_endpoint = url.rstrip("/") + "/api/pi/frame"
         if frame_fps is None:
-            frame_fps = float(os.environ.get("NT532_CONTROL_FPS", "2"))
+            frame_fps = float(os.environ.get("NT532_CONTROL_FPS", "10"))
         self.frame_fps = frame_fps  # 0 = không đẩy hình
+        self.frame_width = int(os.environ.get("NT532_CONTROL_WIDTH", "1280"))  # 0 = giữ nguyên độ phân giải
         self._token = token
         self.period = period
         self.timeout = timeout
@@ -154,18 +178,24 @@ class ControlPusher:
         delay = 0.0
         while not self._stop.wait(delay):
             delay = period
+            t0 = time.monotonic()
             try:
                 seq = self.dash.st.hub.latest()[0]
                 if seq == last_seq:
                     continue
-                img = self.dash.frame()
+                img = self.dash.frame()  # annotate trên ảnh gốc để tọa độ overlay đúng
                 if img is None:
                     continue
+                img = shrink_to_width(img, self.frame_width)
                 ok, buf = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, JPEG_QUALITY])
                 if not ok:
                     continue
                 post_jpeg(self.frame_endpoint, self._token, buf.tobytes(), self.timeout)
                 last_seq = seq
+                try:
+                    alive_path().touch()
+                except OSError:
+                    pass  # không ghi được nhịp tim thì push_camera vẫn đẩy, chỉ là hai luồng xen nhau
             except Exception as e:  # noqa: BLE001 - mạng, mã hóa hỏng: thử lại
                 why, auth = describe_error(e)
                 if not self._frame_down:
@@ -178,3 +208,4 @@ class ControlPusher:
                 log.warning("đã đẩy hình lại được lên %s", self.frame_endpoint)
                 self._frame_down = False
             self._frame_backoff = 0.0
+            delay = frame_delay(period, time.monotonic() - t0)

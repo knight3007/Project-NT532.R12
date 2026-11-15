@@ -15,11 +15,43 @@ import time
 import cv2
 
 from nt532.config import load_site
-from nt532.dashboard.push import JPEG_QUALITY, MAX_BACKOFF, describe_error, post_jpeg, post_json
+from nt532.dashboard.push import (
+    JPEG_QUALITY,
+    MAX_BACKOFF,
+    alive_path,
+    describe_error,
+    post_jpeg,
+    post_json,
+)
 from nt532.vision.calib_session import CalibSession, parse_order
 from nt532.vision.camera import open_camera
 
 REPORT_EVERY_S = 2.0
+YIELD_WITHIN_S = 3.0  # trạm vừa đẩy hình trong khoảng này thì nhường, tránh hai luồng xen nhau
+
+
+def station_is_pushing(alive_mtime: float | None, now: float, within: float = YIELD_WITHIN_S) -> bool:
+    """True nếu file nhịp tim của trạm mới hơn `within` giây (None: không có file)."""
+    return alive_mtime is not None and 0 <= now - alive_mtime < within
+
+
+YIELD_POLL_S = 0.5  # lúc nhường chỉ ngủ rồi xem lại nhịp tim, không giữ camera
+REOPEN_RETRY_S = 3.0  # mở lại camera lỗi thì thử lại sau chừng này
+
+
+def camera_action(pushing: bool, cap_open: bool) -> str:
+    """Quyết định mỗi vòng: "release" (vừa phải nhường, nhả camera), "wait" (đang nhường),
+    "reopen" (trạm ngừng đẩy, mở lại camera) hay "run" (đọc và đẩy bình thường)."""
+    if pushing:
+        return "release" if cap_open else "wait"
+    return "run" if cap_open else "reopen"
+
+
+def _alive_mtime() -> float | None:
+    try:
+        return alive_path().stat().st_mtime
+    except OSError:
+        return None
 
 
 def main() -> None:
@@ -45,10 +77,30 @@ def main() -> None:
     base = args.control_url.rstrip("/")
     endpoint, calib_endpoint = base + "/api/pi/frame", base + "/api/pi/calib"
     period, backoff, down, last_report = 1.0 / args.fps, 0.0, False, 0.0
-    print(f"đẩy hình lên {endpoint} ({args.fps:g} fps), Ctrl+C để thoát")
+    yielding = False
+    print(f"đẩy hình lên {endpoint} ({args.fps:g} fps), Ctrl+C để thoát", flush=True)
     try:
         while True:
             t0 = time.monotonic()
+            pushing = station_is_pushing(_alive_mtime(), time.time())
+            if pushing != yielding:
+                yielding = pushing
+                print("trạm đang đẩy hình: tạm nhường" if yielding else "trạm ngừng đẩy hình: đẩy lại", flush=True)
+            action = camera_action(pushing, cap is not None)
+            if action in ("release", "wait"):
+                if cap is not None:
+                    cap.release()  # nhường hẳn camera/RTSP cho trạm, khỏi giải mã 1080p vô ích
+                    cap = None
+                time.sleep(YIELD_POLL_S)
+                continue
+            if action == "reopen":
+                try:
+                    cap = open_camera(site["camera"], source)
+                except RuntimeError as e:
+                    print(f"không mở lại được camera: {e}; thử lại sau {REOPEN_RETRY_S:g}s", flush=True)
+                    time.sleep(REOPEN_RETRY_S)
+                    continue
+                t0 = time.monotonic()
             ok, frame = cap.read()
             if not ok:
                 raise SystemExit("không đọc được camera")
@@ -71,21 +123,22 @@ def main() -> None:
                         session.dirty = True
                         raise
                 if down:
-                    print("đã nối lại control")
+                    print("đã nối lại control", flush=True)
                     down = False
                 backoff = 0.0
             except Exception as e:  # noqa: BLE001 - mạng/HTTP: thử lại với backoff
                 why, _ = describe_error(e)
                 if not down:
-                    print(f"mất liên lạc với control: {why}")
+                    print(f"mất liên lạc với control: {why}", flush=True)
                     down = True
                 backoff = min(MAX_BACKOFF, max(1.0, backoff * 2))
                 wait = backoff
             time.sleep(max(0.0, wait - (time.monotonic() - t0)))
     except KeyboardInterrupt:
-        print("thoát")
+        print("thoát", flush=True)
     finally:
-        cap.release()
+        if cap is not None:
+            cap.release()
 
 
 if __name__ == "__main__":

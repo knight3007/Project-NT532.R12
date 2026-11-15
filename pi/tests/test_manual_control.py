@@ -3,6 +3,7 @@
 import json
 from types import SimpleNamespace
 
+import numpy as np
 from aiocoap import GET, POST
 from aiocoap.numbers.codes import CHANGED, CONTENT, FORBIDDEN
 
@@ -146,7 +147,94 @@ def test_mark_records_position_and_note():
     d = _dash(False, r.link)
     res = d.command({"cmd": "manual", "node": "s1", "op": "mark", "note": "bị chân trụ chắn"})
     assert res["ok"] and not [c for c in r.calls if c[0] == POST]
-    ev = d.st.events.since(0)[-1]
-    assert ev["op"] == "mark" and ev["note"] == "bị chân trụ chắn"
+    ev = [e for e in d.st.events.since(0) if e["op"] == "mark"][-1]
+    assert ev["note"] == "bị chân trụ chắn"
     assert (ev["reported_pan_us"], ev["reported_tilt_us"]) == (1500, 1500)
     assert d.command({"cmd": "manual", "node": "s1", "op": "mark", "note": "x" * 121})["ok"] is False
+
+
+class FakeHub:
+    """Khung đen, có chấm đỏ ở (60, 40) khi laser của Rig đang bật."""
+
+    def __init__(self, rig, fail=False):
+        self.rig, self.fail = rig, fail
+
+    def fresh(self, timeout=3.0):
+        if self.fail:
+            raise TimeoutError("không có khung hình mới")
+        img = np.zeros((120, 160, 3), np.uint8)
+        if self.rig.laser:
+            img[38:43, 58:63, 2] = 255
+        return img
+
+
+def _capture_dash(r, tmp_path, monkeypatch, hub_fail=False):
+    monkeypatch.setenv("NT532_MARKS_DIR", str(tmp_path / "marks"))
+    d = _dash(False, r.link)
+    d.off_wait_s = 0
+    d.st.hub = FakeHub(r, hub_fail)
+    d.st.vision = SimpleNamespace(cfg={"laser_min_rise": 40}, find_spot=lambda on, off: np.array([0.1, 0.0, 0.2]))
+    return d
+
+
+def _laser_posts(r):
+    return [c[2] for c in r.calls if c[0] == POST and c[1] == "laser"]
+
+
+def test_mark_capture_laser_on_saves_two_images_and_spot(tmp_path, monkeypatch):
+    r = Rig(armed=True, pwm=True)
+    r.laser = True
+    d = _capture_dash(r, tmp_path, monkeypatch)
+    res = r.link.manual("s1", "status")
+    d._mark_capture("s1", "tag 2", res)
+    assert _laser_posts(r) == [b"OFF", b"ON"] and r.laser is True
+    ev = d.st.events.since(0)[-1]
+    assert ev["op"] == "mark_image" and ev["ok"] is True and ev["level"] == "info"
+    assert ev["mark_note"] == "tag 2" and (ev["pan_us"], ev["tilt_us"]) == (1500, 1500)
+    assert abs(ev["spot_px"][0] - 60) < 1 and abs(ev["spot_px"][1] - 40) < 1
+    assert ev["spot_world"] == [0.1, 0.0, 0.2]
+    files = sorted(p.name for p in (tmp_path / "marks").iterdir())
+    assert files == sorted([ev["image_on"], ev["image_off"]])
+    assert ev["image_on"].endswith("_s1_on.jpg") and ev["image_off"].endswith("_s1_off.jpg")
+
+
+def test_mark_capture_laser_off_saves_one_image_no_spot(tmp_path, monkeypatch):
+    r = Rig(armed=True, pwm=True)
+    d = _capture_dash(r, tmp_path, monkeypatch)
+    d._mark_capture("s1", "x", r.link.manual("s1", "status"))
+    assert _laser_posts(r) == []
+    ev = d.st.events.since(0)[-1]
+    assert ev["ok"] is True and ev["spot_px"] is None and ev["spot_world"] is None
+    assert ev["image_off"] is None and len(list((tmp_path / "marks").iterdir())) == 1
+
+
+def test_mark_capture_hub_failure_warns_and_keeps_laser_on(tmp_path, monkeypatch):
+    r = Rig(armed=True, pwm=True)
+    r.laser = True
+    d = _capture_dash(r, tmp_path, monkeypatch, hub_fail=True)
+    d._mark_capture("s1", "x", r.link.manual("s1", "status"))
+    ev = d.st.events.since(0)[-1]
+    assert ev["op"] == "mark_image" and ev["ok"] is False and ev["level"] == "warn" and "khung hình" in ev["error"]
+    assert r.laser is True
+
+
+def test_mark_capture_hub_fails_after_laser_off_turns_it_back_on(tmp_path, monkeypatch):
+    r = Rig(armed=True, pwm=True)
+    r.laser = True
+    d = _capture_dash(r, tmp_path, monkeypatch)
+    hub = d.st.hub
+    orig = hub.fresh
+    n = []
+    hub.fresh = lambda timeout=3.0: orig() if not n.append(1) and len(n) == 1 else (_ for _ in ()).throw(
+        TimeoutError("hết giờ"))
+    d._mark_capture("s1", "x", r.link.manual("s1", "status"))
+    assert _laser_posts(r) == [b"OFF", b"ON"] and r.laser is True
+    assert d.st.events.since(0)[-1]["ok"] is False
+
+
+def test_mark_capture_without_hub_or_vision_warns(tmp_path, monkeypatch):
+    r = Rig(armed=True, pwm=True)
+    d = _dash(False, r.link)
+    d._mark_capture("s1", "x", r.link.manual("s1", "status"))
+    ev = d.st.events.since(0)[-1]
+    assert ev["op"] == "mark_image" and ev["ok"] is False and ev["level"] == "warn"

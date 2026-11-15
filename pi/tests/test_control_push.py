@@ -151,3 +151,35 @@ def test_frame_fps_zero_sends_nothing():
         p.stop()
         srv.close()
     assert p._frame_thread is None and srv.frames == []
+
+
+def test_frame_delay_subtracts_processing_time():
+    assert abs(push.frame_delay(0.1, 0.03) - 0.07) < 1e-9
+    assert push.frame_delay(0.1, 0.5) == 0.0
+
+
+def test_shrink_to_width():
+    import numpy as np
+
+    img = np.zeros((1080, 1920, 3), np.uint8)
+    out = push.shrink_to_width(img, 1280)
+    assert out.shape == (720, 1280, 3)
+    assert push.shrink_to_width(img, 0) is img  # 0: giữ nguyên
+    small = np.zeros((48, 64, 3), np.uint8)
+    assert push.shrink_to_width(small, 1280) is small  # không phóng to
+
+
+def test_frame_thread_downsizes_jpeg_from_env(monkeypatch):
+    import cv2
+    import numpy as np
+
+    monkeypatch.setenv("NT532_CONTROL_WIDTH", "32")
+    srv, dash = FakeServer(), FakeDash()
+    p = ControlPusher(dash, f"http://127.0.0.1:{srv.port}", "tok", period=0.02, frame_fps=50).start()
+    try:
+        assert wait_for(lambda: srv.frames)
+    finally:
+        p.stop()
+        srv.close()
+    img = cv2.imdecode(np.frombuffer(srv.frames[0][2], np.uint8), cv2.IMREAD_COLOR)
+    assert img.shape[:2] == (24, 32)

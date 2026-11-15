@@ -23,6 +23,7 @@ from .orchestrator.frames import FrameHub
 from .orchestrator.fusion import SensorHistory
 from .orchestrator.machine import Orchestrator, Settings
 from .vision import Vision
+from .vision.live import LiveDetector
 
 
 @dataclass
@@ -42,6 +43,7 @@ class Station:
     decider_timeout: float = 3.0
     rule_questions: tuple = ()  # câu luôn theo luật ở chế độ lai, giữ khi đổi bộ quyết định từ dashboard
     both_tau: float | None = None  # ngưỡng nhận BOTH của câu nozzle ở chế độ lai, giữ như rule_questions
+    live: LiveDetector | None = None  # nhận diện lửa nền lúc IDLE (chỉ trạm thật, xem `start`)
 
     def start(self, orchestrate: bool = True) -> "Station":
         """`orchestrate=False`: chỉ bật sa bàn ảo và heartbeat, orchestrator không chạy nên không tự
@@ -51,9 +53,15 @@ class Station:
         self.heartbeat.start()
         if orchestrate:
             self.orch.start()
+            # sa bàn ảo mặc định tắt: detector giả dùng chung bộ số ngẫu nhiên với kịch bản
+            hz = float(self.site["vision"].get("live_detect_hz", 0.0 if self.world is not None else 5.0))
+            if hz > 0 and self.live is None:
+                self.live = LiveDetector(self, hz).start()
         return self
 
     def stop(self) -> None:
+        if self.live is not None:
+            self.live.stop()
         self.orch.emergency_stop("tắt trạm")
         self.orch.stop()
         self.heartbeat.halt()

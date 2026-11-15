@@ -203,6 +203,12 @@ $("dec-form").addEventListener("submit", (e) => {
   send(body, `Đổi bộ quyết định: ${kind}`);
 });
 $("selfcal").addEventListener("click", () => send({ cmd: "calibrate", node: "all" }, "Tự hiệu chuẩn vòi"));
+document.querySelectorAll("[data-test-alert]").forEach((b) => b.addEventListener("click", () => {
+  const node = b.dataset.testAlert;
+  // làm vòi chuyển động và bật laser thật: phải xác nhận
+  if (!confirm(`Giả báo động ${node}? Vòi sẽ chuyển động và bật laser như một vụ cháy thật.`)) return;
+  send({ cmd: "test_alert", node }, `Giả báo động ${node}`);
+}));
 $("cam-jitter").addEventListener("click", () => send({ cmd: "camera_jitter" }, "Xê dịch camera"));
 document.querySelectorAll("[data-kind]").forEach((b) => b.addEventListener("click", () => {
   placeKind = b.dataset.kind;

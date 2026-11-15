@@ -106,6 +106,7 @@ async def test_cmd_decider_params(client, app, fake_pi):
 async def test_new_cmds_forwarded(client, app, fake_pi):
     await app.state.pi.poll_once()
     ok = [{"cmd": "calibrate", "node": "all"}, {"cmd": "calibrate", "node": "s2"}, {"cmd": "calibrate"},
+          {"cmd": "test_alert", "node": "s1"}, {"cmd": "test_alert", "node": "s2"},
           {"cmd": "camera_preset", "name": "left"}, {"cmd": "camera_jitter"},
           {"cmd": "camera_set", "x": 0.6, "y": -0.8, "z": 0.9, "lx": 0.6, "ly": 0.4, "lz": 0.2},
           {"cmd": "decider", "kind": "remote", "url": "http://192.168.1.20:8800", "timeout": 3},
@@ -117,7 +118,8 @@ async def test_new_cmds_forwarded(client, app, fake_pi):
 
 
 @pytest.mark.parametrize("body", [
-    {"cmd": "calibrate", "node": "s9"}, {"cmd": "camera_preset", "name": "top"}, {"cmd": "camera_preset"},
+    {"cmd": "calibrate", "node": "s9"}, {"cmd": "test_alert"}, {"cmd": "test_alert", "node": "all"},
+    {"cmd": "test_alert", "node": "s9"}, {"cmd": "camera_preset", "name": "top"}, {"cmd": "camera_preset"},
     {"cmd": "camera_set", "x": 1, "y": 1, "z": 1}, {"cmd": "camera_set", "x": 99, "y": 0, "z": 0, "lx": 0, "ly": 0, "lz": 0},
     {"cmd": "decider", "kind": "remote", "url": "ftp://host"}, {"cmd": "decider", "kind": "remote", "url": "http://"},
     {"cmd": "decider", "kind": "remote", "url": "http://a b"},
