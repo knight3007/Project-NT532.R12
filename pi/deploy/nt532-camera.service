@@ -1,0 +1,21 @@
+# Đẩy hình camera lên control khi trạm chưa chạy (ngắm, hiệu chuẩn camera trước khi có calibration/camera.yaml).
+# Trạm chạy thì trạm tự đẩy hình: lúc khởi động máy chỉ dịch vụ này chạy khi chưa có camera.yaml (trạm thì
+# ngược lại), và nt532-station tự dừng dịch vụ này khi start.
+# Cài: pi/deploy/setup_pi.sh --install-services. Xem log: journalctl -u nt532-camera -f
+[Unit]
+Description=NT532 đẩy hình camera lên control (push_camera.py)
+After=network-online.target mediamtx.service
+Wants=network-online.target mediamtx.service
+ConditionPathExists=!/home/pi/nt532/calibration/camera.yaml
+
+[Service]
+User=pi
+WorkingDirectory=/home/pi/nt532/pi
+# station.env (setup_pi.sh --control-url ghi): NT532_PI_TOKEN và NT532_STATION_ARGS="--control-url ...".
+EnvironmentFile=/home/pi/.config/nt532/station.env
+ExecStart=/home/pi/.local/bin/uv run --no-sync python scripts/push_camera.py $NT532_STATION_ARGS --fps 10
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

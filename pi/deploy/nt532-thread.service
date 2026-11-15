@@ -1,0 +1,19 @@
+# Đo mạng Thread (ping, CoAP, vai trò, topology) và đẩy lên control để vẽ biểu đồ cho báo cáo (thread_monitor.py).
+# Chạy độc lập với trạm; cần OTBR REST ở 127.0.0.1:8081 và network.nodes trong config/site.yaml.
+# Cài: pi/deploy/setup_pi.sh --install-services. Xem log: journalctl -u nt532-thread -f
+[Unit]
+Description=NT532 đo mạng Thread và đẩy lên control (thread_monitor.py)
+After=network-online.target otbr-agent.service
+Wants=network-online.target
+
+[Service]
+User=pi
+WorkingDirectory=/home/pi/nt532/pi
+# station.env (setup_pi.sh --control-url ghi): NT532_PI_TOKEN và NT532_STATION_ARGS="--control-url ...".
+EnvironmentFile=/home/pi/.config/nt532/station.env
+ExecStart=/home/pi/.local/bin/uv run --no-sync python scripts/thread_monitor.py $NT532_STATION_ARGS --period 10
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

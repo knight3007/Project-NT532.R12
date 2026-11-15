@@ -20,7 +20,7 @@ uv run python scripts/run_station.py --decider rules                 # phần c�
                                                      ▼
                                      Decider: luật | Jev | lai  ──▶ Decision
                                                      ▼
-                       chặn an toàn cứng (luật) ──▶ AIM ─▶ CORRECT ─▶ FIRE ─▶ VERIFY
+                       chặn an toàn cứng (luật) ──▶ ENGAGE (ngắm + phun + bám tia + bám lửa + xác nhận, một pha)
                                                      │
                                        NodeLink: /aim /fire /stop /hb ◀─ /status
  Dashboard (HTTP) đọc Station.snapshot(), video MJPEG có vẽ, gửi lệnh
@@ -50,13 +50,16 @@ uv run python scripts/run_station.py --decider rules                 # phần c�
    - `alarm only` hoặc không chọn được bia: sang ALARM (node đã tự hú còi).
    - `spray`: qua bước chặn an toàn rồi ngắm.
 4. **Chặn an toàn (luôn là luật):** chưa commissioning hoặc node bị dời, pose quá 60 s, mất heartbeat quá 1,5 s, mục tiêu ngoài bảng, góc ngoài giới hạn. Vòi được chọn bị chặn thì thử vòi còn lại, không được thì ALARM. Đáp án `both (s1 + s2)`: kiểm cả hai vòi, một vòi bị chặn thì ghi cảnh báo `safety` và phun như lượt một vòi bằng vòi kia, cả hai bị chặn thì ALARM.
-5. **AIM và CORRECT:** gửi `/aim`, chờ `reached` (hết giờ thì gửi lại đúng một lần với id mới). Bật laser bằng `/fire dev=laser`, so ảnh bật và tắt để tìm vết, bù độ lệch, lặp tối đa `correct_max_iters` hoặc tới khi lệch dưới `correct_done_m`. Lượt hai vòi làm lần lượt từng vòi (mỗi lúc một laser, vì `find_spot` so khung tắt/bật); dòng sự kiện `vòng i: lệch x cm (s1)` và `run.shots[].nozzle` cho biết vòi nào.
-6. **FIRE:** cộng `water_tilt_deg`, ngắm lại, `/fire dev=pump ms=fire_ms`, chờ `done`. Lượt hai vòi: ngắm lần cuối cho cả hai vòi (kiểm lại từng vòi: mất heartbeat, bị chặn hay không trả lời lệnh ngắm thì bị bỏ và lượt chạy tiếp bằng vòi còn lại), rồi gửi hai `/fire dev=pump` liền nhau để hai bơm chạy cùng lúc và chờ cả hai báo xong; `status` là `ok` chỉ khi cả hai `done`.
-7. **VERIFY:** chờ 3 s, chụp 3 khung lấy conf quanh bia, lấy nhiệt sau phun của node, độ lệch laser đo được ở vòng CORRECT cuối. Hai vòi thì coi như một lần phun: nhiệt trung bình hai node, độ lệch lớn hơn của hai vòi, `nozzle` = `both (s1 + s2)`. Hỏi `after_verify`:
-   - `done`: xong.
-   - `re-aim`: AIM và CORRECT lại.
-   - `spray more`: phun tiếp không ngắm lại.
-   - `call human`: sang HUMAN. Tối đa 3 lần phun.
+5. **ENGAGE (một pha liên tục, thay AIM, CORRECT, FIRE, VERIFY):** ngắm góc ước lượng theo cal, chụp khung nền lúc laser tắt, rồi bật laser (node có bơm: bật cả bơm) và giữ tới hết lượt bằng cách gia hạn hẹn giờ mỗi chu kỳ (laser) hoặc khi còn dưới 30% (bơm); không tắt giữa chừng. Mỗi chu kỳ (`engage_hz`, 4 Hz):
+   - **Bám lửa:** `vision.targets` trên khung mới, lấy hộp gần đích cũ nhất trong `engage_track_m` làm đích mới (EMA 0,5). Hộp này che vùng lửa khi tìm vết laser (chỉ với bia trên nền).
+   - **Bám tia:** đo vết (lọc ổn định hai khung, che hộp lửa và chân trụ), e = đích - vết, Broyden, bước `engage_gain` x J^-1 e (kẹp `correct_step_max_deg`, giới hạn góc), gửi `/aim`. Không thấy vết thì giữ lệnh. Mỗi vết vẫn đi vào `_learn`.
+   - **Quét vùng cháy (bia trên sàn):** bám một điểm neo chỉ là pha vào. Khi vết lệch điểm neo dưới `engage_sweep_enter_m` (0,06 m) hoặc sau 4 lần đo, tia chuyển sang quét như lính cứu hỏa. Mỗi lượt dựng vùng cháy từ hộp lửa mới nhất: chiếu hai góc ĐÁY hộp xuống sàn bằng `vision.localize` được bề ngang và mép gần (không chiếu góc trên vì ngọn lửa cao), mép xa = mép gần + `engage_depth_ratio` (0,6) x bề ngang theo hướng từ vòi tới lửa, cả hai kẹp [4, 40] cm. Lưới quét đi hàng từ gần ra xa, mỗi hàng từ trái sang phải nhìn từ vòi (`engage_serpentine: true` thì rắn bò), bước `engage_sweep_step_m` (0,04 m), dừng `engage_dwell_s` (0,4 s) mỗi điểm. Đi hết lưới thì dựng lại vùng theo hộp lửa mới nhất rồi quét tiếp (bám lửa). Lệnh tới mỗi điểm = lệnh mô hình (`_cmd`) + phần bù đã học; mỗi điểm chỉ đo sau khi servo reached và `laser_settle_s` (không đo lúc chuyển), cập nhật Broyden và phần bù theo sai lệch giữa vết và điểm quét. Mất vết quá 3 điểm liền thì về dắt vào điểm neo. Lúc quét hộp lửa không che khi tìm vết (điểm quét nằm trong hộp; `engage_sweep_hide_box: true` để che). Bia trên tường, hoặc không chiếu được vùng cháy, giữ cách cũ (một điểm). `engage_sweep: false` tắt quét.
+   - **Theo dõi:** `on_target` khi lệch < `tolerance_m`, cộng dồn thời gian trúng; lưu chuỗi conf lửa gần đích và nhiệt từ cảm biến.
+   - **Kết thúc:** `extinguished` khi không thấy lửa gần đích liên tục `engage_clear_s` và đã trúng >= `engage_min_hit_s`. `human` (pha HUMAN) khi trúng quá `engage_max_hit_s` mà lửa không yếu đi, cả pha quá `engage_timeout_s`, mất vết (hoặc mất lửa mà chưa trúng) liên tục quá `engage_lost_s`, hoặc bộ quyết định bảo bỏ. Dừng khẩn cấp hay lỗi link: như trước (`/stop`, FAULT).
+   - **Bộ quyết định:** mỗi `engage_verify_s` dựng `verify_obs` (giữ nguyên dạng cũ; `attempt` tăng dần, `status` ok, nhiệt từ lúc bắt đầu, 3 conf cuối, `mark_cm` = độ lệch hiện tại) và hỏi `after_verify` ở luồng nền (không chặn việc gia hạn laser, nên Jev 8 s cũng không làm laser chớp). `done` chỉ kết thúc khi camera cũng không thấy lửa trong 3 khung cuối, nếu không thì bỏ qua; `re-aim` và `spray more` tiếp tục vòng; `call human` sang HUMAN. Luật và jev2 chạy như cũ, không cần train lại.
+   - **Hai vòi:** chỉ vòi đầu bám tia (hai chấm không phân biệt được); vòi sau ngắm theo mô hình rồi bật cùng, không hiệu chỉnh (hạn chế).
+   - **Hạn chế:** laser và bơm dùng chung một góc, chưa bù `water_tilt` như FIRE cũ. Overlay có `engage` = {state: aiming|on_target|lost, miss_cm, hit_s, clear_s} cộng, khi quét, `pattern` (danh sách [x, y] điểm quét trên sàn), `rows`, `cols`, `zone_cm` [ngang, sâu], `row`, `col` (điểm đang quét; khi quét `hit_s` cộng dồn lúc vết nằm trong vùng cháy nới `tolerance_m`, và `miss_cm` là lệch so với điểm quét); sự kiện `engage` ghi mỗi lượt quét (số hàng x cột, kích thước vùng), khi đổi trạng thái và mỗi ~1 s. Các pha AIM, CORRECT, FIRE, VERIFY còn trong enum nhưng `_engage` không dùng; `_aim_and_correct` và `_final_aim` còn trong mã (test cũ).
+   - Tham số: mục `targeting` của `config/site.yaml` (`engage_*`).
 8. Mọi kết thúc (kể cả lỗi) đều gửi `/stop` tới mọi node. Lỗi mạng hoặc lỗi lạ thì sang FAULT.
    Id lệnh tăng dần trên mọi node, nên node nhớ id `/stop` lớn nhất đã nhận và từ chối (`rejected`, `err: stopped`) mọi `/aim`, `/fire` có id nhỏ hơn: gói gửi trước `/stop` mà tới sau (UDP đảo thứ tự, gửi lại) không được bật lại laser hay bơm. Firmware node phải giữ quy tắc này; `SimLink` cài đúng như vậy.
 9. **Báo lại:** node chỉ gửi `/a` lúc chuyển sang báo động. Nếu lượt trước kết luận xong mà 3 mẫu mới nhất vẫn vượt ngưỡng sau 20 s, orchestrator tự xử lý lại. Tối đa 2 lần liên tiếp, sau đó ghi lỗi "cần người kiểm tra". Dừng khẩn cấp xóa mọi việc còn treo từ trước lúc dừng (cảnh báo trong hàng đợi, lượt xử lý lại), nên trạm không tự phun lại dù cảm biến còn nóng; chỉ cảnh báo mới từ node sau lúc dừng mới mở lượt mới.
@@ -106,9 +109,9 @@ Ngắm dựa vào pose tag đế và vài số giả định: tâm quay `pivot_o
 
 Quét chỉ chạy lúc IDLE, orchestrator bật, vòi không bị chặn và còn heartbeat. Có cảnh báo tới giữa chừng, dừng khẩn cấp, hoặc lỗi liên lạc thì bỏ quét (vòi nhận `/stop`), cal cũ giữ nguyên.
 
-**Khớp**: bình phương tối thiểu (Levenberg-Marquardt, Jacobian số, bỏ qua điểm ngoại lai bằng hàm Huber) trên khoảng cách 3D giữa vết dự đoán và vết đo. Mẫu ít (< `min_samples`) hoặc trải hẹp (pan < 15, tilt < 8 độ) thì chỉ khớp `yaw0`, `tilt0` và giữ pivot, hệ số servo như prior. Khi mẫu đủ trải, pivot chỉ bị prior yếu giữ (`pivot_prior_sigma_m`, 0,15 m) nên pivot sai 10-20 cm vẫn tìm lại được. Kết quả bị bác nếu rms sau khớp vượt `max_rms_cm` hoặc không tốt hơn trước. Sự kiện `calib` ghi từng phát (lệch so với dự đoán), rms trước và sau, và pivot thay đổi bao nhiêu cm so với prior.
+**Khớp**: bình phương tối thiểu (Levenberg-Marquardt, Jacobian số, bỏ qua điểm ngoại lai bằng hàm Huber) trên khoảng cách 3D giữa vết dự đoán và vết đo. Mẫu ít (< `min_samples`) hoặc trải hẹp (pan < 15, tilt < 8 độ) thì chỉ khớp `yaw0`, `tilt0` và giữ pivot, hệ số servo như prior. Khi mẫu đủ trải, pivot chỉ bị prior yếu giữ (`pivot_prior_sigma_m`, 0,15 m) nên pivot sai 10-20 cm vẫn tìm lại được. Kết quả bị bác nếu rms sau khớp vượt `max_rms_cm` hoặc không tốt hơn trước, hoặc nếu cal vô lý (`selfcal.cal_violations`, lý do ghi vào `note` và sự kiện `calib`): tâm quay lệch số mồi quá `max_pivot_shift_m` (0,15), `pan_gain` hay `tilt_gain` ngoài [`min_gain`, `max_gain`] (0,7 và 1,3), `|tilt0|` hay `|yaw0|` quá `max_angle_offset_deg` (25). Mẫu hẹp có thể cho nghiệm rms thấp mà vô nghĩa (tâm quay cách mồi cả mét, hệ số servo gần 0); nếu để lọt, `sweep_commands` dùng chính cal hỏng để chọn góc quét nên hiệu chuẩn lại kẹt ("chỉ chọn được 0 góc"). Kiểm tra áp dụng cho cả quét lẫn học từ CORRECT. Sự kiện `calib` ghi từng phát (lệch so với dự đoán), rms trước và sau, và pivot thay đổi bao nhiêu cm so với prior.
 
-**Lưu**: `calibration/nodes.yaml` (`selfcal.file`), `{node: {pivot, yaw0_deg, tilt0_deg, pan_gain, tilt_gain, n_samples, rms_cm, time}}`, nạp lại khi khởi động. Sa bàn ảo dùng `data/sim/nodes.yaml` và xóa file khi dựng trạm. `snapshot()["calib"]` có số hiện tại, `rms_cm`, `n_samples`, `fitted` và `state` (idle, sweeping, ok, failed). Tắt hết bằng `selfcal.enabled: false`.
+**Lưu**: `calibration/nodes.yaml` (`selfcal.file`), `{node: {pivot, yaw0_deg, tilt0_deg, pan_gain, tilt_gain, n_samples, rms_cm, time}}`, nạp lại khi khởi động; cal nào vi phạm các giới hạn trên thì bị bỏ, dùng số mồi của site và có cảnh báo `calib` "bỏ cal đã lưu". Chọn góc quét (`sweep_commands`): ít hơn 3 góc theo cal hiện tại thì thử lại bằng số mồi của site, rồi nới lề `margin_m` về 0, rồi mới báo lỗi. Sa bàn ảo dùng `data/sim/nodes.yaml` và xóa file khi dựng trạm. `snapshot()["calib"]` có số hiện tại, `rms_cm`, `n_samples`, `fitted` và `state` (idle, sweeping, ok, failed). Tắt hết bằng `selfcal.enabled: false`.
 
 **Giới hạn**
 - Cần vết laser nằm trên mặt phẳng đã biết (bảng hoặc nền) và camera thấy; vết trên vật khác thì sai.
@@ -116,6 +119,32 @@ Quét chỉ chạy lúc IDLE, orchestrator bật, vòi không bị chặn và c�
 - Pose tag sai một lượng nhất quán bị hấp thụ vào `pivot` và `yaw0` (đúng ý nghĩa vì đều tính trong hệ tag); đế vòi bị nghiêng ngoài mặt phẳng ngang thì chỉ được bù một phần qua `tilt0`.
 - Servo phi tuyến hơn hệ số tuyến tính cần bảng hiệu chỉnh riêng.
 - `calibration/nodes.yaml` là số riêng của từng bộ phần cứng, `.gitignore` chưa loại nó.
+
+## CORRECT: visual servoing và laser sáng liên tục
+
+Cách cũ dời điểm ngắm 3D đúng bằng độ lệch đo được rồi đổi sang góc bằng cal, tức giả định mô hình góc đúng. Cal sai nặng (hiệu chuẩn bị bác, hệ số servo thật 0,4 so với 1,0) thì chấm chỉ nhích một phần nhỏ mỗi vòng (trên trạm thật: lệch 22,4, 16,4, 14,0 cm rồi hết 3 vòng).
+
+CORRECT hiện là điều khiển vòng kín trong không gian lệnh (`_aim_and_correct`):
+
+- Biến điều khiển là góc lệnh `c = (pan, tilt)`; phép đo là vết laser `s` trên mặt của bia, lấy hai thành phần theo `_plane_mask` (sàn: x, y; bảng: x, z); sai lệch `e = bia - s`.
+- Jacobian `J = ds/dc` (2x2, mét trên độ) khởi tạo bằng sai phân trung tâm (bước 1 độ) của mô hình tiến theo cal hiện tại (`selfcal.forward_spot`, giao tia với mặt phẳng vô hạn để hàm trơn). Không tính được (tia không chạm mặt) thì lấy quanh lệnh hướng vào bia; vẫn không được thì đo thật bằng hai bước dò `correct_probe_deg`.
+- Sau mỗi lần đo cập nhật Broyden: `J += ((ds - J dc) dc^T) / |dc|^2`, bỏ qua khi `|dc|` dưới 0,02 độ. J nhờ vậy học ngay hệ số servo và hướng thật của node.
+- Bước `dc = J^-1 e`, kẹp độ lớn `correct_step_max_deg` (20; cal sai nặng cần bước lớn, vd hệ số 0,4 cần lệnh gấp 2,5 lần) rồi kẹp trong `aiming.limits`. J gần suy biến (điều kiện > 1000) thì dùng bước theo mô hình (cách cũ). Kẹt ở giới hạn góc (bước dưới 0,02 độ) thì dừng.
+- Vết lệch dự đoán `s_trước + J dc` hơn 3 lần quãng dự đoán và hơn 15 cm thì đo lại một lần trước khi tin (video lửa chập chờn làm kênh đỏ đổi giữa các khung).
+- Dừng khi lệch 3D dưới `correct_done_m` (0,01) hoặc hết `correct_max_iters` (6). Vòng cuối tệ hơn vòng tốt nhất thì quay về lệnh của vòng tốt nhất.
+- Mỗi lần đo vẫn gọi `_learn` (selfcal học tiếp), ghi `run.shots`, sự kiện `correct`, overlay `spots`; overlay `aims` là điểm mà mô hình tin lệnh cuối rơi vào.
+- `_aim_and_correct` trả `(điểm ngắm hiệu dụng, độ lệch cuối cm, (pan, tilt) đang giữ laser)`; `_final_aim` dùng đúng góc đó (cộng phần bù tia nước nếu vòi có bơm; bù là độ hình học nên chia cho `tilt_gain` khi đổi sang lệnh), nên FIRE không quay thêm và laser không giật. Vòi không bơm không bù tia nước vì laser không rơi theo quỹ đạo.
+
+Laser sáng liên tục: khung nền chụp một lần lúc laser TẮT, trước khi bật; sau đó bật một lần và mỗi vòng chỉ gia hạn hẹn giờ (`Settings.laser_hold_ms`, 4000 ms mỗi lần, nên nếu Pi chết giữa chừng laser vẫn tự tắt): ngắm (laser vẫn sáng khi servo quay), chờ `reached` cộng `Settings.laser_settle_s` (0,3 s), chụp khung mới, tìm vết bằng hiệu với khung nền. Vùng tìm giới hạn trong bán kính `correct_search_m` (0,15 m; vòng đầu gấp đôi) quanh chỗ J dự đoán (`Vision.find_spot(near=..., near_m=...)`), nới 2 rồi 4 lần nếu không thấy, vẫn che đầu phát như trước. Dừng khẩn cấp và FAULT vẫn gọi `link.stop`, tắt laser ngay.
+
+`IntegratedLink`: khi một lệnh `fire laser` mới thay lệnh cũ thì luồng của lệnh cũ không gửi OFF (trước đây gửi, làm laser chớp giữa hai lần ngắm); `_aim` và `_track` không đụng tới laser. `SimLink` cũng vậy.
+
+Hạn chế đã biết:
+
+- Hai vòi (`both`): CORRECT lần lượt, nên laser vòi trước phải tắt (lệnh laser 1 ms, không dừng servo) trước khi CORRECT vòi sau, nếu không hai chấm lẫn nhau. Hệ quả: giữa CORRECT và FIRE laser của vòi trước tắt một lúc; FIRE bật lại cả hai.
+- Vết rơi lên vật cao hơn sàn bị định vị sai (`find_spot` coi vết nằm trên mặt phẳng của bia), J học theo vết sai đó; đo lại và quay về vòng tốt nhất chỉ giảm nhẹ.
+- Tìm vết quanh chỗ dự đoán: nếu J dự đoán sai quá bán kính nới tối đa (4 lần) thì không thấy vết và CORRECT dừng với lệnh đang giữ.
+- `sim_demo.py` dùng vòng `sim.loop.correct` giản lược (dời điểm ngắm), không phải orchestrator; chỉ nhận `correct_max_iters` từ site.yaml.
 
 ## Dashboard
 
@@ -151,6 +180,25 @@ uv run --no-sync python scripts/run_station.py --source sim --control-url https:
 - **Detector:** khi chưa có `models/fire-n.pt` và thẻ in từ D-Fire, dùng `OracleDetector`. Detector này đọc thẻ thật trong scene và cho conf theo loại: lửa 0,55 đến 0,92, đèn 0,2 đến 0,6, vật cam 0,08 đến 0,45, thẻ đã tắt gần 0. Mỗi khung có 10% bỏ sót. Có trọng số thì dùng `--detector yolo`; thẻ tổng hợp (`data/sim/cards_synth/`) chưa được YOLO học nên nên dùng thẻ D-Fire.
 
 Trên sa bàn ảo, luật để lộ đúng hai điểm yếu đã đo ở `docs/decision-model.md`: phun vào đèn nóng nằm gần sensor báo động, và kết luận `done` khi trúng mà lửa vẫn cháy (khung "sự thật" cho thấy lửa còn cháy).
+
+### Node giả chạy firmware node B tích hợp (`--link coap-integrated`)
+
+`uv run python scripts/run_station.py --source sim --link coap-integrated` thay mỗi node ảo bằng `IntegratedFakeNode` (`nt532/net/integrated_node.py`): server CoAP trên UDP localhost chạy **lõi C thật** của `firmware/node-b-integrated/main` (`integrated_control.c`, `probe_state.c`) qua ctypes, nói đúng hợp đồng của Hậu (`/info /status /hb /stop /pantilt /laser`, payload text `ARM`, `HOME`, `pan_us,tilt_us`, `ON`, `OFF`; ramp 20 µs mỗi 20 ms; hết heartbeat 1500 ms thì tắt PWM, relay và xóa ARM). Phía Pi, `IntegratedLink` (`nt532/net/integrated_link.py`, kế thừa `CoapLink`) dịch hợp đồng cũ của orchestrator sang hợp đồng mới:
+
+| Orchestrator (cũ) | Adapter gửi (mới) |
+|---|---|
+| `heartbeat` | `POST /hb` rỗng (NON), có trả lời thì tính là node còn sống |
+| `aim(pan, tilt)` độ | đổi sang µs bằng `PulseMap`; `ARM` nếu chưa armed, `HOME` nếu chưa có PWM (đợi `GET /pantilt` báo `pwm_active`, tối đa 1 s), rồi `pan_us,tilt_us`. Báo `accepted`, sau đó poll `GET /pantilt` mỗi 50 ms tới khi xung bằng đích thì báo `reached`; quá `ttl` thì `fault` (`timeout`). 4.03 là `rejected` (`forbidden`, ví dụ chưa có heartbeat), 4.00 là `rejected` (`bad_request`), ngoài biên µs là `rejected` (`out_of_range`, không gửi gì) |
+| `fire(laser, ms)` | `POST /laser ON`, sau `ms` thì `OFF`, báo `done` |
+| `fire(pump, ms)` | **bị từ chối ngay** (`rejected`, `no_pump`), không gửi gì: firmware của Hậu không có bơm và relay chỉ mô phỏng laser |
+| `stop` | `POST /stop` |
+| `info` | `GET /info`; giới hạn góc suy ra từ `PulseMap` (`hb` 1500, `fire` 0) |
+
+Hệ quả: `IntegratedLink.has_pump = False`, nên orchestrator không gửi lệnh bơm nào; FIRE giữ laser sáng tại lệnh cuối (laser thay tia nước), `status` là `ok` khi laser báo `done`, và kết luận `extinguished` do VERIFY (cảm biến, camera) quyết định như thường. `fire(pump)` tới link này vẫn bị từ chối như trên. Khi một lệnh `fire laser` mới thay lệnh cũ (CORRECT gia hạn mỗi vòng, rồi FIRE), luồng của lệnh cũ không gửi OFF mà nhường cho lệnh mới; chỉ lệnh hiện hành hết giờ hoặc `/stop` mới tắt laser, nên laser không chớp giữa các vòng ngắm.
+
+- **`PulseMap` là TẠM THỜI.** Ánh xạ tuyến tính `deg_per_us = 0.09` (180° trên 2000 µs), HOME 1500 µs ứng với 0°, dấu `+1` cả hai trục. Chưa có số đo góc–xung thật (bàn giao 13/11 mục E), phải thay bằng bảng đo trước khi dùng trên board.
+- **Telemetry là lớp sim-only.** Firmware của Hậu không đẩy `/t` hay `/a` lên Pi (DHT11 chỉ có trong `GET /status`). Node giả tự đọc cảm biến của sa bàn, POST `/t` mỗi `telemetry_s` và `/a` theo luật 3 mẫu vượt, 5 mẫu dưới ngưỡng để orchestrator có cảnh báo; phần này không có trong firmware. Trên phần cứng thật cần node cảm biến riêng hoặc firmware bổ sung.
+- **Build lõi C.** Linux: `make -C firmware/node-b-integrated/test libintegrated.so` (tự chạy khi nạp nếu file thiếu hoặc cũ). Windows chỉ nạp `integrated.dll` có sẵn, build bằng mingw (ví dụ trong Docker): `make -C firmware/node-b-integrated/test integrated.dll`. Thiếu thư viện thì test `test_integrated_node.py` và `test_station_integrated.py` tự bỏ qua.
 
 ## Việc còn mở, cần chốt với Hậu và Hiếu
 

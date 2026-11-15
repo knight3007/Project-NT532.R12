@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>NT532 · Điều khiển tay</title>
+  <meta name="theme-color" content="#0F1419">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%230F1419'/%3E%3Cpath d='M16 5c1 5 7 8 7 14a7 7 0 0 1-14 0c0-3 2-5 3-7 1 2 2 3 3 3 1-3 0-6 1-10z' fill='%23FF6B35'/%3E%3C/svg%3E">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&family=Be+Vietnam+Pro:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+  <link rel="stylesheet" href="/static/app.css?v=joy2">
+</head>
+<body>
+  <div class="sticky-top">
+    <header class="topbar sub">
+      <div class="logo">NT<span>532</span></div>
+      <div class="who">
+        <span class="pi-status" title="Kết nối tới Pi"><span class="dot" id="pi-dot"></span><span class="label" id="pi-label">Pi</span></span>
+        <span class="user mono" id="user"></span>
+        <form method="post" action="/logout"><button class="linkbtn" type="submit">Đăng xuất</button></form>
+      </div>
+    </header>
+    <nav class="mainnav" aria-label="Điều hướng">
+      <a href="/">Tổng quan</a><a href="/history">Nhật ký</a><a href="/runs">Lượt</a><a href="/manual" aria-current="page">Điều khiển tay</a><a href="/decider">Bộ quyết định</a><span class="soon" aria-disabled="true">Cài đặt <small>sắp có</small></span>
+    </nav>
+  </div>
+
+  <main class="page">
+    <h1 class="page-h">Điều khiển tay</h1>
+
+    <section class="panel manual-banner" id="banner" aria-label="Chế độ tự động">
+      <p><strong>Phải TẮT "Tự động" ở Tổng quan trước</strong> khi điều khiển tay, nếu không trạm sẽ từ chối lệnh.
+        Dùng để kiểm tra bằng mắt xem tia laser có bị chân trụ của chính node chắn không.</p>
+      <div class="form-row">
+        <span class="mono" id="auto-state">Tự động: --</span>
+        <button class="btn water" id="auto-toggle" type="button">--</button>
+      </div>
+    </section>
+
+    <div class="manual-grid">
+      <section class="panel camera" aria-label="Camera">
+        <div class="frame">
+          <img id="cam" alt="Hình từ camera" hidden>
+          <div class="none" id="cam-none">Chưa có hình<small id="cam-hint">Đang chờ camera</small></div>
+        </div>
+      </section>
+      <div class="manual-nodes" id="cards"></div>
+    </div>
+  </main>
+  <div class="toasts" id="toasts" role="status" aria-live="polite"></div>
+  <script type="module" src="/static/js/manual.js?v=joy2"></script>
+</body>
+</html>

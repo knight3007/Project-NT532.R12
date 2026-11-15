@@ -78,14 +78,45 @@ vision:
   auto_repose_camera: true
   node_moved_m: 0.015           # tag node lệch quá mức này thì coi node bị dời
   laser_min_rise: 40            # kênh đỏ phải tăng ít nhất chừng này mới nhận là vết laser
+  laser_max_blob_px: 1500       # CORRECT: bỏ vết lớn hơn (quy theo 1080p); laser_min_aspect 0.3 bỏ vết dẹt; laser_hide_expand 0.15 nới hộp lửa che
+  # Tự kích hoạt không cần cảm biến: camera (YOLO nền lúc IDLE) thấy lửa đã định vị được, conf >= detect_conf,
+  # liên tục auto_trigger_s giây thì giả báo động của node gần lửa nhất để chạy một lượt chữa cháy.
+  # Không thấy tối đa auto_trigger_gap_s vẫn tính liên tục (YOLO lỡ khung). Sau khi kích hoặc sau khi một lượt
+  # kết thúc, chờ auto_trigger_cooldown_s rồi mới kích lại. Mặc định: trạm thật true, sa bàn ảo false.
+  auto_trigger: true
+  auto_trigger_s: 15.0
+  auto_trigger_gap_s: 0.6
+  auto_trigger_cooldown_s: 15.0
   commissioning: calibration/commissioning.yaml
 
 targeting:
   sensor_match_radius_x: 0.35  # chỉ nhận bia cách sensor báo động không quá khoảng này theo X
   localize_timeout_s: 3.0
-  correct_max_iters: 3
-  correct_done_m: 0.01
+  correct_max_iters: 6         # số lần đo vết laser tối đa của CORRECT (visual servoing, xem docs/orchestrator.md)
+  correct_done_m: 0.01         # dừng sớm khi lệch (3D) dưới mức này
+  correct_step_max_deg: 20.0   # kẹp độ lớn một bước góc lệnh của CORRECT (cal sai nặng cần bước lớn)
+  correct_search_m: 0.15       # bán kính tìm vết quanh chỗ dự đoán (nới 2, 4 lần nếu không thấy; vòng đầu gấp đôi)
+  correct_probe_deg: 3.0       # bước dò đo thật khi không tính được Jacobian từ mô hình
   tolerance_m: 0.03            # đề xuất, chốt cuối tuần 3
+  # ENGAGE (một pha liên tục: phun, bám tia, bám lửa, xác nhận dập; xem docs/orchestrator.md)
+  engage_hz: 4                 # số chu kỳ bám mỗi giây
+  engage_gain: 0.7             # hệ số bước servo (delta c = gain x J^-1 e)
+  engage_track_m: 0.15         # lửa trong bán kính này quanh đích cũ mới được coi là cùng đám cháy (EMA 0,5)
+  engage_clear_s: 3.0          # không thấy lửa gần đích liên tục chừng này (và đã trúng đủ) thì coi là đã dập
+  engage_min_hit_s: 1.0        # thời gian trúng (lệch < tolerance_m) cộng dồn tối thiểu trước khi nhận "đã dập"
+  engage_max_hit_s: 60.0       # trúng quá chừng này mà lửa không yếu đi thì gọi người
+  engage_timeout_s: 90.0       # cả pha quá chừng này thì gọi người
+  engage_lost_s: 5.0           # mất vết laser (hoặc mất lửa mà chưa trúng) liên tục quá chừng này thì gọi người
+  engage_verify_s: 3.0         # chu kỳ hỏi bộ quyết định (rules, jev2) trong lúc phun
+  # ENGAGE quét như lính cứu hỏa: sau khi dắt vết vào điểm neo, tia quét vùng cháy trên sàn từ gần ra xa, mỗi hàng trái sang phải
+  engage_escalate_s: 30        # lượt chỉ dùng một vòi mà sau chừng này lửa vẫn còn thì gọi thêm vòi kia (nếu khỏe, không bị chặn); 0 là tắt
+  engage_sweep: true           # false: chỉ bám một điểm neo như cũ
+  engage_depth_ratio: 0.6      # chiều sâu vùng cháy = tỉ lệ này x bề ngang (chiếu hai góc đáy hộp lửa; kẹp 4-40 cm)
+  engage_sweep_step_m: 0.04    # bước giữa hai điểm quét liên tiếp (hàng và cột)
+  engage_dwell_s: 0.4          # dừng ở mỗi điểm quét chừng này (sau khi đo vết)
+  engage_serpentine: false     # true: hàng chẵn quét phải sang trái (rắn bò); mặc định mọi hàng trái sang phải
+  engage_sweep_enter_m: 0.06   # vết lệch điểm neo dưới mức này (hoặc sau 4 lần đo) thì bắt đầu quét
+  engage_sweep_hide_box: false # true: che hộp lửa khi tìm vết lúc quét (mặc định không che vì điểm quét nằm trong hộp)
 
 actuator:
   # Giới hạn để tia nước và laser không ra khỏi bảng; đo riêng cho từng node ở tuần 2.
@@ -114,10 +145,18 @@ selfcal:
   # Trạm tự học tâm quay, hướng pan = 0, tilt = 0 và hệ số servo từ vết laser camera thấy. Xem docs/orchestrator.md.
   enabled: true
   startup_sweep: true          # sau commissioning, lúc rảnh, tự bắn laser tới vài góc để khớp một lần
-  sweep_points: 8              # số góc bắn mỗi node khi quét
+  sweep_points: 8              # (quét cũ theo góc, chỉ còn dùng cho selfcal.sweep_commands; quét dẫn đường đi tới tâm từng tag)
+  sweep_max_steps: 8           # số bước servo tối đa mỗi tag khi quét dẫn đường (dừng khi lệch dưới 1,5 cm)
+  sweep_step_max_deg: 6.0      # bước góc tối đa mỗi lần dịch chuyển khi quét dẫn đường
+  sweep_outside_m: 0.20        # vết ra ngoài khung quá mức này thì lùi lại, hai lần liền thì bỏ đích
   min_samples: 6               # ít hơn thì chỉ khớp yaw0 và tilt0 (giữ pivot, hệ số servo)
   max_rms_cm: 3.0              # khớp xong còn lệch hơn mức này (rms 3D) thì bác kết quả
   pivot_prior_sigma_m: 0.15    # độ tin của pivot giả định khi mẫu đủ trải: yếu để pivot lệch 10-20 cm vẫn tìm lại được
+  # Bác kết quả khớp vô lý (lạc nghiệm khi mẫu hẹp), cả lúc khớp lẫn lúc nạp file; xem selfcal.cal_violations
+  max_pivot_shift_m: 0.15      # tâm quay lệch số mồi (pivot_offset) quá mức này thì bác
+  min_gain: 0.7                # hệ số servo pan/tilt phải nằm trong [min_gain, max_gain]
+  max_gain: 1.3
+  max_angle_offset_deg: 25.0   # |yaw0| hoặc |tilt0| quá mức này thì bác
   learn_from_correct: true     # học tiếp từ vết laser của bước CORRECT mỗi lượt phun
   refit_every: 4               # số mẫu CORRECT mới giữa hai lần khớp lại
   file: calibration/nodes.yaml # kết quả lưu ở đây, lần khởi động sau nạp lại
@@ -131,6 +170,9 @@ network:
   # CoAP server trên Pi và địa chỉ node (tự tìm qua SRP, bù bằng nodes). Xem docs/orchestrator.md.
   bind: "::"
   port: 5683
+  # coap: node đẩy /t /a tới Pi. integrated: firmware A/B tích hợp (/pantilt /laser, không bơm), Pi poll GET /status.
+  link: coap
+  status_poll_s: 1.0           # chỉ dùng khi link: integrated
   transports: null             # null: mặc định aiocoap (udp6). Máy không có IPv6: [simplesocketserver]
   # srp: hỏi SRP server của border router (ot-ctl srp server service), node nào không thấy thì dùng nodes bên dưới.
   # static: chỉ dùng nodes bên dưới.

@@ -9,17 +9,18 @@ import time
 from collections import defaultdict, deque
 from contextlib import asynccontextmanager
 from pathlib import Path
+from urllib.parse import urlparse
 
 import httpx
 from fastapi import Depends, FastAPI, Form, HTTPException, Request
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from itsdangerous import BadSignature, URLSafeTimedSerializer
 
 from . import config, history
 from .hub import hub
 from .hub import router as hub_router
-from .pi_client import PiClient
+from .pi_client import FRAME_MAX_AGE, PiClient
 from .push import router as push_router
 from .security import verify_password
 from .store import Store
@@ -32,6 +33,7 @@ log = logging.getLogger("nt532.main")
 # --- lệnh cho phép chuyển tiếp xuống Pi ------------------------------------------------------
 
 NODES = ("s1", "s2")
+CAMERA_PRESETS = ("front", "left", "right", "legacy")  # theo pi/src/nt532/sim/scene.py
 
 
 def _num(lo: float, hi: float):
@@ -66,8 +68,39 @@ def _regex(pat: str):
     return check
 
 
+def _url(v):
+    if not isinstance(v, str) or len(v) > 200 or any(c.isspace() for c in v):
+        raise ValueError("URL không hợp lệ")
+    u = urlparse(v)
+    if u.scheme not in ("http", "https") or not u.hostname:
+        raise ValueError("URL phải có dạng http://host:cổng hoặc https://host")
+    return v
+
+
+def _int(lo: int, hi: int):
+    def check(v):
+        if isinstance(v, bool) or not isinstance(v, int) or not lo <= v <= hi:
+            raise ValueError(f"cần số nguyên trong [{lo}, {hi}]")
+        return v
+    return check
+
+
+def _note(v):
+    if not isinstance(v, str) or not 1 <= len(v) <= 120 or any(ord(c) < 32 or ord(c) == 127 for c in v):
+        raise ValueError("ghi chú phải là chuỗi 1-120 ký tự, không có ký tự điều khiển")
+    return v
+
+
+MANUAL_REQUIRED = {"move": ("pan_us", "tilt_us"), "laser": ("on",), "mark": ("note",)}
+
+
+
+def _camera_pose(v):
+    return _num(-5, 5)(v)
+
+
 _POS = {"x": _num(0, 5), "y": _num(0, 5), "z": _num(0, 5), "surface": _choice("wall", "floor"),
-        "u": _num(0, 10000), "v": _num(0, 10000)}
+        "u": _num(0, 4000), "v": _num(0, 4000)}
 # lệnh -> (tham số hợp lệ, tham số bắt buộc, chỉ có trên sa bàn ảo)
 COMMANDS: dict[str, tuple[dict, tuple, bool]] = {
     "stop": ({}, (), False),
@@ -75,7 +108,13 @@ COMMANDS: dict[str, tuple[dict, tuple, bool]] = {
     "recommission": ({}, (), False),
     "check_camera": ({}, (), False),
     "decider": ({"kind": _choice("rules", "hybrid", "jev", "remote"), "run": _regex(r"[A-Za-z0-9_.-]{1,40}"),
-                 "tau": _num(0, 1), "stages": _regex(r"[a-z_,]{1,60}")}, ("kind",), False),
+                 "tau": _num(0, 1), "stages": _regex(r"[a-z_,]{1,60}"), "url": _url, "timeout": _num(0.1, 30)},
+                ("kind",), False),
+    "calibrate": ({"node": _choice("all", *NODES)}, (), False),
+    "test_alert": ({"node": _choice(*NODES)}, ("node",), False),
+    "manual": ({"node": _choice(*NODES), "op": _choice("status", "arm", "home", "move", "laser", "stop", "mark"),
+                "pan_us": _int(500, 2500), "tilt_us": _int(500, 2500), "on": _bool, "note": _note},
+               ("node", "op"), False),
     "fire": ({**_POS, "size": _choice("small", "large")}, (), True),
     "fire_large": (_POS, (), True),
     "lamp": (_POS, (), True),
@@ -83,9 +122,23 @@ COMMANDS: dict[str, tuple[dict, tuple, bool]] = {
     "steam": ({"x": _num(0, 5)}, (), True),
     "spike": ({"node": _choice(*NODES)}, (), True),
     "clear": ({}, (), True),
+    "camera_preset": ({"name": _choice(*CAMERA_PRESETS)}, ("name",), True),
+    "camera_jitter": ({}, (), True),
+    "camera_set": ({k: _camera_pose for k in ("x", "y", "z", "lx", "ly", "lz")},
+                   ("x", "y", "z", "lx", "ly", "lz"), True),
     "online": ({"node": _choice(*NODES), "on": _bool}, ("node",), True),
     "move_node": ({"node": _choice(*NODES), "dx": _num(-0.5, 0.5)}, ("node",), True),
 }
+
+
+def validate_calib(body) -> tuple[str, int | None]:
+    """Kiểm tra body của /api/calib: (action, target hoặc None)."""
+    if not isinstance(body, dict) or body.get("action") not in PiClient.CALIB_ACTIONS:
+        raise ValueError("action phải là một trong " + ", ".join(PiClient.CALIB_ACTIONS))
+    target = body.get("target")
+    if target is not None and (isinstance(target, bool) or not isinstance(target, int) or not 10 <= target <= 60):
+        raise ValueError("target phải là số nguyên trong [10, 60]")
+    return body["action"], target
 
 
 def validate_cmd(body, sim: bool) -> dict:
@@ -111,6 +164,10 @@ def validate_cmd(body, sim: bool) -> dict:
                 clean[k] = check(body[k])
             except ValueError as e:
                 raise ValueError(f"tham số {k}: {e}") from None
+    if cmd == "manual":
+        need = [k for k in MANUAL_REQUIRED.get(clean["op"], ()) if k not in clean]
+        if need:
+            raise ValueError(f"op {clean['op']} cần: {', '.join(need)}")
     return clean
 
 
@@ -203,7 +260,8 @@ def create_app(cfg: config.Settings | None = None, pi_http: httpx.AsyncClient | 
             return FileResponse(f, headers={"Cache-Control": "no-cache"})
         return handler
 
-    for route, name in (("/history", "history.html"), ("/runs", "runs.html")):  # /decider do hub.py phục vụ
+    # /decider do hub.py phục vụ
+    for route, name in (("/history", "history.html"), ("/runs", "runs.html"), ("/manual", "manual.html")):
         app.add_api_route(route, page(name), methods=["GET"], include_in_schema=False)
 
     @app.get("/login", include_in_schema=False)
@@ -282,6 +340,8 @@ def create_app(cfg: config.Settings | None = None, pi_http: httpx.AsyncClient | 
             return JSONResponse({"ok": False, "error": str(e)}, 400)
         params = {k: v for k, v in body.items() if k != "cmd"}
         status, reply = await p.send_cmd(body)
+        if body["cmd"] == "manual" and body["op"] == "status":
+            return JSONResponse(reply, status)  # trang hỏi ~1 lần/giây: không ghi sự kiện
         ok = status == 200 and bool(reply.get("ok"))
         text = f"{user}: {body['cmd']}" + (f" {json.dumps(params, ensure_ascii=False)}" if params else "")
         if not ok:
@@ -290,13 +350,31 @@ def create_app(cfg: config.Settings | None = None, pi_http: httpx.AsyncClient | 
                                 "user": user, "cmd": body["cmd"], "params": params, "ok": ok}])
         return JSONResponse(reply, status)
 
+    @app.post("/api/calib")
+    async def calib(request: Request, user: str = Depends(require_user)):
+        if not request.headers.get("content-type", "").startswith("application/json"):
+            return JSONResponse({"ok": False, "error": "Content-Type phải là application/json"}, 415)
+        try:
+            action, target = validate_calib(await request.json())
+        except (ValueError, json.JSONDecodeError) as e:
+            return JSONResponse({"ok": False, "error": str(e)}, 400)
+        p = pi(request)
+        p.set_calib(action, target)
+        await p.record_events([{"kind": "cmd", "level": "info", "text": f"{user}: hiệu chuẩn camera {action}",
+                                "user": user, "cmd": "calib", "params": {"action": action}, "ok": True}])
+        return {"ok": True, "calib": p.calib_order()}
+
     # --- camera -------------------------------------------------------------------------------
 
     @app.get("/camera/stream.mjpg")
     async def camera_stream(request: Request, user: str = Depends(require_user)):
         p = pi(request)
         if p.push_mode:
-            return JSONResponse({"error": "Không có hình"}, 503)
+            if p.fresh_frame(FRAME_MAX_AGE) is None:
+                return JSONResponse({"error": "Không có hình"}, 503)
+            return StreamingResponse(mjpeg_chunks(p, request.is_disconnected),
+                                     media_type="multipart/x-mixed-replace; boundary=frame",
+                                     headers={"Cache-Control": "no-store"})
         req = p.http.build_request("GET", "/stream.mjpg", timeout=httpx.Timeout(5.0, read=None))
         try:
             up = await p.http.send(req, stream=True)
@@ -321,7 +399,10 @@ def create_app(cfg: config.Settings | None = None, pi_http: httpx.AsyncClient | 
     @app.get("/camera/snapshot.jpg")
     async def camera_snapshot(request: Request, user: str = Depends(require_user)):
         if pi(request).push_mode:
-            return JSONResponse({"error": "Không có hình"}, 503)
+            jpeg = pi(request).fresh_frame(FRAME_MAX_AGE)
+            if jpeg is None:
+                return JSONResponse({"error": "Không có hình"}, 503)
+            return Response(jpeg, media_type="image/jpeg", headers={"Cache-Control": "no-store"})
         try:
             r = await pi(request).http.get("/snapshot.jpg")
         except httpx.HTTPError:
@@ -331,6 +412,21 @@ def create_app(cfg: config.Settings | None = None, pi_http: httpx.AsyncClient | 
         return StreamingResponse(iter([r.content]), media_type="image/jpeg", headers={"Cache-Control": "no-store"})
 
     return app
+
+
+async def mjpeg_chunks(p: PiClient, is_disconnected, stale_s: float = 15.0, poll_s: float = 0.05):
+    """Phát từng khung Pi đẩy lên dạng multipart; dừng khi client ngắt hoặc stale_s giây không có khung mới."""
+    last_seq, last_new = -1, time.monotonic()
+    while not await is_disconnected():
+        if p.frame is not None and p.frame_seq != last_seq:
+            last_seq, last_new = p.frame_seq, time.monotonic()
+            jpeg = p.frame
+            yield (b"--frame\r\nContent-Type: image/jpeg\r\n"
+                   + f"Content-Length: {len(jpeg)}\r\n\r\n".encode() + jpeg + b"\r\n")
+        elif time.monotonic() - last_new > stale_s:
+            return
+        else:
+            await asyncio.sleep(poll_s)
 
 
 def _sse(event: str, data: dict) -> str:

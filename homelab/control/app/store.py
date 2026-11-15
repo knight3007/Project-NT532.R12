@@ -22,8 +22,15 @@ CREATE TABLE IF NOT EXISTS runs(
 """
 _BASE = ("seq", "time", "kind", "level", "text", "node")
 
-# 0/1 = lược đồ M1; 2 = M2 (chỉ mục cho trang Nhật ký, cột phẳng của `runs`).
-SCHEMA_VERSION = 2
+# 0/1 = lược đồ M1; 2 = M2 (chỉ mục cho trang Nhật ký, cột phẳng của `runs`); 3 = bảng `thread` (số đo mạng Thread).
+SCHEMA_VERSION = 3
+THREAD_DDL = """
+CREATE TABLE IF NOT EXISTS thread(
+    time REAL NOT NULL, node TEXT NOT NULL, role TEXT, ping_avg REAL, ping_min REAL, ping_max REAL,
+    loss_pct REAL, coap_rtt_ms REAL, ok INTEGER NOT NULL DEFAULT 0);
+CREATE INDEX IF NOT EXISTS ix_thread_node_time ON thread(node, time);
+CREATE INDEX IF NOT EXISTS ix_thread_time ON thread(time);"""
+THREAD_COLS = ("time", "node", "role", "ping_avg", "ping_min", "ping_max", "loss_pct", "coap_rtt_ms", "ok")
 _RUN_COLS = {"ended": "REAL", "target_id": "TEXT", "x": "REAL", "y": "REAL", "z": "REAL", "surface": "TEXT",
              "nozzle": "TEXT", "decider": "TEXT", "attempts": "INTEGER", "shots": "INTEGER", "miss_cm": "REAL"}
 OUTCOMES = ("extinguished", "ignored", "alarm_only", "human", "fault", "stopped")
@@ -74,7 +81,9 @@ class Store:
             CREATE INDEX IF NOT EXISTS ix_events_kind_time ON events(kind, time);
             CREATE INDEX IF NOT EXISTS ix_runs_started ON runs(started);
             CREATE INDEX IF NOT EXISTS ix_tel_time ON telemetry(time);""")
-        if db.execute("PRAGMA user_version").fetchone()[0] < SCHEMA_VERSION:
+        db.executescript(THREAD_DDL)
+        version = db.execute("PRAGMA user_version").fetchone()[0]
+        if version < 2:
             # điền cột phẳng cho các lượt M1 đã lưu (chỉ có data_json)
             for row in db.execute("SELECT id_pi, started, data_json FROM runs").fetchall():
                 try:
@@ -83,6 +92,7 @@ class Store:
                     continue
                 db.execute(f"UPDATE runs SET {','.join(f'{k}=?' for k in f)} WHERE id_pi=? AND started=?",
                            (*f.values(), row["id_pi"], row["started"]))
+        if version < SCHEMA_VERSION:
             db.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
         db.commit()
 
@@ -232,6 +242,54 @@ class Store:
         with self._lock:
             return [tuple(r) for r in self._db.execute(sql + " ORDER BY time, node LIMIT ?", [*args, EXPORT_CAP])]
 
+    # --- mạng Thread ------------------------------------------------------------------------
+
+    def add_thread(self, rows: list[tuple]) -> None:
+        """Mỗi hàng: (time, node, role, ping_avg, ping_min, ping_max, loss_pct, coap_rtt_ms, ok)."""
+        with self._lock:
+            self._db.executemany(f"INSERT INTO thread({','.join(THREAD_COLS)}) VALUES({','.join('?' * 9)})", rows)
+            self._db.commit()
+
+    def thread_rows(self, t0: float, t1: float, node: str | None = None) -> list[tuple]:
+        """Mẫu thô theo thời gian (cho CSV), cột như THREAD_COLS."""
+        sql, args = f"SELECT {','.join(THREAD_COLS)} FROM thread WHERE time>=? AND time<=?", [t0, t1]
+        if node:
+            sql += " AND node=?"
+            args.append(node)
+        with self._lock:
+            return [tuple(r) for r in self._db.execute(sql + " ORDER BY time, node LIMIT ?", [*args, EXPORT_CAP])]
+
+    def thread_buckets(self, t0: float, t1: float, points: int = 300, node: str | None = None) -> dict:
+        """Gộp theo ô thời gian bằng nhau: ping min/avg/max, loss, CoAP, số mẫu ok/hỏng; ô rỗng bị bỏ."""
+        points = max(1, min(points, MAX_TEL_POINTS))
+        width = max(t1 - t0, 1e-6) / points
+        sql = ("SELECT node, MIN(CAST((time-?)/? AS INTEGER), ?) AS b, AVG(time) AS t, COUNT(*) AS n, "
+               "MIN(ping_min) AS pmin, AVG(ping_avg) AS pavg, MAX(ping_max) AS pmax, AVG(loss_pct) AS loss, "
+               "AVG(coap_rtt_ms) AS coap, SUM(ok) AS n_ok FROM thread WHERE time>=? AND time<=?")
+        args: list = [t0, width, points - 1, t0, t1]
+        if node:
+            sql += " AND node=?"
+            args.append(node)
+        with self._lock:
+            rows = self._db.execute(sql + " GROUP BY node, b ORDER BY node, b", args).fetchall()
+
+        def rnd(v):
+            return None if v is None else round(v, 2)
+
+        nodes: dict[str, dict] = {}
+        for r in rows:
+            d = nodes.setdefault(r["node"], {"t": [], "n": [], "n_ok": [], "min": [], "avg": [], "max": [],
+                                             "loss": [], "coap": []})
+            d["t"].append(round(r["t"], 2))
+            d["n"].append(r["n"])
+            d["n_ok"].append(r["n_ok"])
+            d["min"].append(rnd(r["pmin"]))
+            d["avg"].append(rnd(r["pavg"]))
+            d["max"].append(rnd(r["pmax"]))
+            d["loss"].append(rnd(r["loss"]))
+            d["coap"].append(rnd(r["coap"]))
+        return {"from": t0, "to": t1, "bucket_s": round(width, 3), "points": points, "nodes": nodes}
+
     # --- lượt xử lý -------------------------------------------------------------------------
 
     def upsert_runs(self, runs: list[dict]) -> None:
@@ -299,7 +357,7 @@ class Store:
     # --- chung ------------------------------------------------------------------------------
 
     def count(self, table: str) -> int:
-        assert table in ("events", "telemetry", "runs")
+        assert table in ("events", "telemetry", "runs", "thread")
         with self._lock:
             return self._db.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
 
@@ -309,5 +367,6 @@ class Store:
             n = self._db.execute("DELETE FROM events WHERE time<?", (cutoff,)).rowcount
             n += self._db.execute("DELETE FROM telemetry WHERE time<?", (cutoff,)).rowcount
             n += self._db.execute("DELETE FROM runs WHERE started<?", (cutoff,)).rowcount
+            n += self._db.execute("DELETE FROM thread WHERE time<?", (cutoff,)).rowcount
             self._db.commit()
         return n

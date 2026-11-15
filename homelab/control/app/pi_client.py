@@ -3,6 +3,7 @@
 import asyncio
 import contextlib
 import logging
+import math
 import time
 import uuid
 from collections import deque
@@ -15,7 +16,32 @@ from .store import Store
 log = logging.getLogger("nt532.pi")
 
 RECENT = 50  # số sự kiện giữ sẵn trong bộ nhớ cho /api/overview
+FRAME_MAX_AGE = 10.0  # khung camera cũ hơn số giây này coi như không có hình
 PROBE_EVERY = 10  # cứ N lần hỏi lại một lần từ since=0 để phát hiện Pi khởi động lại (seq về nhỏ)
+
+
+def _num(v) -> float | None:
+    """Số hữu hạn hoặc None (bool, chuỗi, NaN, inf không phải số đo)."""
+    if isinstance(v, bool) or not isinstance(v, int | float) or not math.isfinite(v):
+        return None
+    return float(v)
+
+
+def thread_rows(sample: dict) -> list[tuple]:
+    """Mỗi node một dòng (time, node, role, ping_avg, ping_min, ping_max, loss_pct, coap_rtt_ms, ok) từ mẫu của Pi."""
+    ts = _num(sample.get("ts")) or time.time()
+    rows = []
+    for name, n in (sample.get("nodes") or {}).items():
+        if not isinstance(n, dict):
+            continue
+        ping = n.get("ping") if isinstance(n.get("ping"), dict) else {}
+        coap = n.get("coap") if isinstance(n.get("coap"), dict) else {}
+        recv = _num(ping.get("recv")) or 0
+        role = n.get("role") if isinstance(n.get("role"), str) else None
+        rows.append((ts, str(name)[:16], role[:16] if role else None, _num(ping.get("rtt_avg")),
+                     _num(ping.get("rtt_min")), _num(ping.get("rtt_max")), _num(ping.get("loss_pct")),
+                     _num(coap.get("rtt_ms")), int(recv > 0 or coap.get("ok") is True)))
+    return rows
 
 
 class PiClient:
@@ -39,6 +65,17 @@ class PiClient:
         self.ack_seq = 0  # seq lớn nhất đã nhận trong boot hiện tại, trả cho Pi
         self._queue: dict[str, tuple[float, dict, asyncio.Future]] = {}  # lệnh chờ Pi lấy: id -> (hạn, lệnh, future)
         self._waiting: dict[str, asyncio.Future] = {}  # lệnh đã trao cho Pi, chờ kết quả
+        self.frame: bytes | None = None  # khung JPEG mới nhất Pi đẩy lên (chế độ push)
+        self.frame_seq = 0
+        self.frame_at: float | None = None  # time.monotonic() lúc nhận
+        self._cam_prev = False
+        self.calib_action = "idle"  # việc VM muốn Pi (push_camera.py) làm: idle | capture | compute | reset
+        self.calib_req = 0  # tăng mỗi khi người dùng ra lệnh mới, để Pi biết đó là lệnh mới
+        self.calib_target = 25
+        self.calib_status: dict | None = None  # báo cáo gần nhất của Pi
+        self.calib_status_at: float | None = None
+        self.thread: dict | None = None  # mẫu số đo Thread mới nhất Pi đẩy lên (thread_monitor.py)
+        self.thread_at: float | None = None  # time.monotonic() lúc nhận
         self._fails = 0
         self._was_online: bool | None = None
         self._subs: set[asyncio.Queue] = set()
@@ -61,7 +98,10 @@ class PiClient:
         out = {"pi_online": self.pi_online,
                "offline_s": None if self.offline_s is None else round(self.offline_s, 1),
                "error": self.error, "state": self.state, "limits": st.get("limits"),
-               "sim": bool(st.get("sim"))}
+               "sim": bool(st.get("sim")),
+               "camera": self.camera_live,
+               "calib": self.calib_overview(),
+               "thread": self.thread_overview()}  # có hình trẻ hơn FRAME_MAX_AGE (kể cả khi trạm không chạy)
         if with_events:
             out["last_events"] = list(reversed(self.recent))  # mới nhất trước
         return out
@@ -199,6 +239,66 @@ class PiClient:
             if fut is not None and not fut.done():
                 fut.set_result(r["reply"] if isinstance(r.get("reply"), dict) else {"ok": False})
 
+    def set_frame(self, jpeg: bytes) -> None:
+        self.frame, self.frame_at = jpeg, time.monotonic()
+        self.frame_seq += 1
+        self.note_camera()
+
+    @property
+    def camera_live(self) -> bool:
+        return self.fresh_frame(FRAME_MAX_AGE) is not None
+
+    def note_camera(self) -> None:
+        """Cờ camera đổi (có hình <-> mất hình) thì báo cho UI qua SSE; không phát mỗi khung."""
+        live = self.camera_live
+        if live != self._cam_prev:
+            self._cam_prev = live
+            self._publish([])
+
+    CALIB_ACTIONS = {"capture": "capture", "stop": "idle", "compute": "compute", "reset": "reset"}
+
+    def set_calib(self, action: str, target: int | None = None) -> None:
+        """Người dùng ra lệnh hiệu chuẩn camera (capture/stop/compute/reset); Pi nhận qua response của /api/pi/frame."""
+        self.calib_action = self.CALIB_ACTIONS[action]
+        if target is not None:
+            self.calib_target = target
+        self.calib_req += 1
+        self._publish([])
+
+    def calib_order(self) -> dict:
+        return {"req": self.calib_req, "action": self.calib_action, "target": self.calib_target}
+
+    def set_calib_status(self, status: dict) -> None:
+        self.calib_status, self.calib_status_at = status, time.monotonic()
+        self._publish([])
+
+    def calib_overview(self) -> dict:
+        age = None if self.calib_status_at is None else round(time.monotonic() - self.calib_status_at, 1)
+        return {**self.calib_order(), "status": self.calib_status, "status_age": age}
+
+    async def set_thread(self, sample: dict) -> int:
+        """Lưu mẫu Thread mới nhất, ghi mỗi node một dòng vào SQLite và báo cho UI. Trả số dòng đã ghi."""
+        self.thread, self.thread_at = sample, time.monotonic()
+        rows = thread_rows(sample)
+        if rows:
+            try:
+                await asyncio.to_thread(self.store.add_thread, rows)
+            except Exception:  # noqa: BLE001 - lỗi ghi đĩa không được làm hỏng response cho Pi
+                log.exception("không ghi được số đo Thread")
+        self._publish([])
+        return len(rows)
+
+    def thread_overview(self) -> dict | None:
+        if self.thread is None or self.thread_at is None:
+            return None
+        return {"latest": self.thread, "age": round(time.monotonic() - self.thread_at, 1)}
+
+    def fresh_frame(self, max_age: float) -> bytes | None:
+        """Khung mới nhất nếu chưa quá max_age giây, ngược lại None."""
+        if self.frame is None or self.frame_at is None or time.monotonic() - self.frame_at > max_age:
+            return None
+        return self.frame
+
     def recent_tail(self, n: int) -> list[dict]:
         return list(self.recent)[-n:] if n else []
 
@@ -233,6 +333,7 @@ class PiClient:
 
     async def check_push_timeout(self) -> None:
         """Chế độ push: lâu không có push thì ghi "Mất kết nối với Pi" một lần."""
+        self.note_camera()
         if self.last_ok is None or self.pi_online or self._was_online is False:
             return
         self._was_online = False

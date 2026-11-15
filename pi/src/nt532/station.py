@@ -23,6 +23,7 @@ from .orchestrator.frames import FrameHub
 from .orchestrator.fusion import SensorHistory
 from .orchestrator.machine import Orchestrator, Settings
 from .vision import Vision
+from .vision.live import LiveDetector
 
 
 @dataclass
@@ -37,11 +38,12 @@ class Station:
     heartbeat: HeartbeatSender
     world: object | None = None  # SimWorld khi chạy sa bàn ảo
     detector_name: str = ""
-    fake_nodes: dict | None = None  # {tên: FakeNode} khi build_sim(link="coap")
+    fake_nodes: dict | None = None  # {tên: FakeNode} khi build_sim(link="coap" hoặc "coap-integrated")
     decider_url: str | None = None  # cho bộ quyết định remote, để đổi qua lại từ dashboard
     decider_timeout: float = 3.0
     rule_questions: tuple = ()  # câu luôn theo luật ở chế độ lai, giữ khi đổi bộ quyết định từ dashboard
     both_tau: float | None = None  # ngưỡng nhận BOTH của câu nozzle ở chế độ lai, giữ như rule_questions
+    live: LiveDetector | None = None  # nhận diện lửa nền lúc IDLE (chỉ trạm thật, xem `start`)
 
     def start(self, orchestrate: bool = True) -> "Station":
         """`orchestrate=False`: chỉ bật sa bàn ảo và heartbeat, orchestrator không chạy nên không tự
@@ -51,9 +53,22 @@ class Station:
         self.heartbeat.start()
         if orchestrate:
             self.orch.start()
+            # sa bàn ảo mặc định tắt: detector giả dùng chung bộ số ngẫu nhiên với kịch bản
+            hz = float(self.site["vision"].get("live_detect_hz", 0.0 if self.world is not None else 5.0))
+            if hz > 0 and self.live is None:
+                v = self.site["vision"]
+                auto = None
+                if v.get("auto_trigger", self.world is None):  # sa bàn ảo mặc định tắt, trạm thật bật
+                    auto = {"trigger_s": float(v.get("auto_trigger_s", 15.0)),
+                            "gap_s": float(v.get("auto_trigger_gap_s", 0.6)),
+                            "cooldown_s": float(v.get("auto_trigger_cooldown_s", 15.0)),
+                            "conf": float(v.get("detect_conf", 0.35))}
+                self.live = LiveDetector(self, hz, auto=auto).start()
         return self
 
     def stop(self) -> None:
+        if self.live is not None:
+            self.live.stop()
         self.orch.emergency_stop("tắt trạm")
         self.orch.stop()
         self.heartbeat.halt()
@@ -136,7 +151,9 @@ def build_sim(decider: str = "rules", jev_run: str = "jev2", tau: float = 0.8,
               rule_questions: tuple = (), both_tau: float | None = None,
               device: str = "cpu", pivot_error_m: float = 0.0) -> Station:
     """`link="mem"`: node ảo trong bộ nhớ (SimLink). `"coap"`: mỗi node là một FakeNode chạy lõi C của
-    firmware, lệnh và telemetry đi qua UDP localhost bằng CoapLink thật.
+    firmware, lệnh và telemetry đi qua UDP localhost bằng CoapLink thật. `"coap-integrated"`: mỗi node là một
+    IntegratedFakeNode chạy lõi C của firmware node B tích hợp (hợp đồng /pantilt /laser), Pi nói qua
+    IntegratedLink (không có bơm: lệnh phun bị từ chối).
 
     `camera` (tên preset hoặc (vị trí, điểm nhìn)) và `node_layout` ("corners" mặc định, "posts") chọn camera
     và bố cục node của sa bàn ảo. Trạm tự commissioning lúc khởi động từ ảnh dựng ra nên camera và
@@ -144,8 +161,8 @@ def build_sim(decider: str = "rules", jev_run: str = "jev2", tau: float = 0.8,
     data/sim/commissioning.yaml mà bộ quyết định đọc vị trí node)."""
     from .sim.world import OracleDetector, SimLink, SimWorld
 
-    if link not in ("mem", "coap"):
-        raise ValueError(f"link phải là mem hoặc coap, nhận {link!r}")
+    if link not in ("mem", "coap", "coap-integrated"):
+        raise ValueError(f"link phải là mem, coap hoặc coap-integrated, nhận {link!r}")
 
     events = EventLog(path=log_path)
     world = SimWorld(seed=seed, camera=camera, node_layout=node_layout, pivot_error_m=pivot_error_m)
@@ -166,6 +183,8 @@ def build_sim(decider: str = "rules", jev_run: str = "jev2", tau: float = 0.8,
     fakes = None
     if link == "coap":
         link, fakes = _coap_nodes(world, events)
+    elif link == "coap-integrated":
+        link, fakes = _integrated_nodes(world, events)
     else:
         link = SimLink(world)
     st = _wire(site, vision, hub, link,
@@ -216,6 +235,36 @@ def _coap_nodes(world, events):
     try:
         for fn in fakes.values():
             fn.start()
+    except Exception:
+        for fn in fakes.values():
+            fn.stop()
+        link.close()
+        raise
+    return link, fakes
+
+
+def _integrated_nodes(world, events):
+    """IntegratedLink tới một IntegratedFakeNode (lõi C node B tích hợp) cho mỗi node của sa bàn, trên 127.0.0.1."""
+    from .net.fakenode import SimWorldHardware, SimWorldSensors, free_port
+    from .net.integrated_link import IntegratedLink
+    from .net.integrated_node import IntegratedFakeNode
+
+    transports = ["simplesocketserver"]
+    pi_port = free_port()
+    ports = {n: free_port() for n in world.nodes}
+    link = IntegratedLink({n: f"127.0.0.1:{p}" for n, p in ports.items()}, ("127.0.0.1", pi_port),
+                          transports=transports).start()
+    temp, gas = world.limits["temp"], world.limits["gas"]
+    fakes = {}
+    try:
+        for n, port in ports.items():
+            fakes[n] = IntegratedFakeNode(
+                n, ("127.0.0.1", port), f"coap://127.0.0.1:{pi_port}", SimWorldHardware(world, n),
+                SimWorldSensors(world, n), telemetry_s=world.telemetry_period, temp_c=temp, gas=gas,
+                transports=transports,
+                on_event=lambda kind, text, n=n: kind in ("rx", "alarm", "servo", "drop") and
+                events.emit("node", f"{n} {kind} {text}"))
+            fakes[n].start()
     except Exception:
         for fn in fakes.values():
             fn.stop()
@@ -278,14 +327,57 @@ def resolve_nodes(net: dict, events: EventLog) -> dict[str, str]:
     return nodes
 
 
+def _pulse_maps(actuator: dict | None, nodes: dict[str, str]) -> dict:
+    """PulseMap riêng từng node từ `actuator.nodes.<node>.pulse` ({pan_sign, tilt_sign, home_us, deg_per_us});
+    node không khai báo thì dùng mặc định của IntegratedLink. Chiều quay lấy từ số đo servo của từng cụm."""
+    from .net.integrated_node import PulseMap
+
+    keys = ("deg_per_us", "home_us", "pan_sign", "tilt_sign", "pan_home_us", "tilt_home_us")
+    out = {}
+    for n in nodes:
+        p = ((actuator or {}).get("nodes") or {}).get(n) or {}
+        p = p.get("pulse") or {}
+        if p:
+            bad = set(p) - set(keys)
+            if bad:
+                raise ValueError(f"actuator.nodes.{n}.pulse có khóa lạ {sorted(bad)}, chỉ nhận {list(keys)}")
+            for k in ("pan_sign", "tilt_sign"):
+                if k in p and p[k] not in (1, -1):
+                    raise ValueError(f"actuator.nodes.{n}.pulse.{k} phải là 1 hoặc -1")
+            out[n] = PulseMap(**p)
+    return out
+
+
+def _make_link(net: dict, nodes: dict[str, str], actuator: dict | None = None):
+    """Chọn link theo `network.link`: "coap" (mặc định, node đẩy /t /a tới Pi) hoặc "integrated" (firmware
+    A/B tích hợp: lệnh qua /pantilt /laser, Pi poll GET /status mỗi `network.status_poll_s` giây, mặc định 1.0,
+    để lấy telemetry và cảnh báo; chiều quay servo từng node theo `actuator.nodes.<node>.pulse`). Chưa start."""
+    from .net.coap import CoapLink
+    from .net.integrated_link import IntegratedLink
+
+    kind = str(net.get("link") or "coap")
+    bind = (net.get("bind", "::"), int(net.get("port", 5683)))
+    transports = net.get("transports")
+    if kind == "coap":
+        return CoapLink(nodes, bind, transports=transports)
+    if kind == "integrated":
+        return IntegratedLink(nodes, bind, transports=transports,
+                              status_poll_s=float(net.get("status_poll_s") or 1.0),
+                              pulse_maps=_pulse_maps(actuator, nodes),
+                              servo_speed_us_s=(actuator or {}).get("servo_speed_us_s"))
+    raise ValueError(f"network.link phải là coap hoặc integrated, nhận {kind!r}")
+
+
 def build_real(decider: str = "rules", jev_run: str = "jev2", tau: float = 0.8,
                source: int | str | None = None, fps: float = 15.0, yolo_device: str | None = None,
                log_path: str | Path | None = None, settings: Settings | None = None,
                model_stages: str = "verify", decider_url: str | None = None,
                decider_timeout: float = 3.0, rule_questions: tuple = (),
                both_tau: float | None = None, device: str = "cpu") -> Station:
-    """Webcam + CoAP. Cần calibration/camera.yaml, commissioning và `network.nodes` trong site.yaml."""
-    from .net.coap import CoapLink
+    """Webcam + CoAP. Cần calibration/camera.yaml, commissioning và `network.nodes` trong site.yaml.
+
+    `network.link` chọn firmware node: "coap" (mặc định) hoặc "integrated" (A/B tích hợp, không bơm, telemetry
+    bằng poll /status mỗi `network.status_poll_s`); xem `_make_link`."""
     from .vision import open_camera
 
     events = EventLog(path=log_path)
@@ -303,8 +395,7 @@ def build_real(decider: str = "rules", jev_run: str = "jev2", tau: float = 0.8,
     hub = FrameHub(getattr(cap, "read_stamped", read), fps).start()
     net = site.get("network") or {}
     nodes = resolve_nodes(net, events)
-    link = CoapLink(nodes, (net.get("bind", "::"), int(net.get("port", 5683))),
-                    transports=net.get("transports")).start()
+    link = _make_link(net, nodes, site.get("actuator")).start()
     st = _wire(site, vision, hub, link,
                make_decider(decider, jev_run, tau, device, stages=model_stages, url=decider_url,
                             timeout_s=decider_timeout, rule_questions=rule_questions, both_tau=both_tau),

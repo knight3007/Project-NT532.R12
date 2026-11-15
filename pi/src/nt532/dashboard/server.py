@@ -7,6 +7,8 @@
     GET  /snapshot.jpg     một khung
     POST /api/cmd          {"cmd": ...}: stop, enable, recommission, decider (kind remote kèm url), calibrate
                            ({"cmd": "calibrate", "node": "s1" | "s2" | "all"}: quét tự hiệu chuẩn vòi lúc rảnh),
+                           {"cmd": "test_alert", "node": "s1" | "s2"}: giả báo động từ node để kích một lượt
+                           chữa cháy không cần cảm biến (cần orchestrator đang bật),
                            và lệnh sa bàn ảo
 
 Không có xác thực: chỉ mở trong mạng LAN của sa bàn.
@@ -14,21 +16,25 @@ Không có xác thực: chỉ mở trong mạng LAN của sa bàn.
 
 import json
 import math
+import os
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from importlib.resources import files
+from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 import cv2
 import numpy as np
 
 from ..decider.state_text import NOZZLES
+from ..net.protocol import Alert
 from ..orchestrator.fusion import alarm_limits
 from ..vision.localize import project
 
 STATIC = files("nt532.dashboard") / "static"
 CYAN, YELLOW, RED, GREEN, WHITE = (255, 200, 0), (0, 220, 255), (40, 40, 255), (80, 220, 80), (240, 240, 240)
+ORANGE = (0, 140, 255)  # hộp lửa nhận diện nền (BGR)
 MAGENTA = (220, 80, 220)  # viền vùng nền, khác viền bảng đứng (CYAN)
 
 
@@ -87,10 +93,37 @@ class Dashboard:
             "detector": st.detector_name, "camera_error": st.hub.error,
             "board": {"width": st.site["board"]["width"], "height": st.site["board"]["height"]},
             "floor": self._floor_json(),
+            "live_fire": self._live_fire(),
+            "auto_trigger": self._auto_trigger(),  # {enabled, seen_s, need_s, next_allowed_in_s} hoặc None
         }
         if st.world is not None:
             out["truth"] = {**st.world.truth(), **self._sim_camera()}
         return _clean(out)
+
+    def _live_fire(self) -> list[dict]:
+        """Hộp lửa của bộ nhận diện nền còn tươi: [{conf, box, point, surface, age_s}] (rỗng nếu không chạy)."""
+        live = getattr(self.st, "live", None)
+        return live.latest() if live is not None else []
+
+    def _auto_trigger(self) -> dict | None:
+        live = getattr(self.st, "live", None)
+        return live.auto_status() if live is not None else None
+
+    def _draw_live(self, img: np.ndarray) -> None:
+        """Vẽ hộp lửa nền: khung cam, độ tin cậy, chấm neo và tọa độ sàn (hoặc "ngoài vùng")."""
+        for d in self._live_fire():
+            x0, y0, x1, y1 = (int(v) for v in d["box"])
+            cv2.rectangle(img, (x0, y0), (x1, y1), ORANGE, 2)
+            cv2.putText(img, f"{d['conf']:.2f}", (x0, max(12, y0 - 6)), 0, 0.5, ORANGE, 1)
+            cv2.circle(img, (int(d["anchor"][0]), int(d["anchor"][1])), 3, ORANGE, -1)
+            pt = d["point"]
+            if pt is None:
+                label = "ngoai vung"
+            elif d["surface"] == "floor":  # nền: mặt Z=0, tọa độ (x, y)
+                label = f"x={pt[0] * 100:.0f}cm y={pt[1] * 100:.0f}cm"
+            else:  # bảng đứng: tọa độ (x, z)
+                label = f"x={pt[0] * 100:.0f}cm z={pt[2] * 100:.0f}cm"
+            cv2.putText(img, label, (x0, min(img.shape[0] - 4, y1 + 16)), 0, 0.5, ORANGE, 1)
 
     def _sim_camera(self) -> dict:
         """Camera ảo (vị trí, điểm nhìn), bố cục node và camera thấy gì (`Scene.coverage`)."""
@@ -122,6 +155,7 @@ class Dashboard:
         if vision.state is None or (vision.reference_mode == "auto" and vision.blockers()):
             message = "auto map invalid" if vision.state is not None else "chua commissioning"
             cv2.putText(img, message, (12, 30), 0, 0.8, RED, 2)
+            self._draw_live(img)
             return img
         cam, plane_y = vision.camera, self.st.site["board"]["plane_y"]
 
@@ -156,6 +190,7 @@ class Dashboard:
         for name, pose in vision.nodes.items():
             u, v = project(pose.position, cam)
             cv2.putText(img, name, (int(u) - 12, int(v) + 34), 0, 0.7, WHITE, 2)
+        self._draw_live(img)
         return img
 
     def command(self, body: dict) -> dict:
@@ -181,6 +216,8 @@ class Dashboard:
                 return {"ok": False, "error": "tự hiệu chuẩn hoặc orchestrator đang tắt"}
             orch.request_calibration(nodes)
             st.events.emit("config", f"yêu cầu tự hiệu chuẩn: {', '.join(nodes)}")
+        elif cmd == "test_alert":
+            return self._test_alert(body)
         elif cmd == "decider":
             kind = body.get("kind", "rules")
             if kind == "remote":
@@ -200,11 +237,172 @@ class Dashboard:
                 st.events.emit("config", f"chuyển sang bộ quyết định ở máy {parsed.hostname}")
             st.set_decider(kind, body.get("run", "jev2"), float(body.get("tau", 0.8)),
                            body.get("stages", "verify"))
+        elif cmd == "manual":
+            return self._manual(body)
         elif world is None:
             return {"ok": False, "error": f"lệnh {cmd!r} chỉ có trên sa bàn ảo"}
         else:
             return self._sim(body)
         return {"ok": True}
+
+    def _test_alert(self, body: dict) -> dict:
+        """Giả báo động từ node (không cần cảm biến) để kích một lượt chữa cháy trên trạm thật.
+
+        Nhiệt lấy từ mẫu gần nhất, khí tối thiểu bằng ngưỡng báo động + 1. Từ chối khi orchestrator tắt
+        (cũng là chế độ điều khiển tay: `_manual` chỉ chạy khi Tự động tắt)."""
+        st = self.st
+        node = body.get("node")
+        if node not in NOZZLES:
+            return {"ok": False, "error": f"node phải là {', '.join(NOZZLES)}, không phải {node!r}"}
+        if not st.orch.enabled:
+            return {"ok": False, "error": "Orchestrator đang tắt (hoặc đang điều khiển tay): bật Tự động trước"}
+        lim = alarm_limits(st.site)
+        last = st.sensors.samples(node, 1)
+        temp = float(last[-1].temp) if last else 0.0
+        gas = max(float(last[-1].gas) if last else 0.0, lim["gas"] + 1.0)
+        st.events.emit("alert", f"giả báo động từ dashboard cho {node}", level="warn", node=node, test=True)
+        st.orch.on_alert(Alert(node, -1, "alert", temp, gas))
+        return {"ok": True}
+
+    def _manual(self, body: dict) -> dict:
+        """Điều khiển tay pan-tilt/laser từng node thật (trang /manual); chỉ khi tắt Tự động."""
+        st = self.st
+        if st.orch.enabled:
+            return {"ok": False, "error": "Tắt chế độ Tự động trước khi điều khiển tay"}
+        fn = getattr(st.link, "manual", None)
+        if fn is None:
+            return {"ok": False, "error": "Chỉ có ở link tích hợp (network.link: integrated)"}
+        node, op = body.get("node"), body.get("op")
+        if node not in getattr(st.link, "nodes", ()):
+            return {"ok": False, "error": f"node {node!r} không có trong link"}
+        note = body.get("note")
+        if op == "mark" and (not isinstance(note, str) or len(note) > 120):
+            return {"ok": False, "error": "ghi chú phải là chuỗi tối đa 120 ký tự"}
+        res = fn(node, "status" if op == "mark" else op, pan_us=body.get("pan_us"),
+                 tilt_us=body.get("tilt_us"), on=body.get("on"))
+        if op != "status":
+            pt = res.get("pantilt") or {}
+            data = {"node": node, "op": op, "ok": bool(res.get("ok")), "pan_us": body.get("pan_us"),
+                    "tilt_us": body.get("tilt_us"), "laser_on": res.get("laser_on"),
+                    "reported_pan_us": pt.get("pan_us"), "reported_tilt_us": pt.get("tilt_us"),
+                    "armed": pt.get("armed")}
+            if op == "mark":
+                data["note"] = note
+                text = f"điều khiển tay {node}: ghi điểm {note!r} tại {pt.get('pan_us')},{pt.get('tilt_us')}"
+            else:
+                what = f"{op} {body['pan_us']},{body['tilt_us']}" if op == "move" else (
+                    f"{op} {'bật' if body.get('on') else 'tắt'}" if op == "laser" else op)
+                text = f"điều khiển tay {node}: {what}"
+            if not res.get("ok"):
+                text += f" — lỗi: {res.get('error')}"
+                data["error"] = res.get("error")
+            st.events.emit("manual", text, level="info" if res.get("ok") else "warn", **data)
+            if op == "mark" and res.get("ok"):
+                # chụp ảnh và tìm chấm laser ở luồng riêng: VM chỉ cho cả lệnh 5 s
+                threading.Thread(target=self._mark_capture, args=(node, note, res), daemon=True,
+                                 name="mark-capture").start()
+        return res
+
+    # thời gian chờ sau khi tắt laser trước khi chụp ảnh tắt (stream RTMP trễ); test đặt 0
+    off_wait_s = 1.5
+
+    def _mark_capture(self, node: str, note: str, res: dict) -> None:
+        """Lưu ảnh camera (laser bật, laser tắt) và vị trí chấm laser cho một điểm vừa ghi, làm mẫu hiệu chuẩn.
+
+        Không bao giờ ném lỗi và luôn bật laser lại nếu lúc ghi nó đang bật."""
+        st = self.st
+        pt = res.get("pantilt") or {}
+        extra = {"node": node, "op": "mark_image", "mark_note": note,
+                 "pan_us": pt.get("pan_us"), "tilt_us": pt.get("tilt_us")}
+        was_on = bool(res.get("laser_on"))
+        try:
+            hub = getattr(st, "hub", None)
+            vision = getattr(st, "vision", None)
+            if hub is None or vision is None:
+                raise RuntimeError("trạm chưa có camera hoặc vision")
+            on = np.array(hub.fresh(timeout=3))
+            off = None
+            if was_on:
+                try:
+                    st.link.manual(node, "laser", on=False)
+                    time.sleep(self.off_wait_s)
+                    off = np.array(hub.fresh(timeout=3))
+                finally:
+                    st.link.manual(node, "laser", on=True)
+            pixel = world = anywhere = None
+            cands = []
+            if off is not None:
+                cands = self._spot_candidates(vision, on, off, vision.cfg["laser_min_rise"])
+                anywhere = cands[0]["px"] if cands else None
+                # đèn relay trên mạch ở chân trụ cũng đỏ lên khi bật: lấy vết sáng nhất nằm trên sàn quanh các tag
+                inside = [c for c in cands if c.get("in_area")]
+                if inside:
+                    pixel, world = inside[0]["px"], inside[0]["world"]
+                elif cands and not any("in_area" in c for c in cands):
+                    pixel = anywhere  # chưa có bản đồ sàn: không lọc được, giữ vết sáng nhất
+                    try:
+                        world = vision.find_spot(on, off)
+                    except Exception:  # noqa: BLE001 - vision thiếu commissioning: vẫn giữ pixel
+                        world = None
+            out_dir = Path(os.environ.get("NT532_MARKS_DIR", "data/marks"))
+            out_dir.mkdir(parents=True, exist_ok=True)
+            stamp = time.strftime("%Y%m%d-%H%M%S")
+            names = {}
+            for tag, img in (("on", on), ("off", off)):
+                if img is None:
+                    names[tag] = None
+                    continue
+                names[tag] = f"{stamp}_{node}_{tag}.jpg"
+                if not cv2.imwrite(str(out_dir / names[tag]), img, [cv2.IMWRITE_JPEG_QUALITY, 95]):
+                    raise OSError(f"không ghi được {out_dir / names[tag]}")
+            def r1(p):
+                return None if p is None else [round(float(p[0]), 1), round(float(p[1]), 1)]
+
+            px, px_any = r1(pixel), r1(anywhere)
+            if world is not None:
+                world = [round(float(v), 4) for v in world]
+            where = f"chấm ở pixel ({px[0]}, {px[1]})" if px else "không thấy chấm"
+            st.events.emit("manual", f"điều khiển tay {node}: ảnh điểm {note!r} — {where}", level="info",
+                           ok=True, image_on=names["on"], image_off=names["off"], spot_px=px, spot_px_any=px_any,
+                           spot_candidates=[{**c, "px": r1(c["px"]), "world": None if c.get("world") is None
+                                             else [round(float(v), 4) for v in c["world"]]} for c in cands],
+                           spot_world=world, **extra)
+        except Exception as e:  # noqa: BLE001 - luồng nền không được làm sập trạm
+            st.events.emit("manual", f"điều khiển tay {node}: không lưu được ảnh điểm {note!r} — {e}",
+                           level="warn", ok=False, error=str(e), **extra)
+
+    MARK_AREA_MARGIN_M = 0.35  # nới vùng tag tham chiếu khi chọn vết laser lúc ghi điểm
+
+    @classmethod
+    def _spot_candidates(cls, vision, on: np.ndarray, off: np.ndarray, rise: float, top: int = 5) -> list[dict]:
+        """Các vết đỏ sáng lên khi bật laser, sáng nhất trước: px, rise, area, và nếu có bản đồ sàn thì
+        world (giao tia với mặt sàn) cùng in_area (nằm trong vùng tag tham chiếu nới MARK_AREA_MARGIN_M)."""
+        diff = cv2.GaussianBlur(cv2.subtract(on[:, :, 2], off[:, :, 2]), (5, 5), 0)
+        n, labels, stats, _ = cv2.connectedComponentsWithStats((diff >= rise).astype(np.uint8))
+        rmap = getattr(vision, "reference_map", None)
+        hull = None
+        if rmap is not None:
+            try:
+                hull = cv2.convexHull(np.array([p[:2] for p in rmap.references.values()], np.float32))
+            except Exception:  # noqa: BLE001 - bản đồ chưa đủ tag: không lọc theo vùng
+                hull = None
+        out = []
+        for i in range(1, n):
+            ys, xs = np.nonzero(labels == i)
+            w = diff[ys, xs].astype(float)
+            c = {"px": (float((xs * w).sum() / w.sum()), float((ys * w).sum() / w.sum())),
+                 "rise": int(w.max()), "area": int(stats[i, cv2.CC_STAT_AREA])}
+            if hull is not None:
+                try:
+                    pt = rmap.table_point(c["px"])
+                except Exception:  # noqa: BLE001
+                    pt = None
+                c["world"] = pt
+                c["in_area"] = bool(pt is not None and cv2.pointPolygonTest(
+                    hull, (float(pt[0]), float(pt[1])), True) >= -cls.MARK_AREA_MARGIN_M)
+            out.append(c)
+        out.sort(key=lambda c: -c["rise"])
+        return out[:top]
 
     def _camera_cmd(self, body: dict) -> dict:
         """Lệnh camera của sa bàn ảo: preset, xê dịch ngẫu nhiên, đặt vị trí và điểm nhìn."""

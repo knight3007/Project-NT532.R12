@@ -145,11 +145,46 @@ def predict_spot(cal: NodeCal, tag, pan_cmd: float, tilt_cmd: float, surfaces: d
     return None if hit is None else hit[0]
 
 
+def plane_spot(origin, direction, surface: str, surfaces: dict) -> np.ndarray | None:
+    """Điểm tia (origin, direction) chạm mặt phẳng vô hạn "wall" hoặc "floor" (không giới hạn mép, để hàm trơn
+    cho visual servoing); None nếu tia song song hoặc hướng ra sau lưng."""
+    h = _plane_point(np.asarray(origin, float), np.asarray(direction, float), surface, surfaces)
+    return None if h is None or h[0] <= 0 else h[1]
+
+
+def forward_spot(cal: NodeCal, tag, pan_cmd: float, tilt_cmd: float, surface: str,
+                 surfaces: dict) -> np.ndarray | None:
+    """Mô hình tiến: điểm 3D laser rơi trên mặt phẳng `surface` khi ra lệnh (pan_cmd, tilt_cmd) theo `cal`."""
+    return plane_spot(*_ray(cal, tag, pan_cmd, tilt_cmd), surface, surfaces)
+
+
 def command_for(cal: NodeCal, tag, target, extra_tilt_deg: float = 0.0) -> tuple[float, float]:
     """(pan_lệnh, tilt_lệnh) để tia đi qua `target`. `extra_tilt_deg` (góc bù tia nước) cộng vào tilt hình
     học trước khi đổi sang lệnh."""
     pan, tilt = aiming.angles(cal.pivot_world(tag), target, cal.heading(tag) + cal.yaw0_deg)
     return pan / cal.pan_gain, (tilt + extra_tilt_deg - cal.tilt0_deg) / cal.tilt_gain
+
+
+def cal_violations(cal: NodeCal, prior: NodeCal, site: dict) -> list[str]:
+    """Lý do `cal` vô lý về vật lý (rỗng nếu hợp lý), so với số mồi `prior` (từ site). Một lần khớp có rms thấp vẫn
+    có thể lạc sang nghiệm vô nghĩa khi mẫu hẹp (tâm quay cách số mồi cả mét, hệ số servo gần 0): không áp dụng.
+    Ngưỡng ở site.yaml mục selfcal: max_pivot_shift_m (0,15), min_gain và max_gain (0,7 và 1,3),
+    max_angle_offset_deg (25)."""
+    sc = site.get("selfcal", {}) or {}
+    max_shift = float(sc.get("max_pivot_shift_m", 0.15))
+    lo, hi = float(sc.get("min_gain", 0.7)), float(sc.get("max_gain", 1.3))
+    max_ang = float(sc.get("max_angle_offset_deg", 25.0))
+    out = []
+    shift = float(np.linalg.norm(np.array(cal.pivot, float) - np.array(prior.pivot, float)))
+    if shift > max_shift:
+        out.append(f"tâm quay lệch số mồi {shift * 100:.0f} cm (quá {max_shift * 100:g} cm)")
+    for name, g in (("pan_gain", cal.pan_gain), ("tilt_gain", cal.tilt_gain)):
+        if not lo <= g <= hi:
+            out.append(f"{name} {g:.3g} ngoài [{lo:g}, {hi:g}]")
+    for name, a in (("yaw0", cal.yaw0_deg), ("tilt0", cal.tilt0_deg)):
+        if abs(a) > max_ang:
+            out.append(f"{name} {a:+.1f} độ quá {max_ang:g} độ")
+    return out
 
 
 # --- khớp --------------------------------------------------------------------------------------
@@ -241,6 +276,8 @@ def fit(samples, prior: NodeCal, site: dict, weights=None, min_samples: int | No
         why = (f"rms {after:.2f} cm vượt {max_rms:g} cm" if after > max_rms
                else f"rms sau khớp {after:.2f} cm không tốt hơn trước {before:.2f} cm")
         return replace(base, rms_before_cm=before, note=f"bác kết quả: {why}")
+    if bad := cal_violations(cal, prior, site):
+        return replace(base, rms_before_cm=before, note="bác kết quả vô lý: " + "; ".join(bad))
     return replace(cal, n_samples=n, rms_cm=after, fitted=True, time=time.time(), rms_before_cm=before,
                    note=note)
 
@@ -296,9 +333,10 @@ def save_cals(site: dict, cals: dict) -> Path:
     return path
 
 
-def load_cals(site: dict) -> dict:
+def load_cals(site: dict, rejected: list | None = None) -> dict:
     """Đọc cal đã lưu, trả {node: NodeCal} (rỗng nếu chưa có file hoặc file hỏng). Hướng đầu `heading_deg`
-    lấy lại từ site, không từ file."""
+    lấy lại từ site, không từ file. Cal vô lý (xem `cal_violations`) bị bỏ để dùng số mồi; mỗi cal bị bỏ thêm
+    một chuỗi "node: lý do" vào `rejected` nếu có."""
     path = cal_path(site)
     if not path.exists():
         return {}
@@ -308,10 +346,15 @@ def load_cals(site: dict) -> dict:
         out = {}
         for n, d in raw.items():
             prior = NodeCal.from_site(site, n)
-            out[n] = replace(prior, pivot=tuple(float(v) for v in d["pivot"]), yaw0_deg=float(d["yaw0_deg"]),
-                             tilt0_deg=float(d["tilt0_deg"]), pan_gain=float(d.get("pan_gain", 1.0)),
-                             tilt_gain=float(d.get("tilt_gain", 1.0)), n_samples=int(d.get("n_samples", 0)),
-                             rms_cm=d.get("rms_cm"), fitted=True, time=float(d.get("time", 0.0)))
+            cal = replace(prior, pivot=tuple(float(v) for v in d["pivot"]), yaw0_deg=float(d["yaw0_deg"]),
+                          tilt0_deg=float(d["tilt0_deg"]), pan_gain=float(d.get("pan_gain", 1.0)),
+                          tilt_gain=float(d.get("tilt_gain", 1.0)), n_samples=int(d.get("n_samples", 0)),
+                          rms_cm=d.get("rms_cm"), fitted=True, time=float(d.get("time", 0.0)))
+            if bad := cal_violations(cal, prior, site):
+                if rejected is not None:
+                    rejected.append(f"{n}: " + "; ".join(bad))
+                continue
+            out[n] = cal
         return out
     except (OSError, yaml.YAMLError, KeyError, TypeError, ValueError):
         return {}
@@ -321,10 +364,31 @@ def load_cals(site: dict) -> dict:
 
 
 def sweep_commands(cal: NodeCal, tag, site: dict, limits: "aiming.Limits", n: int = 8,
-                   margin_m: float = 0.10) -> list[tuple[float, float]]:
+                   margin_m: float = 0.10, prior: NodeCal | None = None) -> list[tuple[float, float]]:
     """n góc lệnh (pan, tilt) trải đều quanh góc hướng vào giữa vùng bia, chỉ giữ góc trong giới hạn của
     node mà vết dự đoán (theo `cal` hiện tại) nằm cách mép vùng bia ít nhất `margin_m` để camera còn thấy.
-    Chọn theo khoảng cách xa nhất trong (pan, tilt) để cùng lúc trải rộng pan, tilt và khoảng cách."""
+    Chọn theo khoảng cách xa nhất trong (pan, tilt) để cùng lúc trải rộng pan, tilt và khoảng cách.
+
+    Chọn được dưới 3 góc thì thử lại lần lượt: bằng `prior` (số mồi của site) nếu có, rồi nới lề về 0 với
+    `cal`, rồi với `prior`. Cal hỏng dự đoán vết ra ngoài vùng thì nếu không có đường lui này, hiệu chuẩn lại
+    sẽ kẹt vì không chọn nổi góc nào để đo cal mới."""
+    tries = [(cal, margin_m)]
+    if prior is not None:
+        tries.append((prior, margin_m))
+    tries.append((cal, 0.0))
+    if prior is not None:
+        tries.append((prior, 0.0))
+    best: list = []
+    for c, m in tries:
+        got = _sweep_once(c, tag, site, limits, n, m)
+        if len(got) >= 3:
+            return got
+        best = max(best, got, key=len)
+    return best
+
+
+def _sweep_once(cal: NodeCal, tag, site: dict, limits: "aiming.Limits", n: int,
+                margin_m: float) -> list[tuple[float, float]]:
     surf = surfaces_of(site)
     wall = surf["wall"]
     centre = np.array([wall["width"] / 2, wall["plane_y"] / 2, 0.0])
@@ -344,3 +408,67 @@ def sweep_commands(cal: NodeCal, tag, site: dict, limits: "aiming.Limits", n: in
         d = np.min(np.linalg.norm(((pts[:, None, :] - pts[chosen][None]) / scale), axis=2), axis=1)
         chosen.append(int(np.argmax(d)))
     return [cands[i] for i in chosen]
+
+
+# --- quét dẫn đường: đích nằm trong khung các tag tham chiếu -------------------------------------
+
+
+def convex_hull(points) -> np.ndarray:
+    """Vùng bao lồi (k x 2, ngược chiều kim đồng hồ) của các điểm (x, y); dưới 3 điểm không cộng tuyến thì
+    trả về rỗng (không có "khung")."""
+    pts = sorted({(round(float(p[0]), 6), round(float(p[1]), 6)) for p in points})
+    if len(pts) < 3:
+        return np.zeros((0, 2))
+
+    def half(seq):
+        h: list = []
+        for p in seq:
+            while len(h) >= 2 and (h[-1][0] - h[-2][0]) * (p[1] - h[-2][1]) - (h[-1][1] - h[-2][1]) * (p[0] - h[-2][0]) <= 0:
+                h.pop()
+            h.append(p)
+        return h
+
+    hull = half(pts)[:-1] + half(pts[::-1])[:-1]
+    return np.array(hull, float) if len(hull) >= 3 else np.zeros((0, 2))
+
+
+def hull_margin(p, hull) -> float:
+    """Khoảng cách có dấu (m) từ điểm `p` (x, y) tới biên vùng bao lồi `hull`: dương là bên trong."""
+    p = np.asarray(p, float)[:2]
+    best = np.inf
+    for i in range(len(hull)):
+        a, b = hull[i], hull[(i + 1) % len(hull)]
+        e = b - a
+        n = float(np.linalg.norm(e))
+        best = min(best, (e[0] * (p[1] - a[1]) - e[1] * (p[0] - a[0])) / n)
+    return float(best)
+
+
+def sweep_targets(hull, n: int = 8, inset_m: float = 0.08) -> list[np.ndarray]:
+    """n điểm (x, y, 0) rải đều trong vùng bao lồi `hull`, cách biên ít nhất `inset_m` (không đủ chỗ thì giảm lề
+    dần về 0). Chọn theo điểm xa nhất, bắt đầu từ điểm gần tâm nhất, rồi xếp lại theo láng giềng gần nhất để
+    các bước đi giữa hai đích ngắn."""
+    if len(hull) < 3:
+        return []
+    lo, hi = hull.min(axis=0), hull.max(axis=0)
+    gx, gy = np.meshgrid(np.linspace(lo[0], hi[0], 25), np.linspace(lo[1], hi[1], 25))
+    grid = np.column_stack([gx.ravel(), gy.ravel()])
+    margins = np.array([hull_margin(g, hull) for g in grid])
+    cand = None
+    for inset in (inset_m, inset_m / 2, 0.0):
+        cand = grid[margins >= inset]
+        if len(cand) >= 1:
+            break
+    if cand is None or len(cand) == 0:
+        return []
+    centre = hull.mean(axis=0)
+    chosen = [int(np.argmin(np.linalg.norm(cand - centre, axis=1)))]
+    while len(chosen) < min(n, len(cand)):
+        d = np.min(np.linalg.norm(cand[:, None, :] - cand[chosen][None], axis=2), axis=1)
+        chosen.append(int(np.argmax(d)))
+    left = [cand[i] for i in chosen[1:]]
+    order = [cand[chosen[0]]]
+    while left:
+        k = int(np.argmin([np.linalg.norm(q - order[-1]) for q in left]))
+        order.append(left.pop(k))
+    return [np.array([q[0], q[1], 0.0]) for q in order]

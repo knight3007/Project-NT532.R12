@@ -1,4 +1,3 @@
-import re
 import threading
 import time
 
@@ -236,10 +235,11 @@ def test_station_puts_out_fire_end_to_end(station):
     assert run.node == "s1" and run.nozzle == "s1"
     assert run.outcome in ("extinguished", "human"), run.to_json()
     assert run.decisions[0]["answers"]["action"]["answer"] == "spray"
-    assert run.shots and run.shots[-1]["miss_cm"] is not None and run.shots[-1]["miss_cm"] < 3
+    assert any(x["miss_cm"] is not None and x["miss_cm"] < 3 for x in run.shots), run.shots
     assert "s1" in station.world.marks  # bơm đã phun thật
-    assert not any(station.world.truth()["lasers"].values())
-    assert not any(station.world.pumping.values())
+    # hết lượt thì /stop tắt laser và bơm (ENGAGE giữ chúng sáng tới đó)
+    assert wait_for(lambda: not any(station.world.truth()["lasers"].values())
+                    and not any(station.world.pumping.values()), 3)
 
 
 class BothDecider(RuleDecider):
@@ -326,25 +326,21 @@ def test_both_sprays_two_nozzles_together(station):
     assert {"s1", "s2"} <= set(station.world.marks)  # cả hai vòi đều đã phun
     ev = station.events.since(0, 10_000)
     vobs = [e["obs"]["verify"] for e in ev if e["kind"] == "decision" and e["obs"]["stage"] == "verify"]
-    assert vobs and all(v["nozzle"] == BOTH and v["status"] in ("ok", "fault") for v in vobs)
+    assert vobs and all(v["nozzle"] == BOTH and v["status"] == "ok" for v in vobs)
     assert f"with {BOTH}" in next(d for d in run.decisions if d["stage"] == "verify")["state"]
-    # AIM + CORRECT lần lượt từng vòi: có vòng của cả hai vòi, mỗi vòng ghi tên vòi
-    assert {s["nozzle"] for s in run.shots} == {"s1", "s2"}
-    corr = [e["text"] for e in ev if e["kind"] == "correct"]
-    assert corr and all(re.match(r"vòng \d+: lệch [\d.]+ cm \(s[12]\)$", t) for t in corr)
-    # overlay: AIM/CORRECT luôn đúng một vòi (lần lượt s1 rồi s2), FIRE hai vòi cùng lúc, VERIFY không vòi nào
-    assert {("CORRECT", ("s1",)), ("CORRECT", ("s2",)), ("FIRE", ("s1", "s2")), ("VERIFY", ())} <= ov.seen
+    # ENGAGE chỉ bám tia vòi đầu (hai chấm không phân biệt được); vòi sau ngắm theo mô hình, bật cùng
+    assert {s["nozzle"] for s in run.shots} == {"s1"}
+    assert ("ENGAGE", ("s1", "s2")) in ov.seen
+    assert not any(e["kind"] == "correct" for e in ev)
     for phase, active in ov.seen:
-        if phase in ("AIM", "CORRECT"):
-            assert active in (("s1",), ("s2",)), (phase, active)
-        elif phase == "FIRE":
-            assert active in ((), ("s1", "s2")), (phase, active)
+        assert phase in ("ENGAGE", "DECIDE", "LOCALIZE", "ALERT", "IDLE", "HUMAN"), phase
+        if phase == "ENGAGE":
+            assert active == ("s1", "s2"), (phase, active)
         else:
             assert active == (), (phase, active)
-    # mỗi vòi một điểm ngắm và một vết laser; hết lượt thì không vòi nào còn "đang làm việc"
     end = ends[0]
-    assert set(end["aims"]) == {"s1", "s2"} and set(end["spots"]) == {"s1", "s2"}
-    assert end["active"] == [] and end["nozzle"] == BOTH
+    assert set(end["aims"]) == {"s1", "s2"} and set(end["spots"]) == {"s1"}
+    assert end["active"] == [] and end["nozzle"] == BOTH and end["engage"]["state"] in ("aiming", "on_target", "lost")
     assert end["aims"]["s1"] != end["aims"]["s2"]
     # cả hai node cùng báo động nên có thể còn một lượt thứ hai (thường chỉ thấy thẻ cháy đen rồi bỏ qua)
     assert wait_for(lambda: station.orch.phase.value == "IDLE" and not station.orch.snapshot()["queue"], 90)
@@ -368,34 +364,8 @@ def test_both_with_one_nozzle_down_sprays_with_other(station):
     assert not any(s["nozzle"] == "s2" for s in run.shots)
 
 
-def test_both_drops_nozzle_that_fails_right_before_fire(station):
-    from nt532.net.link import LinkError
-
-    orch = station.orch
-    real_aim = orch._aim
-
-    def flaky(node, pan, tilt):  # s2 ngắm được lúc CORRECT nhưng mất liên lạc ngay lúc FIRE
-        if node == "s2" and orch.phase.value == "FIRE":
-            raise LinkError("s2 không trả lời lệnh ngắm")
-        return real_aim(node, pan, tilt)
-
-    orch._aim = flaky
-    orch.decider = BothDecider()
-    station.world.ignite(0.60, 0.30, size="large")
-    assert wait_for(lambda: orch.runs, 90), "không có lượt nào hoàn tất"
-    run = orch.runs[0]
-    assert run.nozzle == "s1" and run.outcome in ("extinguished", "human"), run.to_json()
-    ev = station.events.since(0, 10_000)
-    assert any(e["kind"] == "safety" and "s2" in e["text"] and "bỏ vòi" in e["text"] for e in ev)
-    vobs = [e["obs"]["verify"] for e in ev if e["kind"] == "decision" and e["obs"]["stage"] == "verify"]
-    assert vobs and all(v["nozzle"] == "s1" for v in vobs)
-    assert "s1" in station.world.marks and "s2" not in station.world.marks
-    assert {s["nozzle"] for s in run.shots} == {"s1", "s2"}  # s2 vẫn đã qua CORRECT trước đó
-
-
 def fail_aim(orch, where: dict) -> None:
-    """`orch._aim` ném LinkError cho vòi n khi đang ở pha where[n] (AIM: lần ngắm đầu; CORRECT: lần ngắm
-    lại sau vòng laser đầu), như một vòi mất liên lạc giữa chừng."""
+    """`orch._aim` ném LinkError cho vòi n khi đang ở pha where[n] (ENGAGE), như một vòi mất liên lạc."""
     from nt532.net.link import LinkError
 
     real_aim = orch._aim
@@ -408,9 +378,9 @@ def fail_aim(orch, where: dict) -> None:
     orch._aim = flaky
 
 
-def test_both_drops_nozzle_that_fails_during_correct(station):
+def test_both_drops_second_nozzle_that_fails_when_aiming(station):
     orch = station.orch
-    fail_aim(orch, {"s2": "CORRECT"})  # s2 ngắm được lúc AIM nhưng mất liên lạc khi ngắm lại
+    fail_aim(orch, {"s2": "ENGAGE"})  # s1 ngắm được, s2 mất liên lạc ngay lúc ngắm
     orch.decider = BothDecider()
     ends = overlay_at_run_end(orch)
     with PumpSampler(station.world) as pumps:
@@ -425,15 +395,15 @@ def test_both_drops_nozzle_that_fails_during_correct(station):
     vobs = [e["obs"]["verify"] for e in ev if e["kind"] == "decision" and e["obs"]["stage"] == "verify"]
     assert vobs and all(v["nozzle"] == "s1" for v in vobs)
     assert pumps.seen == {"s1"} and "s2" not in station.world.marks  # s2 chưa hề bơm
-    assert {s["nozzle"] for s in run.shots} == {"s1", "s2"}  # s2 đã có vòng CORRECT đầu
+    assert {s["nozzle"] for s in run.shots} == {"s1"}
     end = ends[0]
-    assert set(end["aims"]) == {"s1"} and end["spots"].keys() == {"s1", "s2"}
+    assert set(end["aims"]) == {"s1"} and end["spots"].keys() == {"s1"}
     assert end["nozzle"] == "s1" and end["active"] == []
 
 
 def test_both_drops_first_nozzle_that_fails_during_aim(station):
     orch = station.orch
-    fail_aim(orch, {"s1": "AIM"})
+    fail_aim(orch, {"s1": "ENGAGE"})
     orch.decider = BothDecider()
     with PumpSampler(station.world) as pumps:
         station.world.ignite(0.60, 0.30, size="large")
@@ -443,12 +413,12 @@ def test_both_drops_first_nozzle_that_fails_during_aim(station):
     ev = station.events.since(0, 10_000)
     assert any(e["kind"] == "safety" and "s1" in e["text"] and "hỏng lúc ngắm" in e["text"] for e in ev)
     assert pumps.seen == {"s2"} and "s1" not in station.world.marks
-    assert {s["nozzle"] for s in run.shots} == {"s2"}  # s1 bị bỏ trước khi kịp bắn laser
+    assert {s["nozzle"] for s in run.shots} == {"s2"}  # s1 bị bỏ, s2 thành vòi bám tia
 
 
 def test_both_all_nozzles_failing_while_aiming_is_fault(station):
     orch = station.orch
-    fail_aim(orch, {"s1": "AIM", "s2": "CORRECT"})  # s1 bị bỏ, s2 còn lại một mình rồi cũng hỏng
+    fail_aim(orch, {"s1": "ENGAGE", "s2": "ENGAGE"})  # s1 bị bỏ, s2 còn lại một mình rồi cũng hỏng
     orch.decider = BothDecider()
     station.world.ignite(0.60, 0.30, size="large")
     assert wait_for(lambda: orch.runs, 90), "không có lượt nào hoàn tất"
@@ -463,7 +433,7 @@ def test_both_all_nozzles_failing_while_aiming_is_fault(station):
 
 def test_single_nozzle_link_error_while_aiming_is_fault(station):
     orch = station.orch
-    fail_aim(orch, {"s1": "AIM", "s2": "AIM"})
+    fail_aim(orch, {"s1": "ENGAGE", "s2": "ENGAGE"})
     station.world.ignite(0.32, 0.30)
     assert wait_for(lambda: orch.runs, 60), "không có lượt nào hoàn tất"
     run = orch.runs[0]
@@ -476,7 +446,7 @@ def test_single_nozzle_link_error_while_aiming_is_fault(station):
 def test_emergency_stop_during_dual_fire(station):
     station.orch.decider = BothDecider()
     station.world.ignite(0.60, 0.30, size="large")
-    assert wait_for(lambda: station.orch.phase.value == "FIRE", 90)
+    assert wait_for(lambda: station.orch.phase.value == "ENGAGE", 90)
     assert wait_for(lambda: any(station.world.pumping.values()), 3), "chưa bơm nào chạy"
     station.orch.emergency_stop("thử hai vòi")
     assert wait_for(lambda: station.orch.runs, 10)
@@ -493,7 +463,7 @@ def test_nozzles_of():
 
 def test_emergency_stop_turns_everything_off(station):
     station.world.ignite(0.90, 0.30)
-    assert wait_for(lambda: station.orch.phase.value in ("CORRECT", "FIRE"), 60)
+    assert wait_for(lambda: station.orch.phase.value == "ENGAGE", 60)
     station.orch.emergency_stop("thử")
     assert wait_for(lambda: station.orch.runs, 10)
     assert station.orch.runs[0].outcome == "stopped"

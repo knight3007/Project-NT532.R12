@@ -231,9 +231,69 @@ async function loadCharts() {
 }
 $("c-hum").addEventListener("change", loadCharts);
 
+// --- mạng Thread -----------------------------------------------------------------------------
+
+const TSERIES = [["ping", "Ping (ms)", "ms"], ["loss", "Mất gói (%)", "%"], ["coap", "CoAP GET /status (ms)", "ms"]];
+const tcharts = new Map();
+let threadSeq = 0;
+const threadHours = () => Math.max(0.05, (Date.now() / 1000 - window_().from) / 3600);
+
+function threadSkeleton(nodes) {
+  const key = nodes.join(",");
+  if ($("thread-charts").dataset.key === key) return;
+  for (const slot of tcharts.values()) slot.chart?.destroy();
+  tcharts.clear();
+  $("thread-charts").dataset.key = key;
+  $("thread-charts").replaceChildren(...nodes.map((n) => {
+    const col = el("div", "chart-col");
+    col.append(el("h3", "chart-h", n.toUpperCase()));
+    for (const [k, title, unit] of TSERIES) {
+      const box = el("div", "chart-box");
+      box.append(el("span", "label", title));
+      const host = el("div", "chart-host");
+      box.append(host);
+      col.append(box);
+      tcharts.set(`${n}:${k}`, { host, unit, title, chart: null });
+    }
+    return col;
+  }));
+}
+
+async function loadThread() {
+  const my = ++threadSeq;
+  const p = new URLSearchParams({ hours: threadHours().toFixed(3), points: 300 });
+  if (st.node) p.set("node", st.node);
+  try {
+    const { data } = await api("/api/thread/history?" + p);
+    if (my !== threadSeq) return;
+    const nodes = st.node ? [st.node] : [...new Set([...NODES, ...Object.keys(data.nodes)])].sort();
+    threadSkeleton(nodes);
+    for (const n of nodes) {
+      const d = data.nodes[n] ?? { t: [], min: [], avg: [], max: [], loss: [], coap: [] };
+      const sets = {
+        ping: { t: d.t, min: d.min, avg: d.avg, max: d.max },
+        loss: { t: d.t, min: d.loss, avg: d.loss, max: d.loss },
+        coap: { t: d.t, min: d.coap, avg: d.coap, max: d.coap },
+      };
+      for (const [k] of TSERIES) {
+        const slot = tcharts.get(`${n}:${k}`);
+        const opts = { from: data.from, to: data.to, limit: null, runs: [], unit: slot.unit, title: `${n} ${slot.title}`, height: 130 };
+        if (slot.chart) slot.chart.update(sets[k], opts); else slot.chart = lineChart(slot.host, sets[k], opts);
+      }
+    }
+  } catch (e) {
+    if (my === threadSeq) toast(`Không tải được số đo Thread: ${e.message}`, true);
+  }
+}
+
 // --- CSV -------------------------------------------------------------------------------------
 
 $("csv-ev").addEventListener("click", () => { location.href = "/api/events.csv?" + eventParams(); });
+$("csv-thread").addEventListener("click", () => {
+  const p = new URLSearchParams({ hours: threadHours().toFixed(3) });
+  if (st.node) p.set("node", st.node);
+  location.href = "/api/thread.csv?" + p;
+});
 $("csv-tel").addEventListener("click", () => {
   const w = window_();
   const p = new URLSearchParams({ from: w.from, to: w.to });
@@ -247,7 +307,8 @@ function reload() {
   syncUrl();
   loadEvents(false);
   loadCharts();
+  loadThread();
 }
 reload();
 // khoảng trượt thì biểu đồ tự làm mới; bảng không tự đổi để khỏi làm mất dòng đang mở
-setInterval(() => { if (st.range !== "custom" && !document.hidden) loadCharts(); }, 15000);
+setInterval(() => { if (st.range !== "custom" && !document.hidden) { loadCharts(); loadThread(); } }, 15000);

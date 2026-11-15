@@ -13,7 +13,8 @@ from nt532.dashboard.push import ControlPusher
 class FakeDash:
     def __init__(self):
         self.cmds = []
-        self.st = SimpleNamespace(events=SimpleNamespace(since=self._since))
+        self.hub = SimpleNamespace(latest=lambda: (1, None))
+        self.st = SimpleNamespace(events=SimpleNamespace(since=self._since), hub=self.hub)
         self.since_args = []
 
     def _since(self, n):
@@ -22,6 +23,11 @@ class FakeDash:
 
     def state(self):
         return {"time": 1.0, "bad": float("inf")}
+
+    def frame(self):
+        import numpy as np
+
+        return np.zeros((48, 64, 3), np.uint8)
 
     def command(self, body):
         self.cmds.append(body)
@@ -33,6 +39,7 @@ class FakeDash:
 class FakeServer:
     def __init__(self, port=0):
         self.requests = []
+        self.frames = []
         self.script = []  # mỗi phần tử là response cho lần gọi tới
         outer = self
 
@@ -41,7 +48,14 @@ class FakeServer:
                 pass
 
             def do_POST(self):
-                body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+                raw = self.rfile.read(int(self.headers["Content-Length"]))
+                if self.path == "/api/pi/frame":
+                    outer.frames.append((self.headers.get("Authorization"), self.headers.get("Content-Type"), raw))
+                    self.send_response(200)
+                    self.send_header("Content-Length", "0")
+                    self.end_headers()
+                    return
+                body = json.loads(raw)
                 outer.requests.append((self.path, self.headers.get("Authorization"), body))
                 resp = outer.script.pop(0) if outer.script else {"ack": 7, "cmds": []}
                 data = json.dumps(resp).encode()
@@ -111,3 +125,61 @@ def test_survives_server_down_and_reconnects(monkeypatch):
     finally:
         p.stop()
         srv.close()
+
+
+def test_frame_thread_posts_jpeg_once_per_seq():
+    srv, dash = FakeServer(), FakeDash()
+    p = ControlPusher(dash, f"http://127.0.0.1:{srv.port}", "tok", period=0.02, frame_fps=50).start()
+    try:
+        assert wait_for(lambda: srv.frames)
+        time.sleep(0.2)  # seq không đổi: không gửi lại
+    finally:
+        p.stop()
+        srv.close()
+    assert len(srv.frames) == 1
+    auth, ctype, raw = srv.frames[0]
+    assert auth == "Bearer tok" and ctype == "image/jpeg" and raw.startswith(b"\xff\xd8")
+
+
+def test_frame_fps_zero_sends_nothing():
+    srv, dash = FakeServer(), FakeDash()
+    p = ControlPusher(dash, f"http://127.0.0.1:{srv.port}", "tok", period=0.02, frame_fps=0).start()
+    try:
+        assert wait_for(lambda: srv.requests)
+        time.sleep(0.2)
+    finally:
+        p.stop()
+        srv.close()
+    assert p._frame_thread is None and srv.frames == []
+
+
+def test_frame_delay_subtracts_processing_time():
+    assert abs(push.frame_delay(0.1, 0.03) - 0.07) < 1e-9
+    assert push.frame_delay(0.1, 0.5) == 0.0
+
+
+def test_shrink_to_width():
+    import numpy as np
+
+    img = np.zeros((1080, 1920, 3), np.uint8)
+    out = push.shrink_to_width(img, 1280)
+    assert out.shape == (720, 1280, 3)
+    assert push.shrink_to_width(img, 0) is img  # 0: giữ nguyên
+    small = np.zeros((48, 64, 3), np.uint8)
+    assert push.shrink_to_width(small, 1280) is small  # không phóng to
+
+
+def test_frame_thread_downsizes_jpeg_from_env(monkeypatch):
+    import cv2
+    import numpy as np
+
+    monkeypatch.setenv("NT532_CONTROL_WIDTH", "32")
+    srv, dash = FakeServer(), FakeDash()
+    p = ControlPusher(dash, f"http://127.0.0.1:{srv.port}", "tok", period=0.02, frame_fps=50).start()
+    try:
+        assert wait_for(lambda: srv.frames)
+    finally:
+        p.stop()
+        srv.close()
+    img = cv2.imdecode(np.frombuffer(srv.frames[0][2], np.uint8), cv2.IMREAD_COLOR)
+    assert img.shape[:2] == (24, 32)

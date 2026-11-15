@@ -187,7 +187,7 @@ th { color: var(--muted); font-weight: 500; }
   </div>
 </main>
 <script>
-const STEPS = ["IDLE","ALERT","LOCALIZE","DECIDE","AIM","CORRECT","FIRE","VERIFY"];
+const STEPS = ["IDLE","ALERT","LOCALIZE","DECIDE","ENGAGE"];
 const QLABEL = {real_fire: "Cháy thật?", action: "Hành động", target: "Bia", nozzle: "Vòi", after_verify: "Sau khi phun"};
 const OUT = {extinguished: "đã dập", ignored: "bỏ qua", alarm_only: "chỉ báo động", human: "gọi người", fault: "lỗi", stopped: "đã dừng"};
 const nzName = (n) => !n ? "—" : n.startsWith("both") ? "cả hai" : n;  // BOTH = "both (s1 + s2)"
@@ -282,7 +282,7 @@ function renderNozzles(o, truth) {
     const laser = truth && truth.lasers[n], pump = truth && truth.pumping[n];
     // vòi đang được orchestrator làm việc: có cả trên phần cứng thật (không cần `truth`)
     const busy = ((o.overlay && o.overlay.active) || []).includes(n);
-    const work = !busy ? "" : o.phase === "FIRE" ? '<span class="chip spray">đang phun</span>'
+    const work = !busy ? "" : o.phase === "FIRE" || o.phase === "ENGAGE" ? '<span class="chip spray">đang phun</span>'
       : o.phase === "AIM" || o.phase === "CORRECT" ? '<span class="chip aim">đang ngắm</span>' : "";
     return `<div class="nz"><h3><span class="dot ${hbOk && poseOk ? "ok" : "bad"}"></span>${n}
       ${work}${laser ? '<span class="chip hot">laser</span>' : ""}${pump ? '<span class="chip on">bơm</span>' : ""}</h3>

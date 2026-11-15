@@ -22,7 +22,7 @@
       </div>
     </header>
     <nav class="mainnav" aria-label="Điều hướng">
-      <a href="/">Tổng quan</a><a href="/history" aria-current="page">Nhật ký</a><a href="/runs">Lượt</a><a href="/decider">Bộ quyết định</a><span class="soon" aria-disabled="true">Cài đặt <small>sắp có</small></span>
+      <a href="/">Tổng quan</a><a href="/history" aria-current="page">Nhật ký</a><a href="/runs">Lượt</a><a href="/manual">Điều khiển tay</a><a href="/decider">Bộ quyết định</a><span class="soon" aria-disabled="true">Cài đặt <small>sắp có</small></span>
     </nav>
   </div>
 
@@ -59,6 +59,15 @@
       </div>
       <div class="chart-cols" id="charts"></div>
       <p class="legend"><i class="lg-band"></i>min–max <i class="lg-line"></i>trung bình <i class="lg-limit"></i>ngưỡng <i class="lg-run"></i>lượt xử lý</p>
+    </section>
+
+    <section class="panel" id="thread" aria-label="Mạng Thread">
+      <div class="panel-head">
+        <span class="eyebrow">Mạng Thread theo thời gian</span>
+        <button class="btn sm" id="csv-thread" type="button">Xuất CSV</button>
+      </div>
+      <div class="chart-cols" id="thread-charts"></div>
+      <p class="legend"><i class="lg-band"></i>ping min–max <i class="lg-line"></i>trung bình</p>
     </section>
 
     <section class="panel" aria-label="Sự kiện">
