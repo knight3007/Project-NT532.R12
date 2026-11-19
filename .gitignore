@@ -46,3 +46,10 @@ firmware/node-b-integrated/test/test_shim
 
 # Local evidence archive is retained locally only.
 /20261114-013713.tar.gz
+
+# Local demonstration videos are not publication assets.
+/docs/picture and video/*.mp4
+/docs/picture and video/*.mov
+/docs/picture and video/*.avi
+/docs/picture and video/*.mkv
+/docs/picture and video/*.webm
