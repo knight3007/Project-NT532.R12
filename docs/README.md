@@ -7,14 +7,14 @@ Mục lục của đồ án **HỆ THỐNG PHÁT HIỆN VÀ ĐỊNH VỊ SỰ C�
 ## Project Overview & Architecture
 
 - [README chính](../README.md) — kiến trúc, bảng GPIO Node A/B và kết quả trình diễn.
-- [Sơ đồ kiến trúc hệ thống](picture%20and%20video/nt532_system_architecture.png) — luồng camera, Pi và hai node A/B; ảnh đang chờ duyệt công bố.
+- [Sơ đồ kiến trúc hệ thống](picture%20and%20video/nt532_system_architecture.png) — luồng camera, Pi và hai node A/B.
 - [Runbook E2E](nt532-e2e-runbook.md) — trạng thái xác minh và hướng dẫn vận hành an toàn.
 - [Orchestrator](orchestrator.md) — luồng xử lý và các đường chạy hiện có.
 
 ## Hardware, Firmware & Thread
 
 - [Tổng quan firmware](../firmware/README.md), [node A tích hợp](../firmware/node-a-integrated/README.md), [node B tích hợp](../firmware/node-b-integrated/README.md), [RCP](../firmware/rcp/README.md).
-- [Bảng GPIO và hình wiring A/B](../README.md#hardware-design--gpio-mapping) nằm trong README chính; hình đang chờ duyệt công bố.
+- [Bảng GPIO và hình wiring A/B](../README.md#hardware-design--gpio-mapping) nằm trong README chính.
 - [Triển khai phần cứng](trien-khai-phan-cung.md) và [triển khai Pi](trien-khai-pi.md) — đối chiếu source hiện tại trước khi áp dụng hướng dẫn cũ.
 - [Bàn giao node A/B và aim hold, 2026-11-14](nt532-node-ab-final-and-aim-hold-2026-11-14.md) — mốc lịch sử, không xác nhận binary đang nạp hôm nay.
 
@@ -25,7 +25,7 @@ Mục lục của đồ án **HỆ THỐNG PHÁT HIỆN VÀ ĐỊNH VỊ SỰ C�
 
 ## Demonstration & Dashboard
 
-- [Thư mục tư liệu hình ảnh](picture%20and%20video/) chứa các biểu đồ được chọn công bố; video và ảnh khác vẫn ở local để rà soát.
+- [Thư mục tư liệu hình ảnh](picture%20and%20video/) chứa sơ đồ kiến trúc, hình A/B và hai biểu đồ được chọn công bố; video và ảnh khác vẫn ở local để rà soát.
 - [Homelab control](homelab-control.md) và [triển khai Homelab](homelab-deploy.md) — giao diện giám sát và đường triển khai.
 - [Demo sa bàn ảo](demo.md) và [ảnh dashboard mô phỏng cũ](img/dashboard.png) là tư liệu mô phỏng, không đại diện cho demo A/B hiện tại.
 

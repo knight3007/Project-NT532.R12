@@ -1,91 +1,90 @@
-# HỆ THỐNG PHÁT HIỆN VÀ ĐỊNH VỊ SỰ CỐ CHÁY SỬ DỤNG THREAD VÀ EDGE AI
+# Fire Incident Detection and Localization Using Thread and Edge AI
 
-NT532 dùng Raspberry Pi 5 xử lý hình ảnh và hai node ESP32-H2 A/B trao đổi qua OTBR/Thread/CoAP. Bản trình diễn dùng mục tiêu lửa hiển thị trên màn hình laptop để đánh giá phát hiện, định vị và hướng ngắm; không phải hệ thống dập lửa thật. Firmware A/B tích hợp hiện điều khiển pan–tilt và relay/LED mô phỏng, không điều khiển bơm.
+NT532 uses a Raspberry Pi 5 for vision processing and two ESP32-H2 nodes connected through OTBR, Thread, and CoAP. The demonstration uses a fire target displayed on a laptop to evaluate detection, localization, and aiming; it does not suppress a real fire. The current integrated Node A/B firmware controls pan–tilt servos and a relay/LED demonstration output, not a pump.
 
 ## Project Overview
 
-Camera Android truyền video qua MediaMTX tới Pi; Pi định vị mục tiêu và tính góc pan–tilt rồi gửi lệnh qua CoAP/Thread. Hai kịch bản trình bày dùng Node A làm primary và Node B làm backup. Dashboard phục vụ demo local/LAN.
+An Android camera streams video through MediaMTX to the Pi. The Pi localizes the target, calculates pan–tilt angles, and sends commands over CoAP/Thread. The presentation covers Node A as the primary node and Node B as the backup. A dashboard supports the local/LAN demonstration.
 
 ## System Architecture
 
-![Sơ đồ kiến trúc NT532: camera Android, Raspberry Pi 5, Thread và hai node ESP32-H2](docs/picture%20and%20video/nt532_system_architecture.png)
+![NT532 architecture: Android camera, Raspberry Pi 5, Thread, and two ESP32-H2 nodes](docs/picture%20and%20video/nt532_system_architecture.png)
 
-*Sơ đồ thành phần và luồng dữ liệu của bản trình bày; không thể hiện mức nghiệm thu phần cứng.*
 
 ## Hardware Design & GPIO Mapping
 
-Hai bảng dưới đây mô tả **ánh xạ tín hiệu theo source firmware tích hợp** trên ESP32-H2 Super Mini, chưa xác nhận toàn bộ dây nối và mức điện áp trên cụm phần cứng thực tế.
+The tables below show **signal mappings in the integrated firmware source** for ESP32-H2 Super Mini boards. They do not establish that every physical wire and voltage level has been verified.
 
 ### Node A — Primary Node
 
-| Thành phần | Tín hiệu | GPIO | Trạng thái trong firmware |
+| Component | Signal | GPIO | Firmware status |
 | --- | --- | --- | --- |
-| Pan servo | PWM | GPIO4 | Điều khiển pan |
-| Tilt servo | PWM | GPIO5 | Điều khiển tilt |
-| Relay | IN | GPIO10 | Active-HIGH; đầu ra dùng cho LED mô phỏng |
-| MQ-2 | AOUT / ADC | GPIO1 | ADC1_CH0 qua mạch chia áp phù hợp |
-| MQ-2 | DOUT | GPIO12 | Đã khai báo nhưng **đang tắt** (`MQ2_DO_ENABLED = 0`) |
+| Pan servo | PWM | GPIO4 | Pan control |
+| Tilt servo | PWM | GPIO5 | Tilt control |
+| Relay | IN | GPIO10 | Active-HIGH; drives the demonstration LED output |
+| MQ-2 | AOUT / ADC | GPIO1 | ADC1_CH0 through a suitable voltage divider |
+| MQ-2 | DOUT | GPIO12 | Declared but **disabled** (`MQ2_DO_ENABLED = 0`) |
 
-![Sơ đồ minh họa các thành phần và chân tín hiệu Node A](docs/picture%20and%20video/nodeA.png)
+![Node A component and signal wiring diagram](docs/picture%20and%20video/nodeA.png)
 
-*Hình minh họa thiết kế, chưa phải sơ đồ đấu nối đã nghiệm thu. Hình vẽ MQ-2 AOUT/DOUT nối tới GPIO nhưng firmware hiện tắt DOUT; AOUT cần mạch chia áp, DOUT cần chuyển mức và cả hai phải được đo trước khi nối. Module laser trong hình không thuộc đầu ra đang được firmware điều khiển.*
 
 ### Node B — Backup Node
 
-| Thành phần | Tín hiệu | GPIO | Trạng thái trong firmware |
+| Component | Signal | GPIO | Firmware status |
 | --- | --- | --- | --- |
-| Pan servo | PWM | GPIO4 | Điều khiển pan |
-| Tilt servo | PWM | GPIO5 | Điều khiển tilt |
-| Relay | IN | GPIO10 | Active-HIGH; đầu ra dùng cho LED mô phỏng |
-| DHT11 | DATA | GPIO11 | Tín hiệu cảm biến |
+| Pan servo | PWM | GPIO4 | Pan control |
+| Tilt servo | PWM | GPIO5 | Tilt control |
+| Relay | IN | GPIO10 | Active-HIGH; drives the demonstration LED output |
+| DHT11 | DATA | GPIO11 | Sensor data |
 
-![Sơ đồ minh họa các thành phần và chân tín hiệu Node B](docs/picture%20and%20video/nodeB.png)
+![Node B component and signal wiring diagram](docs/picture%20and%20video/nodeB.png)
 
-*Hình minh họa thiết kế, chưa xác nhận nguồn servo, relay và dây nối thực tế. Module laser trong hình không thuộc đầu ra đang được firmware điều khiển.*
 
-Servo cần nguồn riêng phù hợp với tải và **common GND** với ESP32-H2; GPIO4/5 chỉ cấp tín hiệu PWM. GPIO10 điều khiển **đầu vào module relay**, không cấp điện trực tiếp cho cuộn relay; nguồn cho module/tải phải được kiểm tra theo phần cứng thực tế. Relay cần giữ OFF khi khởi động/reset; firmware kéo GPIO10 LOW và tài liệu firmware yêu cầu điện trở kéo xuống ngoài. MQ-2 phải được cấp nguồn theo đặc tả module; đo điện áp AOUT sau mạch chia áp và DOUT sau mạch chuyển mức trước khi nối ESP32-H2. Không dùng cấu hình ADC để thay thế bảo vệ quá áp.
+
 
 ## Core Technologies & Features
 
-- **Edge AI và định vị:** YOLO phát hiện mục tiêu; ChArUco hiệu chuẩn camera; AprilTag và Dynamic Mapping hỗ trợ Localization.
-- **Điều khiển:** Pi tính góc pan–tilt, trao đổi với hai node qua OTBR/RCP, Thread và CoAP.
-- **Trình diễn:** Node A/B điều khiển servo và relay/LED mô phỏng với mục tiêu lửa trên màn hình laptop; không xác nhận dập cháy thật.
+- **Edge AI and localization:** YOLO26n detects the target; ChArUco calibrates the camera; AprilTag and Dynamic Mapping support localization.
+- **Control:** The Pi calculates pan–tilt angles and communicates with both nodes through OTBR/RCP, Thread, and CoAP.
+- **Demonstration:** Node A/B drive servos and a relay/LED demonstration output while the fire target appears on a laptop screen.
 
 ## Performance & Experimental Results
 
-Hai biểu đồ thực nghiệm dưới đây là nguồn cho kết quả này: **11 lượt được ghi nhận; 9 lượt đủ mốc dùng để tính trung bình**, 2 lượt thiếu mốc do định dạng log cũ được loại khỏi phép tính. Thời gian trung bình của 9 lượt hợp lệ là **74,15 giây**.
+The two charts below provide the experimental results: **11 runs were recorded, and 9 with complete timestamps were used for the averages**. Two runs used an older log format with missing timestamps and were excluded. The mean duration of the 9 valid runs was **74.15 seconds**.
 
-| Giai đoạn | Trung bình | Tỷ trọng |
+| Phase | Mean duration | Share |
 | --- | ---: | ---: |
-| LOCALIZE | 7,83 s | 10,6% |
-| AIM | 26,17 s | 35,3% |
-| FIRE | 39,77 s | 53,6% |
-| VERIFY | 0,37 s | 0,5% |
-| **Tổng** | **74,15 s** | **100%** |
+| LOCALIZE | 7.83 s | 10.6% |
+| AIM | 26.17 s | 35.3% |
+| FIRE | 39.77 s | 53.6% |
+| VERIFY | 0.37 s | 0.5% |
+| **Total** | **74.15 s** | **100%** |
 
-Các khoảng lần lượt là báo động → DECIDE, DECIDE → trúng mục tiêu (gồm quét/chỉnh), trúng mục tiêu → log `đã dập`, và log `đã dập` → kết thúc. FIRE/`đã dập`/VERIFY là nhãn log với mục tiêu lửa trên màn hình laptop, không chứng minh dập cháy thật.
+The intervals run from alarm to DECIDE; DECIDE to target hit, including scanning and adjustment; target hit to the log event `đã dập`; and that event to run completion. FIRE, `đã dập`, and VERIFY are log labels for a laptop-displayed fire target, not evidence of real fire suppression.
 
-![Thời gian trung bình theo từng giai đoạn của 9 lượt đủ mốc](docs/picture%20and%20video/nt532-average-phase-durations.png)
+![Mean phase durations across 9 runs with complete timestamps](docs/picture%20and%20video/nt532-average-phase-durations.png)
 
-[Xem biểu đồ timeline của 6 lượt đại diện](docs/picture%20and%20video/nt532-representative-trial-timelines.png) và [tài liệu kết quả chi tiết](docs/README.md#experimental-results--media).
+![Timelines for 6 representative runs](docs/picture%20and%20video/nt532-representative-trial-timelines.png)
+
+[Detailed results and media](docs/README.md#experimental-results--media)
 
 ## Technology Stack & Repository Structure
 
-| Thành phần | Vai trò | Vị trí |
+| Component | Role | Location |
 | --- | --- | --- |
-| Raspberry Pi 5: Python, YOLO, MediaMTX, OTBR/CoAP | Xử lý ảnh, định vị, điều phối và dashboard | `pi/src/nt532/` |
-| ESP32-H2: ESP-IDF, Thread | Node A/B tích hợp và RCP | `firmware/node-a-integrated/`, `firmware/node-b-integrated/`, `firmware/rcp/` |
-| Cấu hình và hiệu chuẩn | Hình học sa bàn, giới hạn, kết quả hiệu chuẩn | `config/site.yaml`, `calibration/` |
-| Tài liệu | Giao thức, kết quả và quy trình | `docs/`, `firmware/README.md` |
+| Raspberry Pi 5: Python, YOLO, MediaMTX, OTBR/CoAP | Vision, localization, orchestration, and dashboard | `pi/src/nt532/` |
+| ESP32-H2: ESP-IDF, Thread | Integrated Node A/B firmware and RCP | `firmware/node-a-integrated/`, `firmware/node-b-integrated/`, `firmware/rcp/` |
+| Configuration and calibration | Table geometry, limits, and calibration results | `config/site.yaml`, `calibration/` |
+| Documentation | Protocols, results, and procedures | `docs/`, `firmware/README.md` |
 
 ## Demo
 
-[Xem thư mục tư liệu hình ảnh](docs/picture%20and%20video/). Mô hình dùng cụm phần cứng thật và mục tiêu lửa hiển thị trên màn hình laptop. Video được giữ local, không đưa lên GitHub.
+[Browse the published images](docs/picture%20and%20video/). The demonstration uses physical hardware assemblies and a fire target displayed on a laptop. Videos remain local and are excluded from GitHub.
 
 ## Current Status & Limitations
 
-[Runbook E2E](docs/nt532-e2e-runbook.md) ghi nhận software E2E với node giả đã đạt. Các kiểm tra từng cụm phần cứng không thay cho nghiệm thu physical hardware E2E toàn hệ thống. Bảng GPIO mô tả source hiện tại; dây nối và mức điện áp trên mô hình cần được đo đối chiếu trước khi vận hành.
+The [E2E runbook](docs/nt532-e2e-runbook.md) records a passing software E2E test with simulated nodes. Checks of individual hardware assemblies do not establish full physical E2E verification. The GPIO tables reflect current source code; wiring and voltage levels still require measurement before operation.
 
 ## Documentation & Future Work
 
-[Mục lục tài liệu](docs/README.md) dẫn tới firmware, định vị, thực nghiệm và runbook. Jev2 là hướng nghiên cứu tiếp theo, chưa thuộc đường chạy tạo ra số liệu hiệu năng ở trên.
+The [documentation index](docs/README.md) links to firmware, localization, experiments, and the runbook. Jev2 is future work and was not part of the workflow that produced the results above.
