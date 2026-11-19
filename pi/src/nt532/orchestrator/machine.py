@@ -1,7 +1,8 @@
 """State machine của orchestrator (kế hoạch mục 4), nối thị giác, cảm biến, bộ quyết định và vòi.
 
     IDLE -> ALERT -> LOCALIZE -> DECIDE -> ENGAGE -> (xong | HUMAN)
-    (ENGAGE gộp AIM, CORRECT, FIRE, VERIFY: phun, bám tia, bám lửa, xác nhận dập cùng lúc; pha cũ còn trong enum)
+    (ENGAGE gộp AIM, CORRECT, FIRE, VERIFY khi link hỗ trợ laser và bơm đồng thời;
+    CoAP dùng các pha tuần tự theo hợp đồng actuator một thiết bị /fire)
                                        \\-> ALARM (chỉ báo động) hoặc về IDLE (bỏ qua)
     lỗi ở bất kỳ bước nào -> FAULT: gửi /stop, ghi nguyên nhân
 
@@ -25,6 +26,7 @@ from typing import ClassVar
 import numpy as np
 
 from ..decider.rules import HB_MAX_MS, POSE_MAX_S
+from ..decider.scenario import MAX_ATTEMPTS
 from ..decider.state_text import ACTIONS, BOTH, NOZZLES, VERIFY, nozzles_of
 from ..net.link import LinkError, NodeLink
 from ..net.protocol import Alert
@@ -454,7 +456,8 @@ class Orchestrator:
                     return "alarm_only"
         run.nozzle = nozzle
         self.overlay["nozzle"] = nozzle
-        return self._engage(run, obs, tid, target, nozzles_of(nozzle), pivots)
+        engage = self._engage if getattr(self.link, "simultaneous_fire", True) else self._engage_sequential
+        return engage(run, obs, tid, target, nozzles_of(nozzle), pivots)
 
     def _use(self, run: Run, nozzles: list[str]) -> None:
         """Ghi vòi đang dùng (BOTH nếu còn hai vòi) vào lượt và overlay."""
@@ -467,6 +470,80 @@ class Orchestrator:
         p = _point_json(point, self._surface_of(point))
         with self._lock:
             self.overlay[key] = {**self.overlay.get(key, {}), node: p}
+
+    def _engage_sequential(self, run, obs, tid, target, nozzles: list[str], pivots: dict) -> str:
+        """CoAP actuator chỉ giữ một /fire: đo laser, rồi phun bằng lệnh aim mới."""
+        nozzles = list(nozzles)
+        aim_points = {n: np.asarray(target, float).copy() for n in nozzles}
+        misses: dict[str, float | None] = dict.fromkeys(nozzles)
+        attempt = 0
+        need_aim = True
+        while attempt < MAX_ATTEMPTS:
+            attempt += 1
+            run.attempts = attempt
+            if need_aim:
+                for n in list(nozzles):
+                    self._check()
+                    try:
+                        aim_points[n], misses[n], _ = self._aim_and_correct(
+                            run, n, pivots[n], target, aim_points[n], dual=len(nozzles) > 1)
+                    except LinkError as e:
+                        if len(nozzles) < 2:
+                            raise
+                        self.events.emit("safety", f"vòi {n} hỏng lúc ngắm ({e}), bỏ vòi này", level="warn")
+                        nozzles.remove(n)
+                        aim_points.pop(n)
+                        misses.pop(n)
+                        self._use(run, nozzles)
+
+            self._set(Phase.FIRE, f"lần {attempt}")
+            cmds = self._final_aim(nozzles, target, pivots, aim_points)
+            if len(cmds) < len(nozzles):
+                nozzles = list(cmds)
+                self._use(run, nozzles)
+            self._check()
+            with self._lock:
+                self.overlay["active"] = list(nozzles)
+            t_spray = self.clock()
+            for n in nozzles:
+                self.link.fire(n, cmds[n], "pump", self.acfg["fire_ms"])
+            deadline = t_spray + self.acfg["fire_ms"] / 1000 + self.cfg.status_timeout_s
+            status = "ok"
+            for n in nozzles:
+                st = self.link.wait(cmds[n], ("done", "fault", "rejected"), max(0.0, deadline - self.clock()))
+                if st is None or st.st != "done":
+                    status = "fault"
+                    self.events.emit("fault", f"{n} không hoàn tất phun: {st}", level="warn")
+
+            self._set(Phase.VERIFY)
+            self._sleep(self.cfg.verify_wait_s)
+            conf = []
+            for _ in range(3):
+                found = self.vision.targets(self.hub.fresh())
+                near = [t.detection.conf for t in found if np.linalg.norm(t.position - target) <= 0.05]
+                conf.append(round(max(near), 2) if near else None)
+            posts = []
+            for n in nozzles:
+                post = [s.temp for s in self.sensors.since(n, t_spray)][-3:]
+                post = post or [s.temp for s in self.sensors.samples(n, 1)] or [0.0]
+                posts.append([round(post[0], 1)] * (3 - len(post)) + [round(v, 1) for v in post])
+            post = posts[0] if len(posts) == 1 else [round(float(np.mean(c)), 1) for c in zip(*posts)]
+            marks = [misses[n] for n in nozzles if misses[n] is not None]
+            mark_cm = max(marks) if marks else None
+            vobs = verify_obs(obs, tid, run.nozzle, attempt, status, post, conf, mark_cm, self.sensors)
+            vq = questions_for(vobs)
+            dec = self.decider.decide(vobs, vq)
+            run.decisions.append({"stage": "verify", "attempt": attempt, **dec.to_json()})
+            nxt = dec.get("after_verify")
+            self.events.emit("decision", f"{dec.decider} sau lần phun {attempt}: {nxt}",
+                             decision=dec.to_json(), run=run.id, obs=vobs, questions=vq)
+            if nxt == VERIFY[0]:
+                return "extinguished"
+            if nxt == VERIFY[3]:
+                break
+            need_aim = nxt == VERIFY[1]
+        self._set(Phase.HUMAN, f"sau {attempt} lần phun")
+        return "human"
 
     def _engage(self, run, obs, tid, target, nozzles: list[str], pivots: dict) -> str:
         """ENGAGE: một pha liên tục thay AIM/CORRECT/FIRE/VERIFY. Phun, bám tia (visual servoing như
@@ -595,6 +672,9 @@ class Orchestrator:
                     conf_hist.append(round(float(t.detection.conf), 2))
                 else:
                     conf_hist.append(None)
+                    box = None
+                    if mode == "sweep":
+                        mode, n_meas, prev, center = "approach", 0, None, tgt.copy()
                 self._fire_box = box if surface == "floor" and (mode == "approach" or hide_in_sweep) else None
                 dt, last_t = now - last_t, now
                 if mode == "sweep":

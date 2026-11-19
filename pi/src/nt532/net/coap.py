@@ -37,6 +37,8 @@ class _Post(resource.Resource):
 class CoapLink(NodeLink):
     """`nodes`: {tên node: địa chỉ host[:port]}. Callback `on_telemetry`, `on_alert` gán sau khi tạo."""
 
+    simultaneous_fire = False  # actuator core chỉ giữ một thiết bị /fire tại một thời điểm
+
     def __init__(self, nodes: dict[str, str], bind: tuple[str, int] = ("::", 5683),
                  timeout_s: float = 2.0, transports: list[str] | None = None) -> None:
         super().__init__(list(nodes))
