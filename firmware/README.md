@@ -1,18 +1,19 @@
 # Firmware
 
-Thiết kế hiện hành (xem [docs/thay-doi-hai-voi.md](../docs/thay-doi-hai-voi.md)): hai node ESP32-H2, mỗi node vừa đọc cảm biến vừa điều khiển một cụm vòi (pan–tilt, bơm, laser), nói CoAP qua Thread. Pi 5 cùng một H2 DevKit làm RCP là border router OpenThread và chạy orchestrator. Mỗi thư mục con là một project ESP-IDF riêng.
+Hướng source A/B hiện tại dùng hai node ESP32-H2 tích hợp cảm biến, pan–tilt và relay/LED mô phỏng laser, trao đổi CoAP qua Thread với Pi 5 và RCP/OTBR. Firmware A/B không điều khiển bơm. Xem [runbook E2E](../docs/nt532-e2e-runbook.md): software E2E với node giả đã đạt, physical hardware E2E đầy đủ còn chờ xác minh; không suy ra binary nào đang nạp trên từng board.
 
 | Thư mục | Board | Mạng | Ghi chú |
 | --- | --- | --- | --- |
-| `sensor-h2/` | ESP32-H2 Super Mini (x2) | Thread (FTD) | Firmware chính của node: gửi `/t`, `/a`, `/alarm`; nhận `/aim`, `/fire`, `/stop`, `/hb`, `/alarm`; trả `/status`. Lõi C thuần trong `main/core/` test trên máy. `node_id`, ngưỡng, hiệu chuẩn servo ghi đè bằng NVS |
-| `rcp/` | ESP32-H2 DevKit | USB-UART vào Pi | Dùng ví dụ `ot_rcp` của ESP-IDF; ghi lại lệnh nạp và cấu hình OTBR |
-| `actuator-s3/` | ESP32-S3 | Wi-Fi | Chỉ còn là đường lui nếu node H2 không đáp ứng được; hiện để trống |
+| `node-a-integrated/` | ESP32-H2 Super Mini, A | Thread | Source A/B hiện tại: MQ-2, `/info`, `/status`, `/mq2`, `/pantilt`, `/laser`, `/hb`, `/stop`; bản 0.1.2 được mô tả trong README riêng |
+| `node-b-integrated/` | ESP32-H2 Super Mini, B | Thread | Source A/B hiện tại: DHT11, pan–tilt, relay/LED; bản 0.2.5 được mô tả trong README riêng |
+| `sensor-h2/` | ESP32-H2 Super Mini | Thread | Thiết kế tham chiếu với `/aim` và `/fire`; có build CI và host test lõi C, chưa dùng làm bằng chứng firmware đang chạy trên A/B |
+| `rcp/` | ESP32-H2 DevKit | USB-UART vào Pi | Hướng dẫn ví dụ `ot_rcp` và OTBR; kiểm trạng thái triển khai theo runbook |
 
 ## Nguyên tắc
 
-- **Hợp đồng CoAP là giao diện duy nhất** (kế hoạch mục 4): `/t`, `/a`, `/status` từ node lên Pi; `/aim`, `/fire`, `/stop`, `/hb` từ Pi xuống node; `/alarm` multicast `ff03::1` giữa hai node. Payload JSON key ngắn, dưới khoảng 60 byte. Mọi node nói cùng hợp đồng nên đổi mạng vận chuyển chỉ đổi phần khởi tạo.
-- **An toàn mặc định tắt:** bơm và laser về mức thấp trước mọi thứ khác; mất heartbeat 1,5 s thì tự tắt; Pi không phải là chỗ duy nhất giữ an toàn.
-- **Tìm node:** hiện Pi dùng địa chỉ khai trong `config/site.yaml` (`network.nodes`); từ tuần 4 node đăng ký SRP và Pi tìm bằng DNS-SD.
-- **Một chủ cho mỗi hệ con:** task CoAP giữ libcoap, task chấp hành giữ trạng thái vòi, giao tiếp qua hàng đợi FreeRTOS.
+- **Giao thức theo firmware:** A/B tích hợp dùng `/pantilt`, `/laser`, `/hb`, `/stop`, `/info`, `/status` và endpoint cảm biến theo node; `sensor-h2` tham chiếu dùng hợp đồng `/aim`, `/fire` của kế hoạch cũ. Không gửi lệnh profile cũ trực tiếp tới A/B; xem runbook.
+- **An toàn mặc định tắt:** A/B giữ relay/LED và PWM tắt khi khởi động, STOP, mất heartbeat hoặc rời Thread theo README từng node; chưa coi mô tả source là kiểm chứng phần cứng hiện tại.
+- **Tìm node:** địa chỉ cấu hình và SRP tùy đường chạy; đối chiếu địa chỉ thực và profile trước khi vận hành.
+- **Phạm vi:** nguồn, chân, giới hạn xung và kiểm tra riêng từng node nằm trong README của A/B.
 - **Cấu hình:** `sdkconfig.defaults` nằm trong git; `sdkconfig`, `build/`, `managed_components/` đã được `.gitignore`.
-- **Chưa build được trên máy nhóm** (không có ESP-IDF): các chỗ chưa kiểm tra đánh dấu `CHƯA KIỂM`, danh sách trong [sensor-h2/README.md](sensor-h2/README.md).
+- **Bằng chứng build:** `sensor-h2` đã qua CI; README A/B ghi build và host test theo từng phiên bản. Build hoặc host test không thay cho nghiệm thu trên phần cứng.
