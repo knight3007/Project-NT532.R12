@@ -1,95 +1,90 @@
-# NT532 — Hệ thống phát hiện và dập lửa mô phỏng qua Thread
+# Fire Incident Detection and Localization Using Thread and Edge AI
 
-Hai node ESP32-H2 vừa đọc cảm biến vừa mang một cụm pan–tilt, bơm nước và laser tâm ngắm. Node báo động qua Thread/CoAP; Raspberry Pi 5 dùng một webcam cố định để xác minh và định vị bia trên bảng, rồi gửi góc ngắm qua Thread về đúng node đó.
+NT532 uses a Raspberry Pi 5 for vision processing and two ESP32-H2 nodes connected through OTBR, Thread, and CoAP. The demonstration uses a fire target displayed on a laptop to evaluate detection, localization, and aiming; it does not suppress a real fire. The current integrated Node A/B firmware controls pan–tilt servos and a relay/LED demonstration output, not a pump.
 
-Kế hoạch đầy đủ: [docs/ke-hoach-trien-khai-NT532.md](docs/ke-hoach-trien-khai-NT532.md). Hợp đồng CoAP ở mục 4, quy ước tọa độ ở mục 3. Kế hoạch gốc dùng một vòi trên ESP32-S3; phần đã đổi ghi ở [docs/thay-doi-hai-voi.md](docs/thay-doi-hai-voi.md).
+## Project Overview
 
-## Cấu trúc
+An Android camera streams video through MediaMTX to the Pi. The Pi localizes the target, calculates pan–tilt angles, and sends commands over CoAP/Thread. The presentation covers Node A as the primary node and Node B as the backup. A dashboard supports the local/LAN demonstration.
 
-| Thư mục | Nội dung | Người phụ trách |
+## System Architecture
+
+![NT532 architecture: Android camera, Raspberry Pi 5, Thread, and two ESP32-H2 nodes](docs/picture%20and%20video/nt532_system_architecture.png)
+
+
+## Hardware Design & GPIO Mapping
+
+The tables below show **signal mappings in the integrated firmware source** for ESP32-H2 Super Mini boards. They do not establish that every physical wire and voltage level has been verified.
+
+### Node A — Primary Node
+
+| Component | Signal | GPIO | Firmware status |
+| --- | --- | --- | --- |
+| Pan servo | PWM | GPIO4 | Pan control |
+| Tilt servo | PWM | GPIO5 | Tilt control |
+| Relay | IN | GPIO10 | Active-HIGH; drives the demonstration LED output |
+| MQ-2 | AOUT / ADC | GPIO1 | ADC1_CH0 through a suitable voltage divider |
+| MQ-2 | DOUT | GPIO12 | Declared but **disabled** (`MQ2_DO_ENABLED = 0`) |
+
+![Node A component and signal wiring diagram](docs/picture%20and%20video/nodeA.png)
+
+
+### Node B — Backup Node
+
+| Component | Signal | GPIO | Firmware status |
+| --- | --- | --- | --- |
+| Pan servo | PWM | GPIO4 | Pan control |
+| Tilt servo | PWM | GPIO5 | Tilt control |
+| Relay | IN | GPIO10 | Active-HIGH; drives the demonstration LED output |
+| DHT11 | DATA | GPIO11 | Sensor data |
+
+![Node B component and signal wiring diagram](docs/picture%20and%20video/nodeB.png)
+
+
+
+
+## Core Technologies & Features
+
+- **Edge AI and localization:** YOLO26n detects the target; ChArUco calibrates the camera; AprilTag and Dynamic Mapping support localization.
+- **Control:** The Pi calculates pan–tilt angles and communicates with both nodes through OTBR/RCP, Thread, and CoAP.
+- **Demonstration:** Node A/B drive servos and a relay/LED demonstration output while the fire target appears on a laptop screen.
+
+## Performance & Experimental Results
+
+The two charts below provide the experimental results: **11 runs were recorded, and 9 with complete timestamps were used for the averages**. Two runs used an older log format with missing timestamps and were excluded. The mean duration of the 9 valid runs was **74.15 seconds**.
+
+| Phase | Mean duration | Share |
+| --- | ---: | ---: |
+| LOCALIZE | 7.83 s | 10.6% |
+| AIM | 26.17 s | 35.3% |
+| FIRE | 39.77 s | 53.6% |
+| VERIFY | 0.37 s | 0.5% |
+| **Total** | **74.15 s** | **100%** |
+
+The intervals run from alarm to DECIDE; DECIDE to target hit, including scanning and adjustment; target hit to the log event `đã dập`; and that event to run completion. FIRE, `đã dập`, and VERIFY are log labels for a laptop-displayed fire target, not evidence of real fire suppression.
+
+![Mean phase durations across 9 runs with complete timestamps](docs/picture%20and%20video/nt532-average-phase-durations.png)
+
+![Timelines for 6 representative runs](docs/picture%20and%20video/nt532-representative-trial-timelines.png)
+
+[Detailed results and media](docs/README.md#experimental-results--media)
+
+## Technology Stack & Repository Structure
+
+| Component | Role | Location |
 | --- | --- | --- |
-| `pi/src/nt532/vision/` | YOLO, hiệu chuẩn camera, pose tag, định vị, tìm vết laser | Hùng |
-| `pi/src/nt532/net/` | Payload CoAP, CoAP server cho sensor, CoAP client tới node chấp hành | Hậu |
-| `pi/src/nt532/orchestrator/` | State machine, gộp dữ liệu cho bộ quyết định, tính pan/tilt, log | Hậu |
-| `pi/src/nt532/decider/` | Bộ kịch bản tổng hợp, baseline luật, mô hình Jev | Hùng |
-| `pi/src/nt532/dashboard/` | Dashboard web của trạm | Hùng |
-| `pi/src/nt532/sim/` | Sa bàn ảo: camera, thế giới ảo có cảm biến và node chấp hành | Hùng |
-| `pi/scripts/` | Sinh file in, hiệu chuẩn camera, chuẩn bị dataset, train | Hùng |
-| `firmware/sensor-h2/` | Firmware node H2: cảm biến và chấp hành (ESP-IDF, Thread) | Hậu, Hiếu |
-| `firmware/rcp/` | Ghi chú nạp RCP cho H2 DevKit và cài OTBR | Hậu |
-| `firmware/actuator-s3/` | Firmware chấp hành trên S3, đường lui nếu H2 không kham nổi | Hiếu |
-| `config/site.yaml` | Số đo sa bàn, ID và cỡ tag, giới hạn góc, ngưỡng | Cả nhóm |
-| `calibration/` | Kết quả hiệu chuẩn camera và servo | Hùng, Hiếu |
-| `data/`, `models/` | Ảnh, dataset, trọng số (không đưa lên git) | Hùng |
+| Raspberry Pi 5: Python, YOLO, MediaMTX, OTBR/CoAP | Vision, localization, orchestration, and dashboard | `pi/src/nt532/` |
+| ESP32-H2: ESP-IDF, Thread | Integrated Node A/B firmware and RCP | `firmware/node-a-integrated/`, `firmware/node-b-integrated/`, `firmware/rcp/` |
+| Configuration and calibration | Table geometry, limits, and calibration results | `config/site.yaml`, `calibration/` |
+| Documentation | Protocols, results, and procedures | `docs/`, `firmware/README.md` |
 
-## Chạy phần Python
+## Demo
 
-Cần Python 3.11 trở lên và [uv](https://docs.astral.sh/uv/).
+[Browse the published images](docs/picture%20and%20video/). The demonstration uses physical hardware assemblies and a fire target displayed on a laptop. Videos remain local and are excluded from GitHub.
 
-```bash
-cd pi
-uv sync
-uv run pytest
-```
+## Current Status & Limitations
 
-Thêm YOLO khi cần train hoặc suy luận:
+The [E2E runbook](docs/nt532-e2e-runbook.md) records a passing software E2E test with simulated nodes. Checks of individual hardware assemblies do not establish full physical E2E verification. The GPIO tables reflect current source code; wiring and voltage levels still require measurement before operation.
 
-```bash
-uv sync --extra yolo
-```
+## Documentation & Future Work
 
-Sau khi cài `--extra yolo`, chạy lệnh bằng `uv run --extra yolo ...`; `uv run` trơn sẽ gỡ torch ra khỏi môi trường. Tương tự, mô hình quyết định Jev cần `--extra decider` (torch, torchvision, transformers, peft); orchestrator chạy bằng luật thì không cần.
-
-Các script trong `pi/scripts/`:
-
-| Script | Việc |
-| --- | --- |
-| `make_print_sheets.py` | Sinh PDF in tag và bảng ChArUco vào `docs/print/` |
-| `make_target_cards.py` | Sinh PDF thẻ bia hình lửa từ ảnh D-Fire mà model nhận rõ |
-| `calibrate_camera.py` | Chụp ảnh bảng ChArUco và xuất `calibration/camera.yaml` |
-| `live_tags.py` | Xem tag, pose camera, pose node và viền bảng bia; phím C để commissioning |
-| `commission.py` | Commissioning hoặc kiểm tra xê dịch, không cần màn hình (cho Pi) |
-| `measure.py` | Các bài đo: click điểm, định vị bia, pose tag, vết laser; ghi CSV vào `runs/measure/` |
-| `report_errors.py` | Thống kê sai số từ CSV của `measure.py` và vẽ hình |
-| `make_report.py` | Gom số đo trong `runs/` thành một báo cáo HTML (sai số, độ trễ, kết cục, bộ quyết định, tải Pi) vào `runs/report/<thời điểm>/` |
-| `demo_station.py` | Demo đầu cuối trên sa bàn ảo: tám cảnh (cháy nhỏ, cháy lớn, đèn, hơi nước, nhiễu, mất node, dừng khẩn cấp), chấm quyết định và an toàn, ghi `runs/demo/<thời điểm>/summary.json`, `--report` dựng báo cáo ([docs/demo.md](docs/demo.md)) |
-| `live_detect.py` | Xem trực tiếp model phát hiện lửa trên webcam, video hoặc ảnh |
-| `capture_frames.py` | Chụp khung hình vào thư mục, bằng phím hoặc tự động |
-| `autolabel.py` | Tạo nhãn nháp YOLO cho ảnh thẻ bia tự chụp, để sửa tay rồi train |
-| `prepare_fire_mix.py` | Gộp D-Fire với hai bộ lửa trong nhà và ảnh không lửa về cùng thứ tự lớp |
-| `prepare_negatives.py` | Lấy ảnh không lửa từ COCO và bộ Fire Recognition (Mendeley) |
-| `prepare_classesoffire.py` | Lọc ảnh trùng và chia ClassesOfFire thành train/val/test |
-| `train_detect.py` | Train YOLO phát hiện lửa |
-| `train_classify.py` | Train YOLO phân loại lớp đám cháy theo chất liệu (A/B/C/D/F) |
-| `eval_detect.py` | Đánh giá trọng số YOLO trên tập val hoặc test |
-| `eval_false_alarms.py` | Đo tỷ lệ báo nhầm trên ảnh không có lửa |
-| `export_model.py` | Xuất model sang NCNN hoặc ONNX cho Pi |
-| `bench_detect.py` | Đo thời gian suy luận bằng CPU |
-| `log_pi_load.py` | Ghi CPU, RAM, nhiệt độ của Pi ra CSV |
-| `sim_demo.py` | Chạy trọn kịch bản trên sa bàn ảo bằng YOLO thật và in sai số từng bước |
-| `stream_latency.py` | Đo độ trễ stream điện thoại → Pi bằng laser, gợi ý giá trị `camera.stream.latency_s` |
-| `run_station.py` | Chạy trạm (orchestrator, bộ quyết định, link node) kèm dashboard web ở cổng 8080 |
-
-Chưa có sa bàn thì dùng sa bàn ảo trong `pi/src/nt532/sim/`: thêm `--source sim` vào bất kỳ script nào có `--source` (camera ảo, 4 tag tham chiếu mặc định, hai node, thẻ bia và laser theo pan/tilt).
-
-Chạy cả trạm kèm dashboard trên sa bàn ảo: `uv run python scripts/run_station.py --source sim` rồi mở http://localhost:8080/. Kiến trúc, luồng xử lý và các việc còn mở ở [docs/orchestrator.md](docs/orchestrator.md).
-
-Demo tám cảnh cố định trên sa bàn ảo (trình diễn tuần 6 và lấy số liệu cho báo cáo): `uv run python scripts/demo_station.py --step`, mô tả và cách chấm ở [docs/demo.md](docs/demo.md).
-
-Orchestrator dùng phần thị giác qua lớp `Vision`, mô tả ở [docs/vision-api.md](docs/vision-api.md). Cách đưa lên Pi và chạy các bài đo ở [docs/trien-khai-pi.md](docs/trien-khai-pi.md). Dùng điện thoại làm camera (RTMP qua mediamtx, đo độ trễ) ở [docs/camera-dien-thoai.md](docs/camera-dien-thoai.md).
-
-Thứ tự dựng phần cứng khi triển khai (checklist từng bước, sự cố thường gặp): [docs/trien-khai-phan-cung.md](docs/trien-khai-phan-cung.md).
-
-Đưa trạm lên Home Assistant (lịch sử, thống kê, thông báo, nút dừng khẩn cấp) qua MQTT: [docs/home-assistant.md](docs/home-assistant.md).
-
-Dataset và nguồn tải ghi ở [docs/datasets.md](docs/datasets.md).
-
-## Firmware
-
-Mỗi thư mục con trong `firmware/` là một project ESP-IDF riêng. Xem [firmware/README.md](firmware/README.md).
-
-## Quy ước
-
-- Đơn vị mét và độ. Gốc tọa độ ở góc trước bên trái mặt bàn: X sang phải, Y về phía bảng bia, Z lên trên.
-- Mọi số đo sa bàn nằm trong `config/site.yaml`, không gõ cứng trong code.
-- Mốc thời gian lấy theo đồng hồ của Pi.
+The [documentation index](docs/README.md) links to firmware, localization, experiments, and the runbook. Jev2 is future work and was not part of the workflow that produced the results above.
