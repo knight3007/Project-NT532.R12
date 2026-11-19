@@ -25,7 +25,7 @@ Mục lục của đồ án **HỆ THỐNG PHÁT HIỆN VÀ ĐỊNH VỊ SỰ C�
 
 ## Demonstration & Dashboard
 
-- [Thư mục tư liệu hình ảnh](picture%20and%20video/) chứa sơ đồ kiến trúc, hình A/B và hai biểu đồ được chọn công bố; video và ảnh khác vẫn ở local để rà soát.
+- [Thư mục tư liệu hình ảnh](picture%20and%20video/) chứa sơ đồ kiến trúc, hình A/B, biểu đồ và ảnh demo. Video được giữ ở local.
 - [Homelab control](homelab-control.md) và [triển khai Homelab](homelab-deploy.md) — giao diện giám sát và đường triển khai.
 - [Demo sa bàn ảo](demo.md) và [ảnh dashboard mô phỏng cũ](img/dashboard.png) là tư liệu mô phỏng, không đại diện cho demo A/B hiện tại.
 
@@ -45,7 +45,7 @@ Mục lục của đồ án **HỆ THỐNG PHÁT HIỆN VÀ ĐỊNH VỊ SỰ C�
 
 [Biểu đồ timeline của 6 lượt đại diện](picture%20and%20video/nt532-representative-trial-timelines.png) minh họa độ dài từng pha. FIRE, `đã dập` và VERIFY là nhãn log của kịch bản với mục tiêu lửa trên màn hình laptop; chúng không chứng minh hệ thống đã dập cháy thật.
 
-Video và ảnh hiệu chỉnh/cụm A/B còn cần rà soát quyền công bố, thông tin trên màn hình và EXIF trước khi đưa vào Git. [Các báo cáo kỹ thuật](../reports/) cung cấp bối cảnh; không coi biểu đồ là nghiệm thu physical E2E.
+Video không được đưa vào Git. [Các báo cáo kỹ thuật](../reports/) cung cấp bối cảnh; không coi biểu đồ là nghiệm thu physical E2E.
 
 ## Historical Plans & Handoffs
 
